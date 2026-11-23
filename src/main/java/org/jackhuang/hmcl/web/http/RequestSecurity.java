@@ -56,6 +56,14 @@ public final class RequestSecurity {
         if (!config.https.trustForwardedProto) {
             return false;
         }
+        if (!config.network.trustedProxies.isEmpty()) {
+            // 配置了可信反代之后，X-Forwarded-Proto 也只认这些地址：面板若同时能被
+            // 直连，客户端自己写这个头就能声称 HTTPS，从而解锁开发者/终端闸门。
+            String peer = request.getRemoteAddr() == null ? "" : request.getRemoteAddr();
+            if (!ClientAddresses.isTrusted(peer, config.network.trustedProxies)) {
+                return false;
+            }
+        }
         String proto = request.getHeader("X-Forwarded-Proto");
         if (proto == null) {
             return false;

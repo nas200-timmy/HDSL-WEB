@@ -54,10 +54,17 @@ import java.util.Set;
 @NotNullByDefault
 public final class AgentScopes {
 
-    /// Every `GET`/`HEAD` the panel serves, minus the leaks below.
+    /// Every `GET`/`HEAD` the panel serves **outside** the classes that claim
+    /// their own reads ([#SYSTEM], [#TRANSCODE], [#CHAT_READ], [#MC]): those are
+    /// checked before the "every GET is a read" shortcut below, otherwise their
+    /// grants would be unusable without an extra `read` ticket.
     public static final String READ = "read";
-    /// `/api/mc/*`: the only surface where a stray process would corrupt state
-    /// the panel owns (port, world, console).
+    /// `/api/mc/*`, reads included: the only surface where a stray process would
+    /// corrupt state the panel owns (port, world, console). A ticket minted for
+    /// "Minecraft servers" must actually be able to list instances, players and
+    /// logs — before this class claimed its own GETs, an `mc` grant worked
+    /// blind, and the only way to learn state was reading the panel's data
+    /// directory from disk (learned the hard way, 2026-11-21).
     public static final String MC = "mc";
     /// The MC server's **PTY console**: attaching to `/ws/terminal/{ticket}`.
     /// It sits on top of [MC] rather than inside it because attaching is not
@@ -207,15 +214,17 @@ public final class AgentScopes {
         if (path.equals("/api/chat") || path.startsWith("/api/chat/")) {
             return chatScope(method, path);
         }
+        // The MC surface is one class, reads included, for the same reason
+        // system/transcode/chat are checked before the shortcut: a grant that
+        // names a surface must be able to *see* that surface. The PTY ticket is
+        // the one MC route that hands over a live terminal instead of running
+        // one command: it asks for its own class, so `mc` alone keeps its old
+        // reach (start/stop, input, logs) and gains no attach.
+        if (path.startsWith("/api/mc/") || path.equals("/api/mc")) {
+            return consoleTicket(path) ? MC_CONSOLE : MC;
+        }
         if ("GET".equals(method) || "HEAD".equals(method)) {
             return READ;
-        }
-        if (path.startsWith("/api/mc/") || path.equals("/api/mc")) {
-            // The PTY ticket is the one MC route that hands over a live
-            // terminal instead of running one command: it asks for its own
-            // class, so `mc` alone keeps its old reach (start/stop, input,
-            // logs) and gains no attach.
-            return consoleTicket(path) ? MC_CONSOLE : MC;
         }
         if (path.startsWith("/api/instances")) {
             return path.contains("/plugins") ? PLUGINS : INSTANCES;

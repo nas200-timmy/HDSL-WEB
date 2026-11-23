@@ -56,6 +56,7 @@ public final class ServerConfigLoader {
     public static final String ENV_BASE_PATH = "HDSL_BASE_PATH";
     public static final String ENV_HTTPS = "HDSL_HTTPS";
     public static final String ENV_TRUST_FORWARDED_PROTO = "HDSL_TRUST_FORWARDED_PROTO";
+    public static final String ENV_TRUSTED_PROXIES = "HDSL_TRUSTED_PROXIES";
     public static final String ENV_WEB_SHELL_ENABLED = "HDSL_WEB_SHELL_ENABLED";
     public static final String ENV_DEVELOPER_GUARD = "HDSL_DEVELOPER_GUARD";
     public static final String ENV_AGENT_REMOTE_NEEDS_SESSION = "HDSL_AGENT_REMOTE_NEEDS_SESSION";
@@ -214,6 +215,35 @@ public final class ServerConfigLoader {
         }
     }
 
+    /// `network.trusted_proxies`：YAML 列表或逗号分隔的精确地址。空值就是默认的
+    /// "不信任何反代"。只接受地址本身，不接受网段——同机 nginx/Caddy 才是这条
+    /// 配置要服务的形态，网段只会把"谁可以替客户端作证"放大到无法审计。
+    private static java.util.Set<String> proxyAddresses(Object raw) {
+        java.util.LinkedHashSet<String> addresses = new java.util.LinkedHashSet<>();
+        if (raw instanceof java.util.List<?> list) {
+            for (Object item : list) {
+                if (item != null) {
+                    addresses.add(String.valueOf(item).trim());
+                }
+            }
+        } else if (raw != null) {
+            for (String item : String.valueOf(raw).split(",")) {
+                addresses.add(item.trim());
+            }
+        }
+        addresses.removeIf(String::isBlank);
+        java.util.LinkedHashSet<String> normalized = new java.util.LinkedHashSet<>();
+        for (String address : addresses) {
+            // 只收 IP 字面量，且规范化写法：配 `::1` 而 Jetty 报 `0:0:0:0:0:0:0:1`
+            // 也必须算同一个反代，否则这条配置会静默失效。
+            if (!org.jackhuang.hmcl.web.http.ClientAddresses.ipLiteral(address)) {
+                throw new ConfigException("network.trusted_proxies: not an IP address: `" + address + "`");
+            }
+            normalized.add(org.jackhuang.hmcl.web.http.ClientAddresses.normalizeIp(address));
+        }
+        return java.util.Collections.unmodifiableSet(normalized);
+    }
+
     private static void applyNetwork(ServerConfig config, Map<String, Object> section) {
         if (section.containsKey("accept_unverified_until")) {
             String raw = stringField(section, "accept_unverified_until");
@@ -228,12 +258,16 @@ public final class ServerConfigLoader {
                 }
             }
         }
+        if (section.containsKey("trusted_proxies")) {
+            config.network.trustedProxies = proxyAddresses(section.get("trusted_proxies"));
+        }
         for (String key : section.keySet()) {
             switch (key) {
-                case "accept_unverified_until" -> {
+                case "accept_unverified_until", "trusted_proxies" -> {
                 }
                 default -> throw new ConfigException(
-                        "network: unknown key `" + key + "` (only `accept_unverified_until` is accepted)");
+                        "network: unknown key `" + key
+                                + "` (only `accept_unverified_until` and `trusted_proxies` are accepted)");
             }
         }
     }
@@ -514,6 +548,9 @@ public final class ServerConfigLoader {
                 default -> throw new ConfigException(ENV_TRUST_FORWARDED_PROTO
                         + " must be `true` or `false`, got `" + value + "`");
             };
+        }
+        if (env.containsKey(ENV_TRUSTED_PROXIES)) {
+            config.network.trustedProxies = proxyAddresses(env.get(ENV_TRUSTED_PROXIES));
         }
         if (env.containsKey(ENV_WEB_SHELL_ENABLED)) {
             String value = env.get(ENV_WEB_SHELL_ENABLED);

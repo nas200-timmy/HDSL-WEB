@@ -787,6 +787,7 @@ public final class ChatTurnManager {
                 synchronized (turn.lock) {
                     recoverXmlToolCalls(turn);
                     recoverDsmlToolCalls(turn);
+                    recoverGenericToolCalls(turn);
                     calls = List.copyOf(turn.pendingCalls);
                 }
                 boolean empty = turn.content.toString().isBlank();
@@ -993,6 +994,44 @@ public final class ChatTurnManager {
             String text, List<ChatProtocol.ToolSpec> tools) {
         Matcher block = DSML_BLOCK.matcher(normalizeDsml(text));
         return block.find() ? parseDsmlToolCalls(block.group(), tools) : List.of();
+    }
+
+    private static final Pattern GENERIC_TOOLCALL_BLOCK = Pattern.compile(
+            "(?is)<tool_call(?:\\s[^>]*)?>.*?</tool_call>");
+    private static final Pattern GENERIC_FUNCTION_BLOCK = Pattern.compile(
+            "(?is)<function=[^>]*>.*?</function>");
+
+    /// 有些第三方会把工具调用原样写成 `<tool_call><function=…>…</function></tool_call>`
+    /// 的 XML 文本。它和 DSML 一样是调用指令，不是答案：从正文里删掉，避免用户看到
+    /// 一屏的 `<tool_call>` 标记。包内可见，便于单测。
+    static String stripGenericToolCalls(String text) {
+        if (text == null) {
+            return null;
+        }
+        String cleaned = GENERIC_TOOLCALL_BLOCK.matcher(text).replaceAll("");
+        cleaned = GENERIC_FUNCTION_BLOCK.matcher(cleaned).replaceAll("");
+        if (!cleaned.equals(text)) {
+            return cleaned;
+        }
+        // 没有闭合块时，只有像调用指令的内容才截断；单纯提到 `<tool_call>` 这个标签
+        // （没有 <function=）属于正文讨论，不能截掉。
+        if (!text.contains("<function=")) {
+            return cleaned;
+        }
+        int start = text.indexOf("<tool_call");
+        int fn = text.indexOf("<function=");
+        if (start < 0 || (fn >= 0 && fn < start)) {
+            start = fn;
+        }
+        return start < 0 ? cleaned : text.substring(0, start);
+    }
+
+    private void recoverGenericToolCalls(ActiveTurn turn) {
+        String raw = turn.content.toString();
+        if (raw == null || (!raw.contains("<tool_call") && !raw.contains("<function="))) {
+            return;
+        }
+        replaceContent(turn, stripGenericToolCalls(raw));
     }
 
     private static void replaceContent(ActiveTurn turn, String cleaned) {

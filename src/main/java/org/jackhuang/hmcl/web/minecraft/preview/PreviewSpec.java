@@ -68,18 +68,27 @@ public record PreviewSpec(String version, String seed, int radiusBlocks, int bio
     /// [STANDARD] caps the side at 1024, which stays around five seconds even
     /// at the largest radius. [HIGH] doubles it to 2048. [ULTRA] doubles it
     /// again to 4096: the sharpest picture, at the cost of roughly a minute
-    /// and a much larger PNG. The operator picks the trade-off explicitly.
+    /// and a much larger PNG. [EXTREME] doubles the ceiling once more to 8192:
+    /// four times ULTRA's pixels at the largest radius (one sample per two
+    /// blocks there; radius 4096 and below are unchanged), and takes minutes
+    /// with a several-hundred-MB heap, far past a 1 GB panel: the render runs
+    /// in a child JVM, never in-process ([SeedPreviewService] spawns it; see
+    /// PreviewRenderMain). The operator picks the trade-off explicitly.
     public enum Quality {
         STANDARD,
         HIGH,
-        ULTRA
+        ULTRA,
+        EXTREME
     }
 
     /// The detail map's ceiling when a real server generates it.
     public static final int MAX_SERVER_RADIUS = 1024;
     /// The Java core computes biomes without generating terrain, so it can
-    /// cover a much larger area in the same time.
-    public static final int MAX_JAVA_RADIUS = 8192;
+    /// cover a much larger area in the same time. The largest step (32768
+    /// blocks across) locks its sampling server-side: at that span the quality
+    /// choice is forced, because an 8192² grid over it would be a benchmark
+    /// run, not a preview.
+    public static final int MAX_JAVA_RADIUS = 16384;
     /// Backwards-compatible alias for callers that predate the split.
     public static final int MAX_RADIUS = MAX_SERVER_RADIUS;
 
@@ -116,6 +125,9 @@ public record PreviewSpec(String version, String seed, int radiusBlocks, int bio
     public static final int JAVA_BIOME_SAMPLES_MAX = 1024;
     public static final int JAVA_BIOME_SAMPLES_HIGH_MAX = 2048;
     public static final int JAVA_BIOME_SAMPLES_ULTRA_MAX = 4096;
+    /// One sample per block at the largest radius. Costs minutes and a big
+    /// heap, so EXTREME renders always run in a child JVM.
+    public static final int JAVA_BIOME_SAMPLES_EXTREME_MAX = 8192;
     public static final int JAVA_BIOME_SAMPLES = 128;
 
     /// Samples per side for the Java overview of this request.
@@ -123,6 +135,7 @@ public record PreviewSpec(String version, String seed, int radiusBlocks, int bio
         int max = switch (quality) {
             case HIGH -> JAVA_BIOME_SAMPLES_HIGH_MAX;
             case ULTRA -> JAVA_BIOME_SAMPLES_ULTRA_MAX;
+            case EXTREME -> JAVA_BIOME_SAMPLES_EXTREME_MAX;
             case STANDARD -> JAVA_BIOME_SAMPLES_MAX;
         };
         return Math.min(max, Math.max(JAVA_BIOME_SAMPLES_MIN, chunksPerSide() * 8));

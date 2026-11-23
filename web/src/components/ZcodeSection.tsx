@@ -49,11 +49,12 @@ function compareSemver(left: string, right: string): number {
   return 0;
 }
 
-function catalogLabel(entry: ZcodeCatalogEntry): string {
+function catalogLabel(entry: ZcodeCatalogEntry, currentVersion: string | null | undefined): string {
   const channel = entry.channel === "main" ? "未发布" : entry.channel === "release" ? "正式版" : "仅 tag";
   const installed = entry.installed ? "已装" : "需构建";
   const credential = entry.credentialFormat >= 2 ? "v2 需 secret" : "v1";
-  return `${entry.version} · ${channel} · ${installed} · ${credential}`;
+  const current = currentVersion && compareSemver(entry.version, currentVersion) === 0 ? " · 当前构建" : "";
+  return `${entry.version} · ${channel} · ${installed} · ${credential}${current}`;
 }
 
 function versionDisabled(entry: ZcodeCatalogEntry, instance: ExternalInstance | null): boolean {
@@ -122,6 +123,8 @@ export function ZcodeSection() {
   useEffect(() => {
     if (!createOpen && !editTarget) return;
     let alive = true;
+    // 弹窗打开时补一次目录；新建走 openCreate 的强制刷新（构建后的版本必须出现），
+    // 编辑这里用缓存即可，避免每次打开都打一次 GitHub。
     api.zcodeCatalog()
       .then((result) => {
         if (alive) setCatalog(result.entries);
@@ -175,15 +178,30 @@ export function ZcodeSection() {
     setEditTarget(null);
   };
 
-  const openCreate = () => {
+  const openCreate = async () => {
+    // 先把目录刷新一次再开弹窗：刚构建完的版本必须出现在下拉框里，
+    // 而且默认要选中当前发行包，而不是目录里第一个“正式版”。
+    let entries = catalog;
+    try {
+      entries = (await api.zcodeCatalog(true)).entries;
+      setCatalog(entries);
+    } catch {
+      // 拉不到就沿用上一次的目录；下拉框仍可用。
+    }
+    const installed = entries
+      .filter((entry) => entry.installed)
+      .sort((left, right) => compareSemver(right.version, left.version));
+    const currentVersion = s.zcodeDist?.version;
+    const current = currentVersion
+      ? installed.find((entry) => compareSemver(entry.version, currentVersion) === 0)
+      : undefined;
     // 一个实例都没有时预填品牌名（与品牌实例卡的创建行同规则），点一下保存就有实例
     setForm({
       name: instances.length === 0 ? I18N["dsh.brand.zcode.short"] : "",
       baseUrl: DEFAULT_BASE_URL,
       apiKey: "",
       workspace: "",
-      version: catalog.find((entry) => entry.installed && entry.channel === "release")?.ref
-        ?? catalog.find((entry) => entry.installed)?.ref ?? "",
+      version: current?.ref ?? installed[0]?.ref ?? "",
       useSeed: false,
       seed: "",
     });
@@ -365,7 +383,7 @@ export function ZcodeSection() {
           {instances.length} 个实例{running > 0 ? ` · ${running} 个运行中` : ""}
         </span>
         <span className="spacer" />
-        <button className="btn btn-outline ripple-host" onClick={openCreate}>
+        <button className="btn btn-outline ripple-host" onClick={() => void openCreate()}>
           添加 ZCode 实例
         </button>
       </div>
@@ -582,7 +600,7 @@ export function ZcodeSection() {
             <option value="">跟随 current（历史兼容）</option>
             {catalog.map((entry) => (
               <option key={entry.ref} value={entry.ref} disabled={versionDisabled(entry, editTarget)}>
-                {catalogLabel(entry)}
+                {catalogLabel(entry, s.zcodeDist?.version)}
               </option>
             ))}
           </select>

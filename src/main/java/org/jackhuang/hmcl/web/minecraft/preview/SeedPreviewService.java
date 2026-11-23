@@ -95,6 +95,30 @@ public final class SeedPreviewService {
     /// marked partial, because a slow machine should get a picture and a
     /// warning rather than nothing.
     private static final Duration GENERATE_TIMEOUT = Duration.ofMinutes(6);
+    /// EXTREME renders trade minutes for pixels; the default covers a slow
+    /// shared host at the largest radius with headroom, and operators with
+    /// patience (or a very small box) can raise it per-minute by environment.
+    private static final Duration EXTREME_TIMEOUT = extremeTimeout();
+
+    private static Duration extremeTimeout() {
+        String env = System.getenv("HDSL_PREVIEW_EXTREME_TIMEOUT_MINUTES");
+        if (env != null && !env.isBlank()) {
+            try {
+                int minutes = Integer.parseInt(env.trim());
+                if (minutes >= 1 && minutes <= 24 * 60) {
+                    return Duration.ofMinutes(minutes);
+                }
+                org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
+                        "Ignoring HDSL_PREVIEW_EXTREME_TIMEOUT_MINUTES=" + env
+                        + " (want 1..1440)");
+            } catch (NumberFormatException e) {
+                org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
+                        "Ignoring HDSL_PREVIEW_EXTREME_TIMEOUT_MINUTES=" + env
+                        + " (not a number)");
+            }
+        }
+        return Duration.ofMinutes(60);
+    }
     /// How long `stop` may take to end the process.
     private static final Duration STOP_TIMEOUT = Duration.ofSeconds(90);
     /// How many finished previews are kept. A player trying seeds in a row
@@ -341,6 +365,9 @@ public final class SeedPreviewService {
         body.addProperty("javaReady", java != null);
         body.addProperty("javaPath", java == null ? "" : java.toString());
         body.addProperty("running", active.get() > 0);
+        // 预计等待时间的分母：渲染机的核数（客户端 hardwareConcurrency 是浏览器
+        // 所在机器的，跟渲染发生在哪里毫无关系）。
+        body.addProperty("cores", Runtime.getRuntime().availableProcessors());
         return body;
     }
 
@@ -534,6 +561,12 @@ public final class SeedPreviewService {
             return;
         }
         job.state(PreviewJob.State.RENDERING);
+        if (spec.quality() == PreviewSpec.Quality.EXTREME) {
+            // 8192×8192 的采样网格（光引用就半个 GB）加同尺寸位图，远超面板
+            // 默认的 1G 堆——整个渲染放进子进程，面板 JVM 一片叶子都不多占。
+            runBiomeCoreExtreme(job, spec);
+            return;
+        }
         SeedMapBackend.Result result = SeedMapBackend.render(spec, job::renderProgress);
         Path directory = Files.createDirectories(cacheDirectory(spec));
         Path png = directory.resolve("preview.png");
@@ -544,7 +577,105 @@ public final class SeedPreviewService {
         trimCache();
     }
 
-    private void writeBiomeStructures(JsonObject body, @Nullable SeedMap map, PreviewSpec spec) {
+    /// The EXTREME tier, isolated: `java -Xmx3g -cp panel.jar PreviewRenderMain
+    /// …` does the sampling, picture and meta, so the panel's own (typically
+    /// 1 GB) heap never sees the 8192² grid. The child inherits the panel's
+    /// classpath, which is the jar path under every supported deployment.
+    private void runBiomeCoreExtreme(PreviewJob job, PreviewSpec spec) {
+        try {
+            runBiomeCoreExtremeInner(job, spec);
+        } catch (IOException e) {
+            // 不走 IOException 出口：那条路会"回退到服务端生成"，而 8192 半径的
+            // 真实世界生成是另一场灾难——极限档的失败就停在极限档。
+            failOrCancel(job, "无法启动极限渲染子进程：" + e.getMessage());
+        }
+    }
+
+    private void runBiomeCoreExtremeInner(PreviewJob job, PreviewSpec spec) throws IOException {
+        Path javaExe = javaFor(17);
+        if (javaExe == null) {
+            failOrCancel(job, "极限渲染需要一个 Java 17+ 来跑子进程，面板没有找到。");
+            return;
+        }
+        String classPath = System.getProperty("java.class.path", "");
+        Path jar = classPath.split(java.io.File.pathSeparator).length == 1
+                && Files.isRegularFile(Path.of(classPath)) ? Path.of(classPath) : null;
+        if (jar == null) {
+            failOrCancel(job, "极限渲染需要以 jar 方式部署的面板（子进程要复用同一份字节码），"
+                    + "当前 classpath 不是单个 jar");
+            return;
+        }
+        Path directory = Files.createDirectories(cacheDirectory(spec));
+        Path png = directory.resolve("preview.png");
+        Path meta = directory.resolve("meta.json");
+        Process process = new ProcessBuilder(
+                javaExe.toString(), "-Xmx3g", "-cp", jar.toString(), PreviewRenderMain.class.getName(),
+                spec.version(), spec.seed(), Integer.toString(spec.radiusBlocks()),
+                Integer.toString(spec.biomeY()), png.toString(), meta.toString())
+                .redirectErrorStream(true)
+                .start();
+        job.attach(process);
+        // 子进程报的是"已完成采样数"，总数是采样/边的平方——少传一个，进度条
+        // 就会显示成 5349376 / 1（-1 被 Math.max(1,…) 抬成 1），百分比当场爆表。
+        long totalSamples = (long) spec.javaSamples() * spec.javaSamples();
+        List<String> tail = new ArrayList<>();
+        long deadline = System.currentTimeMillis() + EXTREME_TIMEOUT.toMillis();
+        try (var reader = new java.io.BufferedReader(
+                new java.io.InputStreamReader(process.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                // 刹车先踩再看内容：进度行占绝大多数，continue 不能跳过检查。
+                if (System.currentTimeMillis() > deadline) {
+                    process.destroyForcibly();
+                    failOrCancel(job, "极限渲染超过 " + EXTREME_TIMEOUT.toMinutes()
+                            + " 分钟未完成，已终止。" + String.join(" | ", tail));
+                    return;
+                }
+                if (job.cancelled()) {
+                    process.destroyForcibly();
+                    job.markCancelled();
+                    return;
+                }
+                if (line.startsWith(PreviewRenderMain.PROGRESS_PREFIX)) {
+                    try {
+                        long done = Long.parseLong(line.substring(PreviewRenderMain.PROGRESS_PREFIX.length()));
+                        job.renderProgress(done, totalSamples);
+                    } catch (RuntimeException ignored) {
+                        // A malformed progress line is not worth failing the job.
+                    }
+                    continue;
+                }
+                // 失败时要给的是"为什么"，不是 20 行进度刷屏——真正的输出和报错
+                // 才进 tail（进度行一秒几十条，会把有用信息全部顶出去）。
+                if (line.startsWith(PreviewRenderMain.RATE_PREFIX)) {
+                    job.log(line.substring(PreviewRenderMain.RATE_PREFIX.length()));
+                    continue;
+                }
+                if (tail.size() >= 20) {
+                    tail.remove(0);
+                }
+                tail.add(line);
+            }
+            int exit = process.waitFor();
+            if (exit != 0) {
+                failOrCancel(job, "极限渲染子进程退出码 " + exit + "。" + String.join(" | ", tail));
+                return;
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            process.destroyForcibly();
+            job.markCancelled();
+            return;
+        }
+        if (!Files.isRegularFile(png) || !Files.isRegularFile(meta)) {
+            failOrCancel(job, "极限渲染子进程没有产出图片或元数据。" + String.join(" | ", tail));
+            return;
+        }
+        job.done(png, meta, false);
+        trimCache();
+    }
+
+    static void writeBiomeStructures(JsonObject body, @Nullable SeedMap map, PreviewSpec spec) {
         int radius = spec.radiusBlocks();
         JsonObject counts = new JsonObject();
         JsonArray structures = new JsonArray();
@@ -994,7 +1125,7 @@ public final class SeedPreviewService {
 
     /// The overview's metadata: the same shape as the detail one, with the
     /// sample grid standing in for the chunk list.
-    private void writeBiomeMeta(Path meta, PreviewSpec spec, String[][] samples, SeedMap map, boolean partial)
+    static void writeBiomeMeta(Path meta, PreviewSpec spec, String[][] samples, SeedMap map, boolean partial)
             throws IOException {
         JsonObject body = new JsonObject();
         body.addProperty("version", spec.version());
@@ -1047,7 +1178,9 @@ public final class SeedPreviewService {
                 .resolve(spec.radiusBlocks() + "-" + spec.biomeY()
                         + ("BIOME".equals(spec.mode().name()) ? "-biome" : "")
                         + (spec.engine() == PreviewSpec.Engine.JAVA ? "-java" : "")
-                        + (spec.quality() == PreviewSpec.Quality.HIGH ? "-hd" : spec.quality() == PreviewSpec.Quality.ULTRA ? "-ultra" : "") + "-v10");
+                        + (spec.quality() == PreviewSpec.Quality.HIGH ? "-hd"
+                            : spec.quality() == PreviewSpec.Quality.ULTRA ? "-ultra"
+                            : spec.quality() == PreviewSpec.Quality.EXTREME ? "-extreme" : "") + "-v10");
     }
 
     private static String seedHash(String seed) {
@@ -1084,18 +1217,34 @@ public final class SeedPreviewService {
         Files.writeString(work.resolve("server.properties"), properties, StandardCharsets.UTF_8);
     }
 
+    private static final org.jackhuang.hmcl.web.instance.PortReservations PORT_RESERVATIONS =
+            new org.jackhuang.hmcl.web.instance.PortReservations();
+
+    /// 与品牌实例同一套预留：先在本进程占位，再把号交给稍后启动的预览服务器，
+    /// 避免两个预览任务在"查到空闲"和"真正绑定"之间拿到同一个端口。
     private static int freePort() {
-        try (java.net.ServerSocket socket = new java.net.ServerSocket(0)) {
-            return socket.getLocalPort();
-        } catch (IOException e) {
-            int fallback = 25565;
-            for (int port = McPorts.MIN_PORT; port < McPorts.MAX_PORT; port++) {
-                if (McPorts.isFree(port)) {
-                    return port;
+        for (int attempt = 0; attempt < 16; attempt++) {
+            try (java.net.ServerSocket socket = new java.net.ServerSocket(0)) {
+                int candidate = socket.getLocalPort();
+                if (PORT_RESERVATIONS.tryReserve(candidate)) {
+                    return candidate;
                 }
+            } catch (IOException e) {
+                break;
             }
+        }
+        int fallback = 25565;
+        for (int port = McPorts.MIN_PORT; port < McPorts.MAX_PORT; port++) {
+            if (McPorts.isFree(port) && PORT_RESERVATIONS.tryReserve(port)) {
+                return port;
+            }
+        }
+        // 兜底也要拿到预留：预留失败说明这个号刚被另一个预览任务占位，照返 25565
+        // 就是两个预览抢同一个端口——宁可让任务失败并说明原因。
+        if (PORT_RESERVATIONS.tryReserve(fallback)) {
             return fallback;
         }
+        throw new IllegalStateException("no free port for the seed preview (including fallback " + fallback + ")");
     }
 
     /// `save-all flush` arrived with 1.13; older servers only know `save-all`.

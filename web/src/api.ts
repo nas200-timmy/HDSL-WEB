@@ -851,10 +851,11 @@ export const api = {
     request<{ taskId: string }>("/api/node/install", jsonInit("POST", body)),
   nodeUninstall: (version: string) =>
     request<{ ok: boolean }>("/api/node/uninstall", jsonInit("POST", { version })),
-  /** 预检一个选择：下拉框在应用前拿它显示「会解析到哪个版本、是否满足」。 */
-  nodeResolve: (selector: string, brand?: string) =>
+  /** 预检一个选择：下拉框在应用前拿它显示「会解析到哪个版本、是否满足」。
+   *  `needsPnpm` 为 true 时按安装器的要求判断——有 node 没 pnpm 算不可用。 */
+  nodeResolve: (selector: string, brand?: string, needsPnpm?: boolean) =>
     request<import("./types").NodeResolution>(
-      `/api/node/resolve?selector=${encodeURIComponent(selector)}${brand ? `&brand=${encodeURIComponent(brand)}` : ""}`,
+      `/api/node/resolve?selector=${encodeURIComponent(selector)}${brand ? `&brand=${encodeURIComponent(brand)}` : ""}${needsPnpm ? "&pnpm=1" : ""}`,
     ),
   /** 全局默认选择。 */
   nodeDefault: (selection: string) =>
@@ -1018,7 +1019,7 @@ export const api = {
       biomeY?: number;
       mode?: "detail" | "biome";
       engine?: "java" | "server";
-      quality?: "standard" | "high" | "ultra";
+      quality?: "standard" | "high" | "ultra" | "extreme";
     }) =>
       request<McSeedPreviewJob>("/api/mc/preview", jsonInit("POST", body)),
     previewJob: (id: string) =>
@@ -1966,6 +1967,8 @@ export interface McSeedPreviewCapabilities {
   javaReady: boolean;
   /** 当前是否有预览在跑（全局单飞）。 */
   running: boolean;
+  /** 渲染机的可用核数，预计等待时间的分母。 */
+  cores?: number;
 }
 
 /** 一次种子预览的作业状态。 */
@@ -1996,8 +1999,8 @@ export interface McSeedPreviewJob {
   mode?: "detail" | "biome";
   /** 计算引擎：`java` 用 cubiomes 内核，`server` 起真服务端。 */
   engine?: "java" | "server";
-  /** Java 引擎的采样密度：`high` 更清晰但更慢，`ultra` 最清晰但最慢。 */
-  quality?: "standard" | "high" | "ultra";
+  /** Java 引擎的采样密度：`high` 更清晰更慢，`ultra` 再加倍，`extreme` 最清晰也最慢。 */
+  quality?: "standard" | "high" | "ultra" | "extreme";
   createdAt: string;
   elapsedMs?: number;
   /** 剩余秒数的粗略估计，进度太小时不给。 */
@@ -2017,7 +2020,7 @@ export interface McSeedPreviewHistoryEntry {
   biomeY: number;
   mode?: "detail" | "biome";
   engine?: "java" | "server";
-  quality?: "standard" | "high" | "ultra";
+  quality?: "standard" | "high" | "ultra" | "extreme";
   generatedAt: string;
   partial: boolean;
   bytes: number;

@@ -39,9 +39,11 @@ import java.util.Map;
 public enum Brand {
     /// Kimi Code (Moonshot AI): `kimi web` serves its own web UI on a
     /// loopback port; `--port 0` yields an ephemeral port announced on stdout.
-    /// Its client is mount-aware, so instances are served under `/i/<id>/`
-    /// like dsh (verified end to end with a headless browser).
-    KIMI("kimi", Source.NPM, "@moonshot-ai/kimi-code", "kimi", false),
+    /// 它的客户端按 `location.pathname` 路由（2.7.0 的 `/sessions/<id>`：
+    /// 读是 `xxx(window.location.pathname)`，写是 `history.pushState`），所以
+    /// 除了通用改写，还需要 OPENCODE 那套 router shim：读处剥挂载、写处补挂载，
+    /// 否则点一下会话就跳到面板根路径 `/sessions/<id>`，`/i/<id>/` 整个不显示。
+    KIMI("kimi", Source.NPM, "@moonshot-ai/kimi-code", "kimi", true),
 
     /// OpenCode: `opencode web` serves its own web UI; `--port 0` is NOT
     /// honoured (it falls back to 4096), so the panel pre-allocates a port.

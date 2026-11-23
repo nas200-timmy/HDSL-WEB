@@ -5,6 +5,7 @@ import { Package2Icon } from "./icons";
 import { refreshZcode, toast } from "../store";
 import type { ZcodeBuildStatus, ZcodeCatalogEntry } from "../types";
 import { errMsg } from "../utils";
+import { WINDOWS_TESTED_ZCODE, isWindowsTestedZcode, isNewerThanWindowsTested, zcodeVersionBadge } from "../zcodeVersion";
 
 /// 构建 ZCode 发行包：面板下载源码 → 打反代补丁 → pnpm install → pnpm build:zcode
 /// → 校验 sha256 → 装成 `releases/<版本>`。慢是常态（几百 MB 源码 + GB 级依赖），
@@ -22,7 +23,7 @@ export function ZcodeBuildButton() {
   useEffect(() => {
     if (!open) return;
     let alive = true;
-    api.zcodeCatalog()
+    api.zcodeCatalog(true)
       .then((result) => {
         if (alive) setCatalog(result.entries);
       })
@@ -73,6 +74,11 @@ export function ZcodeBuildButton() {
   };
 
   const running = status?.state === "running";
+  const tested = catalog.find((entry) => isWindowsTestedZcode(entry.version));
+  // 实测版本可能不在最近十个里：单独提到最前面，别让“推荐”藏在折叠里。
+  const chips = tested && !catalog.slice(0, 10).some((entry) => entry.ref === tested.ref)
+    ? [tested, ...catalog.slice(0, 10)]
+    : catalog.slice(0, 10);
 
   return (
     <>
@@ -94,14 +100,14 @@ export function ZcodeBuildButton() {
           <datalist id="zcode-build-versions">
             {catalog.map((entry) => (
               <option key={entry.ref} value={entry.ref}>
-                {`${entry.version} · ${entry.channel === "main" ? "未发布" : entry.channel === "release" ? "正式版" : "仅 tag"} · ${entry.installed ? "已装" : "需构建"} · ${entry.credentialFormat >= 2 ? "v2" : "v1"}`}
+                {`${entry.version} · ${entry.channel === "main" ? "未发布" : entry.channel === "release" ? "正式版" : "仅 tag"} · ${entry.installed ? "已装" : "需构建"} · ${entry.credentialFormat >= 2 ? "v2" : "v1"}${zcodeVersionBadge(entry.version) ? ` · ${zcodeVersionBadge(entry.version)}` : ""}`}
               </option>
             ))}
           </datalist>
         </div>
         {catalog.length > 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "2px 8px 4px" }}>
-            {catalog.slice(0, 10).map((entry) => (
+            {chips.map((entry) => (
               <button
                 key={entry.ref}
                 type="button"
@@ -112,12 +118,19 @@ export function ZcodeBuildButton() {
                 onClick={() => setVersion(entry.ref)}
               >
                 {entry.version}
+                {isWindowsTestedZcode(entry.version) ? " · Windows 实测稳定" : ""}
+                {!isWindowsTestedZcode(entry.version) && isNewerThanWindowsTested(entry.version) ? " · 需面板补丁" : ""}
                 {entry.channel === "main" ? " · 未发布" : entry.channel === "tag" ? " · 仅 tag" : ""}
                 {entry.installed ? " · 已装" : ""}
               </button>
             ))}
           </div>
         )}
+        <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0", lineHeight: 1.7 }}>
+          Windows 上最后一次完整实测稳定的上游版本是 <b>v{WINDOWS_TESTED_ZCODE}</b>
+          （构建、反代、工作区、项目、会话与 agent 都跑通过）。比它新的版本上游改过构建产物，
+          面板要跟着缝补丁；没重测过的版本不保证工作区/项目功能，能用也请当实验性看。
+        </p>
         <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "4px 8px 0", lineHeight: 1.7 }}>
           面板会下载 <code>zai-org/ZCode</code> 的源码、打上反代补丁（
           <code>base: "./"</code> + API/WS 前缀，共 5 处）、跑 <code>pnpm install</code> 与{" "}

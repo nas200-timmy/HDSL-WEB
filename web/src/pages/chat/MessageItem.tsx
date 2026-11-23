@@ -151,7 +151,10 @@ export function MessageItem({
   const message = activeMessage(node);
   const [menu, setMenu] = useState<HTMLElement | null>(null);
   const [copied, setCopied] = useState(false);
-  const [reasoningExpanded, setReasoningExpanded] = useState(false);
+  // 思考的展开/收起直接由 streaming 推导：流式时默认展开，结束时同一帧折起。
+  // 用 state + effect 去改会在 paint 之后才折，高度变化没人跟滚，正文会往上跳一截。
+  const [reasoningOpen, setReasoningOpen] = useState<boolean | null>(null);
+  const reasoningExpanded = reasoningOpen ?? streaming;
   const moreRef = useRef<HTMLButtonElement | null>(null);
   const reasoningRef = useRef<HTMLDivElement | null>(null);
 
@@ -177,10 +180,6 @@ export function MessageItem({
     }
   }
   const [expandedTools, setExpandedTools] = useState<Record<number, boolean>>({});
-
-  useEffect(() => {
-    if (streaming) setReasoningExpanded(true);
-  }, [streaming]);
 
   useEffect(() => {
     if (streaming && reasoningExpanded && reasoningRef.current) {
@@ -258,7 +257,7 @@ export function MessageItem({
           <div className={`chat-reasoning${reasoningExpanded ? " expanded" : ""}`}>
             <button
               className="chat-reasoning-head"
-              onClick={() => setReasoningExpanded((value) => !value)}
+              onClick={() => setReasoningOpen(!reasoningExpanded)}
               aria-expanded={reasoningExpanded}
             >
               <span className="chat-reasoning-title">思考</span>

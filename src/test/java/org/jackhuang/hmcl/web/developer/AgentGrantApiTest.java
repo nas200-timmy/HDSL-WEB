@@ -315,6 +315,15 @@ class AgentGrantApiTest {
 
         // Writes land in their own classes.
         assertEquals(AgentScopes.MC, AgentScopes.required("POST", "/api/mc/instances/x/start"));
+        // MC GETs belong to the MC class as well: a ticket minted for
+        // "Minecraft servers" must be able to list instances, players and logs,
+        // or the agent works blind (2026-11-21: a real ticket did exactly that).
+        assertEquals(AgentScopes.MC, AgentScopes.required("GET", "/api/mc/instances"));
+        assertEquals(AgentScopes.MC, AgentScopes.required("GET", "/api/mc"));
+        assertEquals(AgentScopes.MC, AgentScopes.required("GET", "/api/mc/instances/x/players"));
+        assertEquals(AgentScopes.MC, AgentScopes.required("GET", "/api/mc/instances/x/logs"));
+        assertEquals(AgentScopes.MC_CONSOLE,
+                AgentScopes.required("GET", "/api/mc/instances/x/console/ticket"));
         // The console's PTY ticket is its own class: `mc` alone keeps the old
         // reach (start/stop, one-line input, logs) and gains no attach.
         assertEquals(AgentScopes.MC_CONSOLE,

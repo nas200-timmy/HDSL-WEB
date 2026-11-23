@@ -136,6 +136,16 @@ public final class ZcodeInstanceManager {
         return root;
     }
 
+    /// The directory the instance root sits under (`<data>/zcode`): where build
+    /// assets such as the Windows runtime host are staged, and the parent of
+    /// [#workspacesRoot]. Instances are one level below it.
+    ///
+    /// @return the zcode root, or the instance root when it has no parent
+    public Path dataRoot() {
+        Path parent = root.getParent();
+        return parent != null ? parent : root;
+    }
+
     /// The directory holding the default workspace of every instance.
     ///
     /// It is a sibling of the instances root, so a workspace outlives the

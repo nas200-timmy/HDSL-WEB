@@ -799,7 +799,8 @@ public final class DshSessionPacks {
     /// @param relative the path
     /// @return whether it is safe to resolve
     private static boolean safeRelative(String relative) {
-        if (relative.isBlank() || relative.startsWith("/") || relative.contains("\\")) {
+        if (relative.isBlank() || relative.startsWith("/") || relative.contains("\\")
+                || relative.matches("^[A-Za-z]:.*")) {
             return false;
         }
         if (relative.equals(".") || relative.equals("..")) {

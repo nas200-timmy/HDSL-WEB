@@ -202,6 +202,7 @@ public final class SeedPreviewServlet extends HttpServlet {
         PreviewSpec.Quality quality = switch (string(body, "quality") == null ? "standard" : string(body, "quality").toLowerCase(Locale.ROOT)) {
             case "high" -> PreviewSpec.Quality.HIGH;
             case "ultra" -> PreviewSpec.Quality.ULTRA;
+            case "extreme" -> PreviewSpec.Quality.EXTREME;
             default -> PreviewSpec.Quality.STANDARD;
         };
         if (engine == PreviewSpec.Engine.JAVA && mode != PreviewSpec.Mode.BIOME) {
@@ -211,6 +212,12 @@ public final class SeedPreviewServlet extends HttpServlet {
         int maxRadius = engine == PreviewSpec.Engine.JAVA ? PreviewSpec.MAX_JAVA_RADIUS : PreviewSpec.MAX_SERVER_RADIUS;
         int radius = clamp(integer(body, "radius", 512), PreviewSpec.MIN_RADIUS, maxRadius);
         int y = clamp(integer(body, "biomeY", PreviewSpec.DEFAULT_BIOME_Y), -64, 320);
+        // 32768 跨度的地图锁清晰度：服务端强制 2048 采样——恰好与 16384 跨度
+        // 默认档的地面密度相同（16 格/采样）。放开选择就是逼 CPU 跑满 minutes
+        // 级渲染，那是跑分器的活，不是预览的活。
+        if (engine == PreviewSpec.Engine.JAVA && radius > 8192) {
+            quality = PreviewSpec.Quality.HIGH;
+        }
         PreviewJob job = service.submit(new PreviewSpec(version.trim(), seed.trim(), radius, y, mode, engine, quality));
         Json.write(response, HttpServletResponse.SC_ACCEPTED, job.toJson());
     }

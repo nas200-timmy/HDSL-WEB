@@ -81,8 +81,8 @@ agent 密码**不是**一条独立的路。用它换票之前，必须已经有�
 
 | scope | 覆盖 |
 |---|---|
-| `read` | `/api/*` 的 GET（凭据类路由除外，见下）；**不含聊天** |
-| `mc` | `/api/mc/*` 的启停与控制台命令 |
+| `read` | `/api/*` 的 GET（凭据类路由除外，见下）；**不含聊天与 MC**（`/api/mc/*` 归 `mc`，「读自己的地盘」和 `system`/`transcode`/`chat` 同一套规矩） |
+| `mc` | `/api/mc/*` 的 **GET 与写**：启停、控制台命令、实例/玩家/日志读取 |
 | `mc-console` | **只**多给一条：MC 服控制台的 PTY 票据（`POST .../console/ticket` → `/ws/terminal/{ticket}`） |
 | `system` | `/api/system/*`：宿主机 CPU/内存/磁盘/网络读数与数据目录占用 |
 | `instances` | 建/删/启停**别的**实例 |

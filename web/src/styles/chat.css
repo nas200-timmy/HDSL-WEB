@@ -499,13 +499,16 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overflow-anchor: none;
   /* 展开/收起时滚动条出现或消失会改变内容宽度，按钮会左右跳一格；预留槽位。 */
   scrollbar-gutter: stable;
   padding: 20px 28px 8px;
   display: flex;
   flex-direction: column;
   gap: 16px;
-  scroll-behavior: smooth;
+  /* 跟滚在 ChatPage 里用 rAF 缓动做，滚动位置由代码逐帧写。
+     这里不能再挂 scroll-behavior: smooth —— 每次 delta 都会重启动画，
+     动画自己的 scroll 事件又会被误判成用户滚动，输出时就会上下拉扯。 */
 }
 
 .chat-msg {
@@ -1175,15 +1178,50 @@
   color: var(--monet-on-surface);
   font-size: 13px;
   line-height: 1.55;
-  min-height: 44px;
+  /* 默认给足高度：交互区两行时，输入区不至于显得被挤扁。 */
+  min-height: 72px;
   max-height: 240px;
   padding: 2px 4px;
 }
 
 .chat-composer-bar {
   display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  /* 细线把输入区和交互区分开：贴到 composer 圆角边框内侧，而不是浮在中间。 */
+  margin: 6px -10px 0;
+  padding: 6px 10px 0;
+  border-top: 1px solid var(--monet-outline-variant);
+}
+
+/* 左侧工具区：窄屏允许换行堆叠；发送键在右侧独占一列，不参与换行。 */
+.chat-bar-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+
+.chat-bar-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
+  min-width: 0;
+}
+
+.chat-bar-status:empty {
+  display: none;
+}
+
+.chat-bar-picks {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  min-width: 0;
 }
 
 .chat-tool {
@@ -2891,6 +2929,8 @@
   align-items: center;
   gap: 4px;
   max-width: 270px;
+  min-width: 0;
+  flex: 0 1 auto;
   padding: 3px 6px;
   border-radius: 4px;
   color: var(--monet-on-surface-variant);
@@ -2915,7 +2955,7 @@
 }
 
 .chat-model-button-label {
-  max-width: 220px;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2923,7 +2963,7 @@
 }
 
 .chat-model-button-provider {
-  max-width: 220px;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3829,4 +3869,91 @@
 .chat-tool-chevron {
   flex: none;
   color: var(--monet-primary);
+}
+
+/* Chat header actions are fixed-size controls, not anonymous flex children.
+ * Without this, a long title + context meter squeezes the buttons and their
+ * SVGs down to a few pixels on a phone. */
+.chat-header-title {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.chat-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.chat-header .chat-header-action {
+  width: 38px;
+  min-width: 38px;
+  height: 38px;
+  min-height: 38px;
+  padding: 0;
+  justify-content: center;
+  flex: none;
+}
+
+.chat-header .chat-header-action svg {
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+
+.chat-header > .spacer {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .chat-header {
+    gap: 4px;
+    padding: 6px 8px;
+    min-height: 56px;
+  }
+
+  .chat-header-title {
+    flex-basis: 0;
+    min-width: 48px;
+  }
+
+  .chat-header > .icon-btn {
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    flex: none;
+  }
+
+  .chat-header-actions {
+    gap: 2px;
+  }
+
+  .chat-header .chat-header-action {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+  }
+
+  .chat-header .chat-header-action svg {
+    width: 22px;
+    height: 22px;
+  }
+
+  .chat-header .context-meter {
+    flex: none;
+  }
+}
+
+@media (max-width: 480px) {
+  /* On a narrow phone the assistant already appears in the title. Its avatar is
+   * the first decorative item to go; context and both 44px actions stay put. */
+  .chat-header-avatar {
+    display: none;
+  }
+
+  .chat-header .context-meter {
+    padding-right: 5px;
+  }
 }

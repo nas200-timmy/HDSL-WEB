@@ -743,7 +743,7 @@ public final class PlainChatServlet extends HttpServlet {
             return;
         }
 
-        String address = request.getRemoteAddr() == null ? "unknown" : request.getRemoteAddr();
+        String address = org.jackhuang.hmcl.web.http.ClientAddresses.remote(request, config.network.trustedProxies);
         if (throttle.isBlocked(address, Instant.now())) {
             AuditLog.log(AuditLog.Channel.WEB, "login", null, "blocked", username, address);
             loginPage(response, "尝试次数过多，请 " + minutes(throttle.block()) + " 分钟后再试");

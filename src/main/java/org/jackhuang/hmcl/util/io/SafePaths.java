@@ -79,6 +79,27 @@ public final class SafePaths {
         return reallyInside(base, target) ? target : null;
     }
 
+    /// 解包归档成员时的落点：拒绝盘符（`C:`，含 `C:foo` 这种驱动器相对路径）、
+    /// UNC、绝对路径和 `..`，再按 [resolveInside] 查一次（含符号链接）。
+    ///
+    /// Windows 上 `root.resolve("C:/x")` 会直接把 root 丢掉，所以只挡 `..` 和 `/`
+    /// 开头是不够的；Linux 上 `C:` 只是普通文件名，但归档是别人给的，跨平台都要拒。
+    ///
+    /// @param root 解包的根目录
+    /// @param name 归档成员名（`\` 会先按 `/` 归一）
+    /// @return 根内的目标路径；不允许时 `null`
+    public static @Nullable Path resolveArchiveEntry(Path root, String name) {
+        if (name == null) {
+            return null;
+        }
+        String normalized = name.replace('\\', '/');
+        if (normalized.isEmpty() || normalized.startsWith("/") || normalized.contains("..")
+                || normalized.matches("^[A-Za-z]:.*")) {
+            return null;
+        }
+        return resolveInside(root, root.resolve(normalized));
+    }
+
     /// Creates a directory and its parents, refusing to leave the root on the way down.
     ///
     /// The parents are walked one component at a time rather than handed to

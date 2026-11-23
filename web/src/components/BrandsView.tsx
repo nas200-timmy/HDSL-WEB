@@ -31,6 +31,8 @@ import {
   TerminalIcon,
 } from "../components/icons";
 import { useMobileLayout } from "../hooks";
+import { WINDOWS_TESTED_ZCODE, compareZcodeVersion, isNewerThanWindowsTested, isWindowsTestedZcode } from "../zcodeVersion";
+import { isNodeMissing, requestNodeInstall, requireNode } from "../setupGate";
 import { I18N } from "../i18n";
 import { getSelectedInstanceId, setSelectedInstanceId, useSelectedInstanceId } from "../selection";
 import { getState, refreshExternal, refreshZcode, toast, useAppState } from "../store";
@@ -673,6 +675,10 @@ function VersionCard({
   const doInstall = async (mode?: "full" | "terminal-only") => {
     if (!selected) return;
     setBusy(true);
+    if (!(await requireNode())) {
+      setBusy(false);
+      return;
+    }
     try {
       const started = Date.now();
       const accepted = await api.brandInstall(brand, selected, mode);
@@ -681,6 +687,11 @@ function VersionCard({
       setInstallStartedAt(started);
       setInstallStatus({ state: "running", message: "已提交，正在准备…", fraction: 0 });
     } catch (e) {
+      if (isNodeMissing(e) && await requestNodeInstall()) {
+        setBusy(false);
+        await doInstall(mode);
+        return;
+      }
       // 409（同品牌已有安装在进行）也走这里：把后端给的原因原样带出来
       toast("error", `安装失败：${errMsg(e)}`);
     } finally {
@@ -1323,6 +1334,7 @@ function ZcodeVersionsCard() {
       {!open && (
         <div style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", paddingTop: 2 }}>
           {I18N["dsh.brand.version.shared"]}
+          <span style={{ marginLeft: 6 }}>· Windows 实测稳定 {WINDOWS_TESTED_ZCODE}</span>
         </div>
       )}
 
@@ -1354,6 +1366,10 @@ function ZcodeVersionsCard() {
               正式版 / 仅 tag / 未发布 main；未安装的用「构建发行包」构建
             </span>
           </div>
+          <div style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", lineHeight: 1.6 }}>
+            Windows 上最后完整实测稳定的是 <b>{WINDOWS_TESTED_ZCODE}</b>；更新的上游版本改过构建产物，
+            需要面板跟着补丁，未重测前请当实验性看。
+          </div>
           {catalogError && <div className="form-error">{catalogError}</div>}
           {catalog.length === 0 ? (
             <div style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
@@ -1374,6 +1390,15 @@ function ZcodeVersionsCard() {
                     {entry.channel === "main" ? "未发布" : entry.channel === "release" ? "正式版" : "仅 tag"}
                   </span>
                   <span style={{ fontSize: 12, fontWeight: 600, flex: "none" }}>{entry.version}</span>
+                  {isWindowsTestedZcode(entry.version) && (
+                    <span className="tag running" style={{ flex: "none" }}>Windows 实测</span>
+                  )}
+                  {!isWindowsTestedZcode(entry.version) && isNewerThanWindowsTested(entry.version) && (
+                    <span className="tag warn" style={{ flex: "none" }}>需补丁</span>
+                  )}
+                  {dist?.present && dist.version && compareZcodeVersion(entry.version, dist.version) === 0 && (
+                    <span className="tag running" style={{ flex: "none" }}>当前构建</span>
+                  )}
                   <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", flex: "none" }}>
                     {entry.installed ? "已装"
                       : entry.buildState === "building" ? "构建中"
@@ -1720,6 +1745,7 @@ function InstancesCard({
 
   /// 装好指定版本再切过去：安装期间该行副标题位置显示进度，装完才 PATCH
   const installThenPatch = async (id: string, version: string) => {
+    if (!(await requireNode())) return;
     setRowInstall({ id, version, status: null });
     try {
       await api.brandInstall(brand, version);
@@ -1727,6 +1753,11 @@ function InstancesCard({
       // 409（同品牌已有安装在进行）等：把后端给的原因原样带出来，实例版本不动。
       // 同一个版本的重复请求后端会直接接上那个任务（202），走不到这里；能到这里说明
       // 正在装的是**另一个**版本，等它结束再切比排两个编译更靠谱。
+      if (isNodeMissing(e) && await requestNodeInstall()) {
+        setRowInstall(null);
+        await installThenPatch(id, version);
+        return;
+      }
       const raw = errMsg(e);
       toast(
         "error",

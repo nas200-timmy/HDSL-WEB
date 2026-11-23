@@ -20,6 +20,7 @@ package org.jackhuang.hmcl.web.developer;
 import org.jackhuang.hmcl.web.config.DeveloperGuardScope;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -63,6 +64,40 @@ class DeveloperGuardFilterTest {
         assertFalse(DeveloperGuardFilter.gated(DeveloperGuardScope.ALL, "/api/health", "GET"));
         assertFalse(DeveloperGuardFilter.gated(DeveloperGuardScope.ALL, "/api/auth/login", "POST"));
         assertFalse(DeveloperGuardFilter.gated(DeveloperGuardScope.ALL, "/api/developer/elevate", "POST"));
+    }
+
+    @Test
+    void cleartextRemoteOnlyForcesAllWhenAPasswordExists() {
+        // A fresh HTTP panel has nobody to ask for a password; forcing ALL
+        // would lock settings, TLS and Node behind an unset password.
+        assertEquals(DeveloperGuardScope.OFF,
+                DeveloperGuardFilter.effectiveScope(DeveloperGuardScope.OFF, false, false, false));
+        assertEquals(DeveloperGuardScope.INSTANCE,
+                DeveloperGuardFilter.effectiveScope(DeveloperGuardScope.INSTANCE, false, false, false));
+        // With a password the second factor is usable, so the promotion applies.
+        assertEquals(DeveloperGuardScope.ALL,
+                DeveloperGuardFilter.effectiveScope(DeveloperGuardScope.OFF, false, false, true));
+        // TLS and loopback are not promoted at all.
+        assertEquals(DeveloperGuardScope.OFF,
+                DeveloperGuardFilter.effectiveScope(DeveloperGuardScope.OFF, true, false, true));
+        assertEquals(DeveloperGuardScope.OFF,
+                DeveloperGuardFilter.effectiveScope(DeveloperGuardScope.OFF, false, true, true));
+    }
+
+    @Test
+    void tlsBootstrapCoversCertificateManagementOnly() {
+        // The chicken-and-egg escape hatch: a cleartext panel must reach these
+        // to stop being cleartext.
+        assertTrue(DeveloperGuardFilter.tlsBootstrapPath("/api/settings/tls"));
+        assertTrue(DeveloperGuardFilter.tlsBootstrapPath("/api/settings/tls/self-signed"));
+        assertTrue(DeveloperGuardFilter.tlsBootstrapPath("/api/settings/certificates"));
+        assertTrue(DeveloperGuardFilter.tlsBootstrapPath("/api/settings/certificates/abc/activate"));
+        assertTrue(DeveloperGuardFilter.tlsBootstrapPath("/api/settings/acme"));
+        assertTrue(DeveloperGuardFilter.tlsBootstrapPath("/api/settings/dns-credentials"));
+        // Everything else keeps the normal gate: this is not a general hole.
+        assertFalse(DeveloperGuardFilter.tlsBootstrapPath("/api/instances"));
+        assertFalse(DeveloperGuardFilter.tlsBootstrapPath("/api/settings/download-source"));
+        assertFalse(DeveloperGuardFilter.tlsBootstrapPath("/api/node/install"));
     }
 
     @Test

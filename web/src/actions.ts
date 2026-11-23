@@ -5,6 +5,7 @@ import { I18N } from "./i18n";
 import { patchInstanceLocal, refreshExternal, seedTasks, toast } from "./store";
 import type { Instance } from "./types";
 import { errMsg, confirmCleartextOpen } from "./utils";
+import { isNodeMissing, requestNodeInstall, requireNode } from "./setupGate";
 
 /**
  * 跑一个可能被开发者守卫挡住的请求：被挡住时弹一次开发者密码框，成功后重试一次。
@@ -31,6 +32,7 @@ async function withElevation<T>(call: () => Promise<T>): Promise<T> {
  * 3. store 收到 RUNNING + url 的 WS 事件后自动把弹窗导航到 /i/<id>/?token=…。
  */
 export async function launchInstance(inst: Instance, onSubmitted?: () => void): Promise<boolean> {
+  if (!(await requireNode())) return false;
   const win = beginLaunch(inst.id);
   try {
     const r = await withElevation(() => api.launch(inst.id));
@@ -49,6 +51,9 @@ export async function launchInstance(inst: Instance, onSubmitted?: () => void): 
   } catch (e) {
     if (win) win.close();
     forgetLaunch(inst.id);
+    if (isNodeMissing(e) && await requestNodeInstall()) {
+      return launchInstance(inst, onSubmitted);
+    }
     toast("error", `启动失败：${errMsg(e)}`);
     return false;
   }
@@ -67,6 +72,7 @@ export async function stopInstance(inst: Instance): Promise<boolean> {
 }
 
 export async function installVersion(inst: Instance, version: string): Promise<boolean> {
+  if (!(await requireNode())) return false;
   try {
     await withElevation(() => api.install(inst.id, version));
     patchInstanceLocal(inst.id, { state: "INSTALLING" });
@@ -74,6 +80,9 @@ export async function installVersion(inst: Instance, version: string): Promise<b
     toast("info", `已开始安装 ${version}`);
     return true;
   } catch (e) {
+    if (isNodeMissing(e) && await requestNodeInstall()) {
+      return installVersion(inst, version);
+    }
     toast("error", `安装失败：${errMsg(e)}`);
     return false;
   }
@@ -114,6 +123,7 @@ export async function launchBrandInstance(
   brand: "kimi" | "opencode" | "claude-web" | "octop" | "pi-web" | "qwen" | "mimo" | "minimax" | "zcode" | "hermes",
   entry: { id: string; name: string },
 ): Promise<boolean> {
+  if (!(await requireNode())) return false;
   beginLaunch(entry.id);
   try {
     let state: string;
@@ -148,6 +158,10 @@ export async function launchBrandInstance(
     const popup = consumeLaunchPopup(entry.id);
     if (popup && !popup.closed) popup.close();
     forgetLaunch(entry.id);
+    // 服务端兜底：预检没读到状态、或期间运行时被删了。
+    if (isNodeMissing(e) && await requestNodeInstall()) {
+      return launchBrandInstance(brand, entry);
+    }
     toast("error", `启动失败：${errMsg(e)}`);
     return false;
   } finally {

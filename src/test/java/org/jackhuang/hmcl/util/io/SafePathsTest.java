@@ -50,6 +50,24 @@ class SafePathsTest {
         assertEquals(root, SafePaths.resolveInside(root, ""));
     }
 
+    /// 解包成员名不能只挡 `..` 和 `/` 开头：Windows 上 `C:/x`、`C:x`、`//host/x`
+    /// 都会把 root 丢掉。跨平台一律拒绝，正常成员照常落进根内。
+    @Test
+    void anArchiveEntryCannotNameADriveOrAUncOrARoot(@TempDir Path directory) {
+        Path root = directory.resolve("pack");
+
+        assertNull(SafePaths.resolveArchiveEntry(root, "C:/Windows/Temp/x.bat"));
+        assertNull(SafePaths.resolveArchiveEntry(root, "C:x.bat"), "驱动器相对路径也是逃逸");
+        assertNull(SafePaths.resolveArchiveEntry(root, "C:\\Windows\\Temp\\x.bat"), "反斜杠同样拒绝");
+        assertNull(SafePaths.resolveArchiveEntry(root, "//host/share/x.bat"));
+        assertNull(SafePaths.resolveArchiveEntry(root, "/etc/passwd"));
+        assertNull(SafePaths.resolveArchiveEntry(root, "../x.bat"));
+        assertNull(SafePaths.resolveArchiveEntry(root, ""));
+
+        assertEquals(root.resolve("SKILL.md"), SafePaths.resolveArchiveEntry(root, "SKILL.md"));
+        assertEquals(root.resolve("a/b.txt"), SafePaths.resolveArchiveEntry(root, "a/b.txt"));
+    }
+
     @Test
     void aNameThatClimbsOutIsRefused(@TempDir Path directory) {
         Path root = directory.resolve("profile");

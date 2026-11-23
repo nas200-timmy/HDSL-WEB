@@ -210,7 +210,10 @@ public final class DshSkills {
                     // where it was unpacked is not one to be clever about.
                     continue;
                 }
-                Path target = directory.resolve(relative);
+                Path target = org.jackhuang.hmcl.util.io.SafePaths.resolveArchiveEntry(directory, relative);
+                if (target == null) {
+                    continue;
+                }
                 Files.createDirectories(target.getParent());
                 Files.copy(zip, target, StandardCopyOption.REPLACE_EXISTING);
                 packs.add(relative.contains("/") ? relative.substring(0, relative.indexOf('/')) : relative);
@@ -512,7 +515,10 @@ public final class DshSkills {
                 if (name.isEmpty() || name.startsWith("/") || name.contains("..")) {
                     continue;
                 }
-                Path file = target.resolve(name);
+                Path file = org.jackhuang.hmcl.util.io.SafePaths.resolveArchiveEntry(target, name);
+                if (file == null) {
+                    continue;
+                }
                 Files.createDirectories(file.getParent());
                 Files.copy(zip, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             }

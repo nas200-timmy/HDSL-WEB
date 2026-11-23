@@ -47,6 +47,7 @@
 }
 
 .titlebar-btn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -444,6 +445,8 @@ button.titlebar-icon:hover {
   align-items: center;
   gap: 4px;
   flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 /* 工具栏行 */

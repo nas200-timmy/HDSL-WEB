@@ -8,6 +8,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { OfflineBanner } from "./components/OfflineBanner";
 import { SnackbarHost } from "./components/Snackbar";
 import { ElevationHost } from "./components/ElevationDialog";
+import { NodeGateHost } from "./components/NodeGateDialog";
 import { AccountsPage } from "./pages/AccountsPage";
 import { ChatPage } from "./pages/ChatPage";
 import { ChatSettingsPage } from "./pages/chat/ChatSettingsPage";
@@ -345,6 +346,7 @@ export default function App() {
       <OfflineBanner />
       <SnackbarHost />
       <ElevationHost />
+      <NodeGateHost />
     </>
   );
 }

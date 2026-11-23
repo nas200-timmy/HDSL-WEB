@@ -114,6 +114,35 @@ public final class BrandPolicy {
         return entry;
     }
 
+    /// 生效的单实例条目，并在 survivor 已不存在时收养现有列表里的第一个。
+    ///
+    /// survivor 是一个实例 id；实例被删、数据目录被恢复成另一批 id 之后，
+    /// 旧 id 不再匹配任何实例——此时 `disabled()` 会把**所有**实例都判成禁用，
+    /// 界面上就是整排“策略禁用”，启动按钮全灰。收养第一个既保住了单实例语义，
+    /// 又不会因为一个失效的 id 把整个品牌锁死；修复会写回文件，动作闸门才放行。
+    ///
+    /// @param brand       the brand
+    /// @param instanceIds the instances that currently exist, in listing order
+    /// @return the entry in effect (healed and persisted when it had to adopt)
+    public synchronized Entry reconcile(Brand brand, java.util.List<String> instanceIds) {
+        Entry entry = get(brand);
+        if (!entry.singleInstance() || instanceIds.isEmpty()) {
+            return entry;
+        }
+        if (entry.survivor() != null && instanceIds.contains(entry.survivor())) {
+            return entry;
+        }
+        Entry healed = entry.withSurvivor(instanceIds.get(0));
+        try {
+            set(brand, healed);
+            LOG.warning("Brand policy: survivor " + entry.survivor() + " of " + brand.id()
+                    + " no longer exists; adopted " + instanceIds.get(0));
+        } catch (IOException e) {
+            LOG.warning("Could not repair the survivor of " + brand.id(), e);
+        }
+        return healed;
+    }
+
     /// Whether an instance is disabled by the single-instance policy. The
     /// survivor is always enabled; every other id is not.
     public boolean disabled(Brand brand, String instanceId) {

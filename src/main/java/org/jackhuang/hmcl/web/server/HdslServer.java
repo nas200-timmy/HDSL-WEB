@@ -271,7 +271,8 @@ public final class HdslServer {
                 request -> request.isSecure()
                         || org.jackhuang.hmcl.web.http.RequestSecurity.forwardedHttps(request, config),
                 ttlSeconds, config.basePath, developerElevation, peerIdentity,
-                config.agent.remoteNeedsSession, config.agent.loopbackOnly);
+                config.agent.remoteNeedsSession, config.agent.loopbackOnly,
+                () -> config.network.trustedProxies);
         PasswordCrypto passwordCrypto = new PasswordCrypto();
         ChatCryptoService chatCrypto = new ChatCryptoService();
 

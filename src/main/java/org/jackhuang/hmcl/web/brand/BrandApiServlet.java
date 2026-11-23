@@ -30,6 +30,7 @@ import org.jackhuang.hmcl.web.audit.AuditLog;
 import org.jackhuang.hmcl.web.auth.AuthFilter;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.http.Json;
+import org.jackhuang.hmcl.web.node.NodePreflight;
 import org.jackhuang.hmcl.web.task.TaskService;
 import org.jackhuang.hmcl.web.terminal.BrandTui;
 import org.jackhuang.hmcl.web.terminal.TerminalManager;
@@ -551,6 +552,15 @@ public final class BrandApiServlet extends HttpServlet {
                     "an install for " + brand.id() + " is already running (" + info.message() + ")");
             return;
         }
+        // The prebuilt portable release (Octop) carries its own runtime; only the
+        // npm / GitHub-source installs need Node.js beforehand.
+        if (brand.source() != Brand.Source.GITHUB_RELEASE) {
+            String missing = NodePreflight.missingBrandReason(brand.source() == Brand.Source.NPM);
+            if (missing != null) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT, NodePreflight.message(missing));
+                return;
+            }
+        }
         TaskService.Task task = tasks.submit("install", brand.id(), live -> {
             BrandInstaller.Progress progress = new BrandInstaller.Progress() {
                 @Override
@@ -643,8 +653,11 @@ public final class BrandApiServlet extends HttpServlet {
     private void listInstances(Brand brand, PathRef ref, HttpServletRequest request,
                                HttpServletResponse response) throws IOException {
         JsonArray instances = new JsonArray();
-        for (BrandInstance instance : ref.manager().list()) {
-            instances.add(instanceJson(brand, instance, request));
+        java.util.List<BrandInstance> list = ref.manager().list();
+        BrandPolicy.Entry policyEntry = policy.reconcile(brand,
+                list.stream().map(BrandInstance::id).toList());
+        for (BrandInstance instance : list) {
+            instances.add(instanceJson(brand, instance, request, policyEntry));
         }
         JsonObject body = new JsonObject();
         body.add("instances", instances);
@@ -884,15 +897,15 @@ public final class BrandApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "no such instance");
             return;
         }
-        if (refuseDisabled(brand, id, response)) {
-            return;
-        }
+        // 删除是被禁用实例唯一允许的变更操作：它本来就因为不是 survivor 而被策略挡住，
+        // 正该允许删掉。删完让 reconcile 收养下一个，避免 survivor 消失后整品牌锁死。
         if (BrandRuntime.isRunning(id)) {
             Json.error(response, HttpServletResponse.SC_CONFLICT, "stop the instance before deleting it");
             return;
         }
         instanceTerminal.close(brand.id(), id);
         ref.manager().delete(id);
+        policy.reconcile(brand, ref.manager().list().stream().map(BrandInstance::id).toList());
         AuditLog.log(AuditLog.Channel.WEB, "brand.instance.delete", brand.id() + "/" + id,
                 AuthFilter.selfDirected(request, brand.id(), id) ? "self_delete" : "success",
                 actorOf(request), request.getRemoteAddr());
@@ -1371,14 +1384,14 @@ public final class BrandApiServlet extends HttpServlet {
                 password = line.substring("password:".length()).trim();
             }
         }
-        if (wizard && password == null) {
-            // Older entrypoints put the wizard password in its own file instead of the hint block.
-            List<String> wizardFile = readCredentialFile(home.resolve("octop-login.txt"));
-            if (!wizardFile.isEmpty()) {
-                String first = wizardFile.get(0).trim();
-                if (!first.isEmpty()) {
-                    password = first;
-                }
+        if (password == null) {
+            // 只留下 octop-login.txt 的实例（没有 credential.txt / octop-admin.txt）：
+            // 它的第一行就是 Octop 初始化向导要的“启动密码”。以前只在 wizard=true 时
+            // 才读这个文件，而 wizard 恰恰要由那两个文件里的提示行来置位——结果这类
+            // 实例在面板上永远显示不出启动密码，用户卡死在向导第一步。
+            password = wizardPassword(home);
+            if (password != null) {
+                wizard = true;
             }
         }
         if (password == null) {
@@ -1550,15 +1563,39 @@ public final class BrandApiServlet extends HttpServlet {
         }
     }
 
-    /// Runs `octop user passwd <username> --password <pw>` with the instance's own environment.
+    /// Sets the password of `username`, creating the admin if the instance has no user yet.
+    ///
+    /// A fresh Octop writes an empty `users` table until its first-run wizard finishes.
+    /// The panel used to run `user passwd` unconditionally, which fails with
+    /// `error: user not found: admin` and leaves the page with no way to set a first
+    /// password. Creating the admin through Octop's own CLI is the same door the wizard
+    /// uses, and keeps the panel's "reset" button meaningful on a never-opened instance.
     private static void resetOctopPassword(BrandInstance instance, Path brandRoot, Path home,
                                            String username, String password) throws IOException {
         Path packageDir = BrandInstaller.packageDir(Brand.OCTOP, brandRoot, instance.version());
         if (packageDir == null) {
             throw new IOException("Octop " + instance.version() + " is not installed");
         }
+        try {
+            runOctop(packageDir, home, List.of("user", "passwd", username, "--password", password));
+        } catch (IOException e) {
+            if (!isUnknownUser(e.getMessage())) {
+                throw e;
+            }
+            runOctop(packageDir, home,
+                    List.of("user", "create", username, "--password", password, "--role", "admin"));
+        }
+    }
+
+    /// Whether Octop's CLI answered that the named user does not exist.
+    static boolean isUnknownUser(@Nullable String message) {
+        return message != null && message.toLowerCase(java.util.Locale.ROOT).contains("user not found");
+    }
+
+    /// Runs one Octop CLI invocation with the instance's own environment.
+    private static String runOctop(Path packageDir, Path home, List<String> args) throws IOException {
         List<String> command = new java.util.ArrayList<>(octopCommand(packageDir));
-        command.addAll(List.of("user", "passwd", username, "--password", password));
+        command.addAll(args);
 
         // As the instance's uid: Octop rewrites its own store, and a root-owned
         // file there is one the instance can no longer maintain.
@@ -1591,21 +1628,22 @@ public final class BrandApiServlet extends HttpServlet {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             process.destroyForcibly();
-            throw new IOException("octop user passwd was interrupted", e);
+            throw new IOException("octop " + String.join(" ", args) + " was interrupted", e);
         }
         if (!finished) {
             process.descendants().forEach(java.lang.ProcessHandle::destroyForcibly);
             process.destroyForcibly();
-            throw new IOException("octop user passwd timed out");
+            throw new IOException("octop " + String.join(" ", args) + " timed out");
         }
         String text;
         synchronized (output) {
             text = output.toString().trim();
         }
         if (process.exitValue() != 0) {
-            throw new IOException("octop user passwd failed (exit " + process.exitValue() + "): "
-                    + (text.isEmpty() ? "no output" : text));
+            throw new IOException("octop " + String.join(" ", args) + " failed (exit "
+                    + process.exitValue() + "): " + (text.isEmpty() ? "no output" : text));
         }
+        return text;
     }
 
     /// How to invoke Octop's CLI inside an installed release: the source build has an entry point, the
@@ -1674,6 +1712,16 @@ public final class BrandApiServlet extends HttpServlet {
         return null;
     }
 
+    /// Octop 的启动向导密码（`octop-login.txt` 第一行），文件不存在或为空时 `null`。
+    static @Nullable String wizardPassword(Path home) {
+        List<String> lines = readCredentialFile(home.resolve("octop-login.txt"));
+        if (lines.isEmpty()) {
+            return null;
+        }
+        String first = lines.get(0).trim();
+        return first.isEmpty() ? null : first;
+    }
+
     /// A 16-character password with letters and digits, for the "reset" without a typed value.
     private static String randomPassword() {
         String alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
@@ -1713,6 +1761,11 @@ public final class BrandApiServlet extends HttpServlet {
     // --------------------------------------------------------------- response --
 
     private JsonObject instanceJson(Brand brand, BrandInstance instance, HttpServletRequest request) {
+        return instanceJson(brand, instance, request, policy.get(brand));
+    }
+
+    private JsonObject instanceJson(Brand brand, BrandInstance instance, HttpServletRequest request,
+                                    BrandPolicy.Entry policyEntry) {
         BrandRuntime.Status status = BrandRuntime.status(instance.id());
         JsonObject body = new JsonObject();
         body.addProperty("id", instance.id());
@@ -1754,7 +1807,8 @@ public final class BrandApiServlet extends HttpServlet {
         body.addProperty("lastPort", instance.lastPort());
         body.addProperty("createdAt", instance.createdAt());
         body.addProperty("state", status.state().name().toLowerCase(java.util.Locale.ROOT));
-        body.addProperty("disabled", policy.disabled(brand, instance.id()));
+        body.addProperty("disabled",
+                policyEntry.singleInstance() && !instance.id().equals(policyEntry.survivor()));
         // Hermes' web mode and its terminal are exclusive; the UI asks before a
         // click ends the other mode, so it needs the server's answer (a browser
         // that never opened a terminal still has to know one is running).

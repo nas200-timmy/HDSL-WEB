@@ -175,6 +175,34 @@ class ZcodeRuntimeTest {
         assertEquals(ZcodeRuntime.State.STOPPED, ZcodeRuntime.status(instance.id()).state());
     }
 
+    /// The runtime host asset is staged under `<data>/zcode/assets`, while the
+    /// manager's root is `<data>/zcode/instances`. The launch must name the
+    /// former; naming the latter (the old behaviour) pointed upstream's lookup
+    /// one directory too deep and `zcode` died with "Windows runtime host is
+    /// missing" as soon as an agent was spawned.
+    @Test
+    void launchPointsZcodeAtTheStagedRuntimeHost() throws Exception {
+        NodeDshStub.assumeNode();
+        Path zcodeRoot = dataDir.resolve("zcode");
+        Path tools = zcodeRoot.resolve("assets/tools/runtime-host");
+        Files.createDirectories(tools);
+        Files.writeString(tools.resolve("zcode-runtime-host.exe"), "");
+        Files.writeString(tools.resolve("zcode-installer-process-helper.exe"), "");
+
+        ZcodeInstanceManager manager = manager();
+        ZcodeInstance instance = manager.create("hosted", null, null);
+        Path argsFile = dataDir.resolve("args-runtime-host.json");
+        ZcodeRuntime.Status status = ZcodeRuntime.launch(manager, instance,
+                Map.of("FAKE_ZCODE_ARGS_FILE", argsFile.toString()), "node", PACKAGE);
+        assertEquals(ZcodeRuntime.State.RUNNING, status.state(), "status: " + status);
+
+        JsonObject recorded = JsonParser.parseString(Files.readString(argsFile)).getAsJsonObject();
+        assertEquals(zcodeRoot.resolve("assets").toString(), recorded.get("runtimeRoot").getAsString(),
+                "ZCODE_SERVER_RUNTIME_ROOT must be <data>/zcode/assets, not .../instances/assets");
+
+        ZcodeRuntime.stop(instance.id());
+    }
+
     @Test
     void aProcessThatExitsEarlyLeavesErrorWithTheLogTail() throws Exception {
         NodeDshStub.assumeNode();

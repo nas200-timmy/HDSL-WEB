@@ -158,6 +158,32 @@ class ApiGuardFilterTest {
                     .PUT(HttpRequest.BodyPublishers.ofByteArray(new byte[announced]))
                     .build(), HttpResponse.BodyHandlers.ofString());
             assertEquals(200, mod.statusCode(), "a 2 MiB plugin upload must reach the handler");
+
+            // The dsh local plugin upload: the servlet's own multipart limit is 50 MiB, but this
+            // route was missing from `streamed()`, so anything over 1 MiB died here with 413
+            // before `InstancesApiServlet.uploadLocalPlugin` ever ran.
+            HttpResponse<String> localPlugin = HttpClient.newHttpClient().send(HttpRequest.newBuilder(
+                            URI.create("http://127.0.0.1:" + port + "/api/instances/x/plugins/local"))
+                    .header("Content-Type", "multipart/form-data; boundary=XyZ")
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(multipartBody(announced)))
+                    .build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, localPlugin.statusCode(), "a 2 MiB local plugin must reach the handler");
+
+            // Session import accepts a multipart file or a raw body; both are uploads, and a
+            // session export larger than 1 MiB used to be refused the same way.
+            HttpResponse<String> chatImport = HttpClient.newHttpClient().send(HttpRequest.newBuilder(
+                            URI.create("http://127.0.0.1:" + port + "/api/chat/import"))
+                    .header("Content-Type", "multipart/form-data; boundary=XyZ")
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(multipartBody(announced)))
+                    .build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, chatImport.statusCode(), "a 2 MiB session import must reach the handler");
+
+            HttpResponse<String> chatImportRaw = HttpClient.newHttpClient().send(HttpRequest.newBuilder(
+                            URI.create("http://127.0.0.1:" + port + "/api/chat/import"))
+                    .header("Content-Type", "application/octet-stream")
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(new byte[announced]))
+                    .build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, chatImportRaw.statusCode(), "a raw session import must reach the handler");
         } finally {
             server.stop();
         }
@@ -189,6 +215,43 @@ class ApiGuardFilterTest {
         }
     }
 
+    /// The mirror image of [aChunkedBodyWithoutLengthIsRefusedOnAJsonRoute]: an upload route
+    /// has a reason to accept a body whose length is not known up front, so it must not be
+    /// held to the JSON route's `Content-Length` requirement.
+    @Test
+    void aChunkedBodyIsAcceptedOnAnUploadRoute() throws Exception {
+        Server server = new Server(0);
+        ServletContextHandler context = new ServletContextHandler();
+        context.setContextPath("/");
+        context.addServlet(new ServletHolder(new HttpServlet() {
+            @Override
+            protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+                req.getInputStream().transferTo(OutputStream.nullOutputStream());
+                resp.setStatus(200);
+            }
+        }), "/api/*");
+        context.addFilter(new FilterHolder(new ApiGuardFilter()), "/api/*",
+                EnumSet.of(DispatcherType.REQUEST));
+        server.setHandler(context);
+        server.start();
+        try {
+            int port = ((ServerConnector) server.getConnectors()[0]).getLocalPort();
+            for (String path : new String[]{"/api/instances/x/plugins/local", "/api/chat/import"}) {
+                HttpResponse<String> response = HttpClient.newHttpClient().send(HttpRequest.newBuilder(
+                                URI.create("http://127.0.0.1:" + port + path))
+                        .header("Content-Type", "multipart/form-data; boundary=XyZ")
+                        // An InputStream publisher has no length to announce, so the request
+                        // goes out with `Transfer-Encoding: chunked`.
+                        .POST(HttpRequest.BodyPublishers.ofInputStream(
+                                () -> new java.io.ByteArrayInputStream(multipartBody(64))))
+                        .build(), HttpResponse.BodyHandlers.ofString());
+                assertEquals(200, response.statusCode(), "a chunked upload must reach the handler: " + path);
+            }
+        } finally {
+            server.stop();
+        }
+    }
+
     @Test
     void onlyUploadRoutesSkipTheJsonCap() {
         assertTrue(ApiGuardFilter.streamed("/api/settings/tls"));
@@ -197,6 +260,8 @@ class ApiGuardFilterTest {
         assertTrue(ApiGuardFilter.streamed("/api/packs/install"));
         assertTrue(ApiGuardFilter.streamed("/api/plugins/install"));
         assertTrue(ApiGuardFilter.streamed("/api/instances/abc/plugins/install"));
+        assertTrue(ApiGuardFilter.streamed("/api/instances/abc/plugins/local"));
+        assertTrue(ApiGuardFilter.streamed("/api/chat/import"));
         assertTrue(ApiGuardFilter.streamed("/api/mc/instances/abc/world/import"));
         assertTrue(ApiGuardFilter.streamed("/api/mc/instances/abc/files/mods"));
         assertTrue(ApiGuardFilter.streamed("/api/mc/instances/abc/files/plugins"));

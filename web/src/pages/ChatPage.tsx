@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { ConfirmDialog } from "../components/Dialog";
@@ -169,7 +169,12 @@ export function ChatPage() {
   const liveRef = useRef<typeof live>(null);
   const finishedTurns = useRef<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const atBottom = useRef(true);
+  const followRef = useRef(true);
+  // 跟滚自己写进去的位置。scroll 事件里的位置和它一致，就说明这次滚动不是
+  // 用户干的——旧实现把这种事件也当成「用户上翻」，follow 被清掉后又置回，
+  // 表现出来就是输出时上下拉扯。
+  const expectedTopRef = useRef(0);
+  const lastHeightRef = useRef(0);
 
   useEffect(() => {
     setPreview(null);
@@ -257,10 +262,13 @@ export function ChatPage() {
     // bottom, and a transcript that starts at the top hides it. Reset the
     // "user scrolled up" flag, then scroll after layout (twice, because fonts
     // and images can grow the transcript after the first frame).
-    atBottom.current = true;
+    followRef.current = true;
     const scrollToEnd = () => {
       const el = scrollRef.current;
-      if (el) el.scrollTop = el.scrollHeight;
+      if (el) {
+        el.scrollTop = el.scrollHeight;
+        expectedTopRef.current = el.scrollTop;
+      }
     };
     requestAnimationFrame(() => {
       scrollToEnd();
@@ -521,19 +529,60 @@ export function ChatPage() {
         if (finishedTurns.current.size > 40) {
           finishedTurns.current = new Set(Array.from(finishedTurns.current).slice(-20));
         }
-        setLive(null);
-        void refreshSession(event.sessionId);
-        void loadSessions(assistantIdRef.current);
+        // 先取回落盘后的完整快照，再收掉现场流。顺序反过来会先用旧快照重画
+        // （正文短一截、思考还没落定），刷新回来又长回去——完成瞬间那一下拉扯。
+        void (async () => {
+          try {
+            await refreshSession(event.sessionId);
+          } finally {
+            setLive((previous) => (previous && previous.turnId === event.turnId ? null : previous));
+            void loadSessions(assistantIdRef.current);
+          }
+        })();
+        return;
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
+  // 内容收缩（思考折叠、快照替换）时当帧贴底：修正在 paint 之前完成，
+  // 用户看不到「先被顶上去、再滑回尾巴」。
+  useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (!el || !atBottom.current) return;
+    if (!el) return;
+    const height = el.scrollHeight;
+    const shrank = height < lastHeightRef.current;
+    lastHeightRef.current = height;
+    if (!followRef.current) return;
+    // 流式增长交给下面的缓动；空闲时任何重排都直接贴底。
+    if (!shrank && live) return;
     el.scrollTop = el.scrollHeight;
-  }, [session?.nodes.length, live?.text, live?.reasoning]);
+    expectedTopRef.current = el.scrollTop;
+  }, [session, live]);
+
+  // 流式跟滚：只有用户没上翻时，才用 rAF 缓动追尾巴。
+  // 不用 scroll-behavior: smooth —— 每次 delta 都会重新起一个动画，动画自己的
+  // scroll 事件又会被当成用户滚动，跟滚于是时断时续，表现为上下拉扯。
+  useEffect(() => {
+    if (!live) return;
+    let frame = 0;
+    const tick = () => {
+      const el = scrollRef.current;
+      if (el && followRef.current) {
+        const distance = el.scrollHeight - el.clientHeight - el.scrollTop;
+        if (distance > 0.5) {
+          // 越近步长越小，最后一段平滑收尾；最小 1px，避免长尾停在半路。
+          el.scrollTop += Math.max(1, distance * 0.35);
+          expectedTopRef.current = el.scrollTop;
+        }
+      }
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+    // 只在「有没有在流」时起停；delta 不需要重启循环。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live?.turnId]);
 
   // 断线或漏帧的兜底：流式中每 3 秒拉一次快照；服务端说已结束就收掉本地的流。
   useEffect(() => {
@@ -775,6 +824,8 @@ export function ChatPage() {
     const text = draft.trim();
     if (!text && pending.length === 0) return;
     setBusy(true);
+    // 刚发出的消息在末尾：跟滚重新接手。
+    followRef.current = true;
     try {
       const target = await ensureSession();
       const outcome = await api.chat.send(target.id, {
@@ -1117,18 +1168,26 @@ export function ChatPage() {
             <AddIcon size={16} />
             新会话
           </button>
-          <button className="tool-btn ripple-host" onClick={() => navigate("/chat/settings")} title="聊天设置">
-            <SettingsIcon size={20} />
-          </button>
-          {session && (
+          <span className="chat-header-actions">
             <button
-              className="tool-btn ripple-host"
-              onClick={(event) => setSessionMenu(event.currentTarget)}
-              title="会话操作"
+              className="tool-btn chat-header-action ripple-host"
+              aria-label="聊天设置"
+              onClick={() => navigate("/chat/settings")}
+              title="聊天设置"
             >
-              <MoreVertIcon size={20} />
+              <SettingsIcon size={20} />
             </button>
-          )}
+            {session && (
+              <button
+                className="tool-btn chat-header-action ripple-host"
+                aria-label="会话操作"
+                onClick={(event) => setSessionMenu(event.currentTarget)}
+                title="会话操作"
+              >
+                <MoreVertIcon size={20} />
+              </button>
+            )}
+          </span>
         </div>
 
         <PopupMenu open={sessionMenu !== null} anchor={sessionMenu} onClose={() => setSessionMenu(null)}>
@@ -1244,9 +1303,25 @@ export function ChatPage() {
             <div
               className="chat-messages scroll"
             ref={scrollRef}
+            onWheel={(event) => {
+              // 只有真的想往上翻（或已经离开末尾）才交出跟滚；在末尾往下滚不算。
+              const el = event.currentTarget;
+              const near = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+              if (event.deltaY < 0 || !near) followRef.current = false;
+            }}
+            onTouchMove={() => {
+              // 手指一动就交出跟滚，避免缓动和惯性滚动抢位置；
+              // 拖回末尾时 onScroll 会重新置 true。
+              followRef.current = false;
+            }}
             onScroll={(event) => {
               const el = event.currentTarget;
-              atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+              const near = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+              // 位置正是跟滚写进去的 → 这次滚动不是用户干的，保持 follow。
+              // 旧实现在这里无条件改写 follow，平滑跟滚会被自己的事件打断。
+              if (Math.abs(el.scrollTop - expectedTopRef.current) > 2) {
+                followRef.current = near;
+              }
             }}
           >
             {(() => {

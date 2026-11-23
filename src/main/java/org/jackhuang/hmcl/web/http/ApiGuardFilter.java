@@ -93,6 +93,11 @@ public final class ApiGuardFilter implements Filter {
     /// 这些路由把正文流式写文件（multipart 暂存或原始 zip），不适用 JSON 上限。
     ///
     /// 名单必须按**路径**写：按 `Content-Type` 判断等于让调用方自己决定走不走闸门。
+    ///
+    /// `/plugins/local`（本地 .tgz，multipart 上限 50 MiB）与 `/api/chat/import`
+    /// （会话导入，multipart 或原始正文）曾经漏在这张名单外：multipart 自己的上限
+    /// 还没轮到，大于 1 MiB 的包就先在这里被 413 了。凡是 multipart 或流式上传的
+    /// 新路由，都要在这里登记，并在 ApiGuardFilterTest 里各留一条超过 1 MiB 的用例。
     static boolean streamed(String path) {
         return path.equals("/api/settings/tls")
                 || path.equals("/api/wallpapers")
@@ -101,7 +106,9 @@ public final class ApiGuardFilter implements Filter {
                 || path.startsWith("/api/plugins/")
                 || path.startsWith("/api/chat/attachments")
                 || path.equals("/api/chat/avatars")
+                || path.equals("/api/chat/import")
                 || path.endsWith("/plugins/install")
+                || path.endsWith("/plugins/local")
                 || path.endsWith("/world/import")
                 || MC_FILE_UPLOAD.matcher(path).matches();
     }

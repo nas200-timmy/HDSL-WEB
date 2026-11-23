@@ -373,7 +373,8 @@ public final class InstanceProxyServlet extends HttpServlet {
         int upstreamPort = port;
         upstream.answer().whenCompleteAsync(
                 (answer, error) -> pump(response, async, upstream, mount, browserMount, brandClient, octopClient,
-                        zcodeClient, routerClient, prefixClient, upstreamPort, answer, error),
+                        zcodeClient, routerClient, prefixClient, unrecognizedRouterShim(brand),
+                        upstreamPort, answer, error),
                 tasks.executor());
     }
 
@@ -419,7 +420,7 @@ public final class InstanceProxyServlet extends HttpServlet {
     ///                      URLs, redirect Locations, cookie paths)
     private static void pump(HttpServletResponse response, AsyncContext async, Upstream upstream, String mount,
                              String browserMount, boolean brandClient, boolean octopClient, boolean zcodeClient,
-                             boolean routerClient, boolean prefixClient,
+                             boolean routerClient, boolean prefixClient, RouterShim unrecognized,
                              int port, @Nullable HttpResponse<InputStream> result, @Nullable Throwable error) {
         try {
             if (error != null || result == null) {
@@ -457,7 +458,8 @@ public final class InstanceProxyServlet extends HttpServlet {
                     out.write((octopClient
                                     ? rewriteOctopPage(html, browserMount)
                                     : rewritePage(html, browserMount,
-                                            routerClient ? routerShimFor(port, mount, html) : RouterShim.NONE,
+                                            routerClient ? routerShimFor(port, mount, html, unrecognized)
+                                                    : RouterShim.NONE,
                                             brandClient))
                             .getBytes(StandardCharsets.UTF_8));
                     out.flush();
@@ -827,6 +829,14 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// would drop the mount from the address it rewrites).
     private static final String ROUTER_PATH_READ = "window.location.pathname.replace(";
 
+    /// Kimi Code 2.7 的路由读法不是 Solid 那行，而是 `f3()` 里的
+    /// `return{pathname:kAe(window.location.pathname)}`：一个归一化函数包住整个
+    /// bundle 里**唯一**的 `window.location.pathname`。标识符每次构建都变，所以按
+    /// 形状匹配，并且只在全文件恰好一处时动手——多处出现说明这不是那处路由读，
+    /// 猜错比不猜更糟（见 hasRouterPathRead 的"两次等于没有"）。
+    private static final Pattern GENERIC_ROUTER_PATH_READ = Pattern.compile(
+            "([A-Za-z_$][A-Za-z0-9_$]*)\\(window\\.location\\.pathname\\)");
+
     /// The same expression with the mount taken off it, so that under `/i/<id>/`
     /// the client matches the routes it would match at the origin root. The
     /// global is looked up rather than called outright: the bundle is served
@@ -902,7 +912,13 @@ public final class InstanceProxyServlet extends HttpServlet {
         // still match.
         String text = new String(script, StandardCharsets.ISO_8859_1);
         if (hasRouterPathRead(text)) {
-            text = text.replace(ROUTER_PATH_READ, ROUTER_PATH_READ_PATCHED);
+            if (text.contains(ROUTER_PATH_READ)) {
+                text = text.replace(ROUTER_PATH_READ, ROUTER_PATH_READ_PATCHED);
+            } else {
+                text = GENERIC_ROUTER_PATH_READ.matcher(text).replaceFirst(match -> match.group(1)
+                        + "(window.__hdslUnmount?window.__hdslUnmount(window.location.pathname)"
+                        + ":window.location.pathname)");
+            }
         }
 
         text = text.replace(ASSET_ROOT_REFERENCE, "\"" + mount + "assets/");
@@ -976,7 +992,16 @@ public final class InstanceProxyServlet extends HttpServlet {
     ///         down with it.
     static boolean hasRouterPathRead(String script) {
         int at = script.indexOf(ROUTER_PATH_READ);
-        return at >= 0 && script.indexOf(ROUTER_PATH_READ, at + 1) < 0;
+        if (at >= 0) {
+            return script.indexOf(ROUTER_PATH_READ, at + 1) < 0;
+        }
+        // 没有 Solid 那行时，只认"全文件恰好一处 `xxx(window.location.pathname)`"
+        // （Kimi Code 2.7 的 `f3()`）。一处以上无法判断哪处是路由读，交给 ROOT。
+        int first = script.indexOf("window.location.pathname");
+        if (first < 0 || script.indexOf("window.location.pathname", first + 1) >= 0) {
+            return false;
+        }
+        return GENERIC_ROUTER_PATH_READ.matcher(script).find();
     }
 
     /// The same question over the bytes the probe read.
@@ -995,17 +1020,42 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// fails says no: losing the address bar is recoverable, a page whose shim
     /// does not match its bundle is not.
     private static RouterShim routerShimFor(int port, String mount, String html) {
+        return routerShimFor(port, mount, html, RouterShim.ROOT);
+    }
+
+    /// @param unrecognized 认不出客户端的路由读法时退回哪一种：OpenCode 回 ROOT
+    ///                      （地址还给面板根），Kimi 回 NONE（**旧版行为**——老
+    ///                      Kimi 本来就认子路径，不需要也不能被这段脚本打扰）。
+    private static RouterShim routerShimFor(int port, String mount, String html, RouterShim unrecognized) {
         String src = entryScriptSrc(html);
         if (src == null) {
-            return RouterShim.ROOT;
+            return unrecognized;
         }
         String remembered = ROUTER_BUNDLES.get(mount);
         if (remembered != null && remembered.startsWith(src + "|")) {
-            return remembered.endsWith("|mount") ? RouterShim.MOUNT : RouterShim.ROOT;
+            if (remembered.endsWith("|mount")) {
+                return RouterShim.MOUNT;
+            }
+            return remembered.endsWith("|none") ? RouterShim.NONE : RouterShim.ROOT;
         }
         boolean patchable = probeRouterBundle(port, src);
-        ROUTER_BUNDLES.put(mount, src + "|" + (patchable ? "mount" : "root"));
-        return patchable ? RouterShim.MOUNT : RouterShim.ROOT;
+        if (patchable) {
+            ROUTER_BUNDLES.put(mount, src + "|mount");
+            return RouterShim.MOUNT;
+        }
+        if (unrecognized == RouterShim.NONE) {
+            // 老 Kimi 回旧行为是预期；但 2.7.x 若改了路由读法形状，会静默退回旧行为
+            // （点会话跳面板根）。留一行日志，升级后一眼能定位。
+            org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
+                    "Router bundle at " + src + " has no recognisable path read; serving it without a router shim");
+        }
+        ROUTER_BUNDLES.put(mount, src + "|" + (unrecognized == RouterShim.NONE ? "none" : "root"));
+        return unrecognized;
+    }
+
+    /// 认不出路由读法时的降级：Kimi 回旧版行为，其余（OpenCode）回面板根。
+    static RouterShim unrecognizedRouterShim(org.jackhuang.hmcl.web.brand.Brand brand) {
+        return brand == org.jackhuang.hmcl.web.brand.Brand.KIMI ? RouterShim.NONE : RouterShim.ROOT;
     }
 
     /// @return the path of the client's entry script as the instance serves it,
@@ -1332,10 +1382,47 @@ public final class InstanceProxyServlet extends HttpServlet {
     /// references resolve from deep links (`/i/<token>/agents/...`), and the
     /// global is what the patched `publicUrl`/router reads. No runtime shim and
     /// no chunk rewriting: the bundle already builds mount-aware URLs.
+    /// Octop 的存储命名空间：上游按单租户设计，`localStorage`/`sessionStorage` 里
+    /// 几十个键都不分实例——`auth_token`（串登录）、`pendingChatMessage`（A 写的
+    /// 消息在 B 里被发出去）、`setup-jwt`/`wizard-token`（setup 凭据）、
+    /// `terminal-sessions`/`remote-browser:session-id`（远程会话）全在同源下互相
+    /// 覆盖。逐键打补丁必然漏，而且上游每次新增一个键就漏一次，所以在
+    /// `Storage.prototype` 上统一加挂载前缀：两个存储对象、所有键、包括以后新增
+    /// 的，一次全覆盖。已经是 `octop:<mount>:` 开头的（0001 的 scopedKey）原样放行，
+    /// 不会被二次加前缀。
+    private static final String OCTOP_STORAGE_SHIM = """
+            (()=>{
+            if(window.__octopStorageScoped)return;window.__octopStorageScoped=true;
+            const mount=window.__OCTOP_BASE__||"/";
+            const prefix="octop:"+mount+":";
+            const strip=(key)=>{if(typeof key!=="string")return key;
+            if(key.indexOf(prefix)===0)return key;
+            let name=key;
+            if(name.indexOf("octop:")===0)name=name.slice(6);
+            else if(name.indexOf("octop.")===0)name=name.slice(6);
+            return prefix+name};
+            const get=Storage.prototype.getItem,set=Storage.prototype.setItem,del=Storage.prototype.removeItem;
+            const rawKey=Storage.prototype.key;
+            const rawLength=Object.getOwnPropertyDescriptor(Storage.prototype,"length").get;
+            const scopedKeys=(self)=>{const out=[];const n=rawLength.call(self);
+            for(let i=0;i<n;i++){const k=rawKey.call(self,i);
+            if(typeof k==="string"&&k.indexOf(prefix)===0)out.push(k)}return out};
+            Storage.prototype.getItem=function(k){return get.call(this,strip(k))};
+            Storage.prototype.setItem=function(k,v){return set.call(this,strip(k),v)};
+            Storage.prototype.removeItem=function(k){return del.call(this,strip(k))};
+            // clear() 只清本实例的键：否则 A 登出会把同 origin 的 B、C 一起清空。
+            Storage.prototype.clear=function(){scopedKeys(this).forEach(k=>del.call(this,k))};
+            // key()/length 也只枚举本实例，别实例的键名（auth_token 等）不外泄。
+            Storage.prototype.key=function(i){const keys=scopedKeys(this);return i<keys.length?keys[i]:null};
+            Object.defineProperty(Storage.prototype,"length",{configurable:true,get:function(){return scopedKeys(this).length}});
+            })()
+            """;
+
     static String rewriteOctopPage(String html, String mount) {
         String escaped = mount.replace("\\", "\\\\").replace("\"", "\\\"");
         String injection = "<base href=\"" + mount + "\">"
-                + "<script>window.__OCTOP_BASE__=\"" + escaped + "\";</script>";
+                + "<script>window.__OCTOP_BASE__=\"" + escaped + "\";\n"
+                + OCTOP_STORAGE_SHIM + "</script>";
         String withoutBase = html.replaceAll("(?is)<base\\s[^>]*>", "");
         int head = indexOfIgnoreCase(withoutBase, "<head>");
         String rewritten;

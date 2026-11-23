@@ -538,6 +538,12 @@ select.input {
   animation: dialog-in 150ms var(--ease);
   max-height: 70vh;
   overflow-y: auto;
+  /* 实例多的时候直接滚：鼠标滚轮、触摸拖动都作用在菜单上，不带着页面一起滚。 */
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  touch-action: pan-y;
+  scrollbar-width: thin;
+  scrollbar-color: var(--monet-outline) transparent;
 }
 
 .popup-item {
@@ -1294,4 +1300,322 @@ select.input {
 .mem-bar > div {
   height: 100%;
   transition: width 200ms var(--ease);
+}
+
+/* ---------------- 部署检查（首次部署的卡片） ---------------- */
+
+.setup-card {
+  position: absolute;
+  top: 16px;
+  /* 侧栏 200 + 16：卡片落在壁纸上，不压住左侧导航 */
+  left: 216px;
+  z-index: 12;
+  width: min(430px, calc(100% - 248px));
+  max-height: calc(100% - 120px);
+  overflow-y: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--monet-outline-variant);
+  border-radius: 8px;
+  background: var(--monet-surface);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22);
+  font-size: 12px;
+}
+
+.setup-collapsed {
+  position: absolute;
+  top: 16px;
+  left: 216px;
+  z-index: 12;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 248px);
+  padding: 6px 12px;
+  border: 1px solid var(--monet-outline-variant);
+  border-radius: 999px;
+  background: var(--monet-surface);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  font-size: 12px;
+  color: var(--monet-on-surface);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.setup-collapsed-hint {
+  color: var(--monet-primary);
+  flex: none;
+}
+
+.setup-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--monet-on-surface);
+}
+
+.setup-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--monet-outline);
+}
+
+.setup-dot.tone-ok {
+  background: var(--monet-primary);
+}
+
+.setup-dot.tone-warn {
+  background: var(--monet-tertiary);
+}
+
+.setup-dot.tone-bad {
+  background: var(--monet-error);
+}
+
+.setup-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.setup-head-actions {
+  display: inline-flex;
+  gap: 2px;
+  flex: none;
+}
+
+.setup-icon-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--monet-on-surface-variant);
+  line-height: 1;
+}
+
+.setup-icon-btn:hover {
+  background: var(--monet-on-surface-variant-transparent-38);
+}
+
+.setup-security {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: 6px;
+  line-height: 1.55;
+}
+
+.setup-security.bad {
+  background: color-mix(in srgb, var(--monet-error) 10%, transparent);
+  color: var(--monet-error);
+}
+
+.setup-security.warn {
+  background: color-mix(in srgb, var(--monet-tertiary) 12%, transparent);
+  color: var(--monet-on-surface);
+}
+
+.setup-security svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.setup-items {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.setup-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.setup-item-icon {
+  flex: none;
+  margin-top: 1px;
+}
+
+.setup-item.tone-ok .setup-item-icon {
+  color: var(--monet-primary);
+}
+
+.setup-item.tone-warn .setup-item-icon {
+  color: var(--monet-tertiary);
+}
+
+.setup-item.tone-bad .setup-item-icon {
+  color: var(--monet-error);
+}
+
+.setup-item-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.setup-item-title {
+  font-weight: 600;
+  color: var(--monet-on-surface);
+}
+
+.setup-item-detail {
+  color: var(--monet-on-surface-variant);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.setup-item-progress {
+  color: var(--monet-primary);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.setup-action {
+  flex: none;
+  font-size: 11px;
+  height: 26px;
+  padding: 0 8px;
+}
+
+.setup-action-pair {
+  display: inline-flex;
+  gap: 2px;
+  flex: none;
+}
+
+.setup-action-pair .btn {
+  font-size: 11px;
+  height: 26px;
+  padding: 0 6px;
+}
+
+.setup-intro {
+  margin-top: 10px;
+  padding-top: 6px;
+  border-top: 1px solid var(--monet-outline-variant);
+}
+
+.setup-intro-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  font-size: 12px;
+  color: var(--monet-on-surface-variant);
+}
+
+.setup-intro-toggle span {
+  margin-left: auto;
+  color: var(--monet-primary);
+}
+
+.setup-intro-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.setup-intro-list button {
+  display: block;
+  width: 100%;
+  padding: 4px 6px;
+  border-radius: 4px;
+  text-align: left;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--monet-on-surface-variant);
+}
+
+.setup-intro-list button:hover {
+  background: var(--monet-on-surface-variant-transparent-38);
+}
+
+.setup-intro-list b {
+  color: var(--monet-on-surface);
+}
+
+.setup-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.setup-foot-links {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+
+.setup-foot .btn {
+  font-size: 11px;
+  height: 26px;
+  padding: 0 6px;
+}
+
+/* 首次部署：冷启动时卡片里的"你需要做的" */
+.setup-next {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 6px;
+  background: var(--monet-surface-container);
+}
+
+.setup-next-title {
+  font-weight: 600;
+  color: var(--monet-on-surface);
+  margin-bottom: 4px;
+}
+
+.setup-next-hint {
+  margin: 0 0 8px;
+  color: var(--monet-on-surface-variant);
+  line-height: 1.55;
+}
+
+.setup-next-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.setup-next-actions .btn {
+  font-size: 11px;
+  height: 28px;
+  padding: 0 8px;
+}
+
+/* 手机顶部菜单按钮上的小点 */
+.titlebar-btn .side-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--monet-error);
+  pointer-events: none;
 }

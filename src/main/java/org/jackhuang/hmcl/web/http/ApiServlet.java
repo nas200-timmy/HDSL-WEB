@@ -190,7 +190,7 @@ public final class ApiServlet extends HttpServlet {
             return;
         }
 
-        String address = request.getRemoteAddr() == null ? "unknown" : request.getRemoteAddr();
+        String address = authFilter.clientAddress(request);
         // 拒绝发生在核对口令之前：核对口令本身就是攻击者想花掉的那笔开销（PBKDF2 二十一万次），
         // 而且被拒绝的地址不该还能让服务端为它算一次。
         if (loginThrottle.isBlocked(address, Instant.now())) {
