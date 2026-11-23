@@ -66,6 +66,22 @@ class DeveloperGuardFilterTest {
     }
 
     @Test
+    void tlsBootstrapCoversCertificateManagementOnly() {
+        // The chicken-and-egg escape hatch: a cleartext panel must reach these
+        // to stop being cleartext.
+        assertTrue(DeveloperGuardFilter.tlsBootstrapPath("/api/settings/tls"));
+        assertTrue(DeveloperGuardFilter.tlsBootstrapPath("/api/settings/tls/self-signed"));
+        assertTrue(DeveloperGuardFilter.tlsBootstrapPath("/api/settings/certificates"));
+        assertTrue(DeveloperGuardFilter.tlsBootstrapPath("/api/settings/certificates/abc/activate"));
+        assertTrue(DeveloperGuardFilter.tlsBootstrapPath("/api/settings/acme"));
+        assertTrue(DeveloperGuardFilter.tlsBootstrapPath("/api/settings/dns-credentials"));
+        // Everything else keeps the normal gate: this is not a general hole.
+        assertFalse(DeveloperGuardFilter.tlsBootstrapPath("/api/instances"));
+        assertFalse(DeveloperGuardFilter.tlsBootstrapPath("/api/settings/download-source"));
+        assertFalse(DeveloperGuardFilter.tlsBootstrapPath("/api/node/install"));
+    }
+
+    @Test
     void emergencyStopFreezesPagesTerminalsAndStarts() {
         assertTrue(DeveloperGuardFilter.blockedByEmergency("/i/dsh-1/", "GET"));
         assertTrue(DeveloperGuardFilter.blockedByEmergency("/api/instances/dsh-1/terminal", "POST"));

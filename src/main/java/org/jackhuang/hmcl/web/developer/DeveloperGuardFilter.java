@@ -122,7 +122,14 @@ public final class DeveloperGuardFilter implements Filter {
                 && scope != DeveloperGuardScope.ALL) {
             scope = DeveloperGuardScope.ALL;
         }
-        if (scope == DeveloperGuardScope.OFF || !gated(scope, path, method)) {
+        // The way out of the chicken-and-egg: a cleartext panel that has not
+        // enabled TLS yet needs certificate management to get TLS, and that
+        // management is what the forced-ALL promotion would block. Only the
+        // certificate routes are exempt, only while the connector is still
+        // plain HTTP, and only for an authenticated panel admin (AuthFilter ran
+        // first). Once TLS is on, the normal scope applies again.
+        boolean tlsBootstrap = !secure && !tlsActive.getAsBoolean() && tlsBootstrapPath(path);
+        if (tlsBootstrap || scope == DeveloperGuardScope.OFF || !gated(scope, path, method)) {
             chain.doFilter(request, response);
             return;
         }
@@ -146,6 +153,20 @@ public final class DeveloperGuardFilter implements Filter {
                 "需要开发者密码",
                 "Enter the developer password to open this instance.",
                 true);
+    }
+
+    /// Certificate management, which a cleartext panel must reach to stop being
+    /// cleartext. Kept to `/api/settings/` on purpose: nothing here starts a
+    /// process or touches an instance.
+    ///
+    /// @param path the decoded request path
+    /// @return whether this is a TLS bootstrap route
+    static boolean tlsBootstrapPath(String path) {
+        return path.equals("/api/settings/tls")
+                || path.startsWith("/api/settings/tls/")
+                || path.startsWith("/api/settings/certificates")
+                || path.startsWith("/api/settings/acme")
+                || path.startsWith("/api/settings/dns-credentials");
     }
 
     /// Whether the guard's scope covers this request.

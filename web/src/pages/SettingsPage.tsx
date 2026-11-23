@@ -3904,11 +3904,6 @@ function DeveloperTab() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  /// HTTP 下的拦截弹窗：默认一进来就弹
-  const [insecureOpen, setInsecureOpen] = useState(true);
-  const [confirmSelfSigned, setConfirmSelfSigned] = useState(false);
-  const [switching, setSwitching] = useState(false);
-  const [switchError, setSwitchError] = useState<string | null>(null);
   /// 开发者守卫的保存中标志：四档按钮共用，避免连点写出两次配置。
   const [guardSaving, setGuardSaving] = useState(false);
   /// 紧急停机的三次确认：1 清单 → 2 短语 → 3 不可逆声明。
@@ -4044,32 +4039,34 @@ function DeveloperTab() {
     }
   };
 
-  const generateSelfSigned = async () => {
-    setSwitchError(null);
-    setSwitching(true);
-    try {
-      const result = await api.enableSelfSignedTls();
-      if (!result.ok) {
-        setSwitchError(result.error ?? "自签名证书没能启用，请稍后再试");
-        return;
-      }
-      setConfirmSelfSigned(false);
-      // 服务端会在这条应答写完后换掉连接器：稍等片刻再回到同一地址的 https
-      window.setTimeout(() => {
-        window.location.href = window.location.href.replace(/^http:/, "https:");
-      }, 1200);
-    } catch (e) {
-      setSwitchError(developerError(e));
-    } finally {
-      setSwitching(false);
-    }
-  };
-
   const caption = (
-    <div className="section-caption">
-      <DeployedCodeIcon size={16} />
-      开发者模式
-    </div>
+    <>
+      <div className="section-caption">
+        <DeployedCodeIcon size={16} />
+        开发者模式
+      </div>
+      {status?.https === false && (
+        <div className="card" style={{ borderColor: "var(--monet-error)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px 0", fontSize: 13 }}>
+            <WarningIcon size={16} />
+            当前连接是 HTTP 明文
+          </div>
+          <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "8px 8px 0", lineHeight: 1.6 }}>
+            开发者密码和提权仍然可以设置、使用（密码字段由页面加密后再发送），但实例终端（Web Shell）
+            和守卫作用域的修改要等 HTTPS 生效。证书管理不再需要开发者密码：先在这里或「证书管理」里
+            生成自签 / 上传证书，切到 HTTPS 后其余功能就都齐了。
+          </p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: "8px 8px 0" }}>
+            <button
+              className="btn btn-outline ripple-host"
+              onClick={() => setSearchParams({ tab: "tls" }, { replace: true })}
+            >
+              去 HTTPS 设置
+            </button>
+          </div>
+        </div>
+      )}
+    </>
   );
 
   /// 切换开发者守卫的作用域。后端要求已提权，过期时按普通错误提示（页面会
@@ -4179,98 +4176,6 @@ function DeveloperTab() {
             <span>正在读取开发者模式状态…</span>
           </div>
         </div>
-      </>
-    );
-  }
-
-  if (!status.https) {
-    return (
-      <>
-        {caption}
-        <div className="card">
-          <div
-            className="form-error"
-            style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px 0", fontSize: 13 }}
-          >
-            <WarningIcon size={16} />
-            当前连接不是 HTTPS，开发者模式与 Web Shell 不可用。
-          </div>
-          <p style={{ fontSize: 12, color: "var(--monet-on-surface-variant)", padding: "8px 8px 0", lineHeight: 1.6 }}>
-            在明文 HTTP 上，开发者密码和终端里的输入输出都会被网络上的其他人看到。请先在「HTTPS 证书」里上传证书；
-            如果暂时没有证书，可以生成自签名证书继续，但浏览器会提示证书不受信任。
-          </p>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, paddingTop: 8 }}>
-            <button
-              className="btn btn-raised ripple-host"
-              onClick={() => setSearchParams({ tab: "tls" }, { replace: true })}
-            >
-              去 HTTPS 设置
-            </button>
-            <button className="btn btn-outline ripple-host" onClick={() => setInsecureOpen(true)}>
-              仍要使用…
-            </button>
-          </div>
-        </div>
-
-        <Dialog open={insecureOpen} title="当前环境不安全" onClose={() => setInsecureOpen(false)}>
-          <div style={{ maxWidth: 440, lineHeight: 1.7 }}>
-            <p>面板现在通过 HTTP 明文提供服务。开发者密码、终端里的键盘输入与输出都会以明文经过网络，
-              任何能看到这条链路的人都能截获。</p>
-            <p>因此开发者模式与 Web Shell 只在 HTTPS 下可用。</p>
-            <p>如果暂时没有证书，可以生成自签名证书继续——浏览器会提示证书不受信任，只适合内网或临时使用。
-              正式部署请上传受信任证书，或者把面板放到带证书的反向代理后面。</p>
-          </div>
-          <div className="dialog-actions">
-            <button className="btn btn-text dim" onClick={() => setInsecureOpen(false)}>
-              返回
-            </button>
-            <button
-              className="btn btn-text"
-              onClick={() => {
-                setInsecureOpen(false);
-                setSearchParams({ tab: "tls" }, { replace: true });
-              }}
-            >
-              去上传证书
-            </button>
-            <button
-              className="btn btn-text danger"
-              onClick={() => {
-                setInsecureOpen(false);
-                setConfirmSelfSigned(true);
-              }}
-            >
-              生成自签名证书
-            </button>
-          </div>
-        </Dialog>
-
-        <ConfirmDialog
-          open={confirmSelfSigned}
-          title="生成自签名证书并启用 HTTPS？"
-          danger
-          busy={switching}
-          confirmLabel={switching ? "生成中…" : "生成并启用"}
-          cancelLabel="取消"
-          message={
-            <div style={{ lineHeight: 1.7 }}>
-              <p>将生成一张自签名证书，并把面板切换到 HTTPS（同一端口）。</p>
-              <ul style={{ paddingLeft: 18, margin: "8px 0" }}>
-                <li>浏览器会提示「证书不受信任」，需要手动选择继续访问；</li>
-                <li>它不能证明服务器身份，只适合内网或临时使用；</li>
-                <li>切换后当前 HTTP 地址会跳到 https:// 同一地址，可能需要重新登录。</li>
-              </ul>
-              {switchError && <div className="form-error">{switchError}</div>}
-            </div>
-          }
-          onCancel={() => {
-            if (!switching) {
-              setConfirmSelfSigned(false);
-              setSwitchError(null);
-            }
-          }}
-          onConfirm={() => void generateSelfSigned()}
-        />
       </>
     );
   }
@@ -4414,8 +4319,9 @@ function DeveloperTab() {
               role="switch"
               aria-checked={status.webShellEnabled}
               aria-label="启用 Web Shell"
+              title={status.https ? undefined : "Web Shell 只在 HTTPS 下可用"}
               style={{ border: 0, padding: 0, marginLeft: "auto" }}
-              disabled={busy}
+              disabled={busy || !status.https}
               onClick={() => void toggleWebShell()}
             />
           </span>
@@ -4445,7 +4351,8 @@ function DeveloperTab() {
             <button
               key={scope}
               className={`btn ${status.guardScope === scope ? "btn-raised" : "btn-outline"} ripple-host`}
-              disabled={busy || guardSaving}
+              title={status.https ? undefined : "守卫作用域只能在 HTTPS 下修改"}
+              disabled={busy || guardSaving || !status.https}
               onClick={() => void saveGuard(scope)}
             >
               {GUARD_SCOPE_LABEL[scope]}
