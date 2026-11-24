@@ -23,22 +23,13 @@ import org.jackhuang.hmcl.web.transcode.TranscodeModule;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
-import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.InetAddress;
 import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.security.MessageDigest;
-import java.time.Duration;
 import java.util.ArrayList;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -49,8 +40,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 
 /// Installs ffmpeg at runtime for deployments that do not ship it.
 ///
@@ -76,6 +65,7 @@ public final class FfmpegInstaller {
         public double progress = 0;
         public String message = "";
         public String log = "";
+        public String logPath = "";
         public @Nullable String error;
         public long createdAt = System.currentTimeMillis();
         public long endedAt = -1;
@@ -200,11 +190,27 @@ public final class FfmpegInstaller {
         if (!List.of("static", "package", "compile").contains(kind)) {
             throw new IOException("kind must be static, package or compile");
         }
-        if ("static".equals(kind) || "compile".equals(kind)) {
+        if ("compile".equals(kind)) {
+            // The old compile path ran the system `tar` and copied a possibly
+            // shared build's binaries. It now resolves the pinned source entry
+            // by URL and delegates to the same FfmpegBuildKit the new API uses.
+            FfmpegCatalog.Entry source = module.catalog().entries().stream()
+                    .filter(entry -> entry.isSource() && entry.url().equals(url))
+                    .findFirst()
+                    .orElseThrow(() -> new IOException("ffmpeg_source_requires_catalog: "
+                            + "source builds use a pinned ffmpeg.org entry (7.1 or 8.1);"
+                            + " a user-supplied source URL is not accepted"));
+            return startSourceEntry(source, Set.of(), "legacy compile → " + source.id());
+        }
+        if ("static".equals(kind)) {
             if (url == null || url.isBlank()) {
                 throw new IOException("url is required for " + kind);
             }
             validateUrl(url);
+            if (sha256 == null || !sha256.matches("[0-9a-fA-F]{64}")) {
+                throw new IOException("ffmpeg_checksum_required: a custom URL must supply"
+                        + " its own 64-hex SHA-256; sidecar hashes are no longer trusted");
+            }
         }
         Files.createDirectories(toolsDir);
         InstallJob job = new InstallJob();
@@ -239,7 +245,6 @@ public final class FfmpegInstaller {
             switch (job.kind) {
                 case "static" -> installStatic(job, url, sha256, version);
                 case "package" -> installPackage(job);
-                case "compile" -> compile(job, url, sha256, version);
                 default -> throw new IOException("unknown kind " + job.kind);
             }
             if (job.state == State.RUNNING) {
@@ -263,9 +268,8 @@ public final class FfmpegInstaller {
             throws Exception {
         String selectedVersion = version == null || version.isBlank()
                 ? "static-" + System.currentTimeMillis() : version;
-        URI uri = URI.create(url);
-        String expected = expectedSha(sha256, uri, uriFileName(uri));
-        String id = "custom-" + expected.substring(0, 12).toLowerCase(java.util.Locale.ROOT);
+        String expected = sha256.toLowerCase(java.util.Locale.ROOT);
+        String id = "custom-" + expected.substring(0, 12);
         FfmpegCatalog.Entry entry = FfmpegCatalog.Entry.custom(id, url, expected, selectedVersion);
         runtimes.install(entry, (message, fraction) -> {
             if (job.state == State.CANCELLED) {
@@ -276,14 +280,6 @@ public final class FfmpegInstaller {
             log(job, message + "\n");
         });
         log(job, "installed " + selectedVersion + " via the runtime manager\n");
-    }
-
-    private static String uriFileName(URI uri) {
-        String path = uri.getPath();
-        if (path == null || path.isBlank() || path.endsWith("/")) {
-            return "ffmpeg.bin";
-        }
-        return path.substring(path.lastIndexOf('/') + 1);
     }
 
     private void installPackage(InstallJob job) throws Exception {
@@ -313,182 +309,84 @@ public final class FfmpegInstaller {
         log(job, "package manager finished; run 重新探测");
     }
 
-    private void compile(InstallJob job, String url, String sha256, @Nullable String version)
-            throws Exception {
-        String selectedVersion = version == null || version.isBlank()
-                ? "source-" + System.currentTimeMillis() : version;
-        Path archive = download(job, url, sha256);
-        Path source = toolsDir.resolve(".src-" + job.id);
-        deleteTree(source);
-        Files.createDirectories(source);
-        extract(archive, source);
-        Path configure = findConfigure(source);
-        if (configure == null) {
-            throw new IOException("no ./configure found in the source archive");
-        }
-        Path prefix = toolsDir.resolve(selectedVersion);
-        Files.createDirectories(prefix);
-        log(job, "configuring into " + prefix);
-        runProcess(job, List.of("./configure",
-                "--prefix=" + prefix,
-                "--disable-doc", "--disable-debug",
-                "--enable-gpl", "--enable-libx264", "--enable-libx265",
-                "--enable-vaapi", "--enable-libvpl"), configure.getParent());
-        int cpus = Math.max(1, Runtime.getRuntime().availableProcessors());
-        log(job, "building with -j" + cpus);
-        runProcess(job, List.of("make", "-j" + cpus), configure.getParent());
-        log(job, "installing");
-        runProcess(job, List.of("make", "install"), configure.getParent());
-        Path ffmpeg = prefix.resolve("bin").resolve("ffmpeg");
-        Path ffprobe = prefix.resolve("bin").resolve("ffprobe");
-        if (!Files.isRegularFile(ffmpeg) || !Files.isRegularFile(ffprobe)) {
-            throw new IOException("source build finished without ffmpeg/ffprobe");
-        }
-        copyToCurrent(job, ffmpeg, ffprobe);
-        deleteTree(source);
-        Files.deleteIfExists(archive);
+    /// Selects a pinned source entry by version line (`auto`, `7.1`, `8.1`) and
+    /// starts a build job. An explicit line never falls through to another one.
+    public InstallJob startSource(Set<String> features, @Nullable String major) throws IOException {
+        FfmpegSelector.Recommendation recommendation = FfmpegSelector.selectSource(
+                module.catalog(), FfmpegCapabilities.detect(), features, major);
+        return startSourceEntry(recommendation.entry(), features, recommendation.reason());
     }
 
-    private Path download(InstallJob job, String url, String sha256) throws Exception {
-        URI uri = URI.create(url);
-        Path archive = toolsDir.resolve(".download-" + job.id + suffix(uri.getPath()));
-        log(job, "downloading " + url);
-        HttpClient client = HttpClient.newBuilder()
-                .followRedirects(HttpClient.Redirect.NORMAL)
-                .connectTimeout(Duration.ofSeconds(20))
-                .build();
-        HttpRequest request = HttpRequest.newBuilder(uri)
-                .timeout(Duration.ofMinutes(10))
-                .GET()
-                .build();
-        HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
-        validateUrl(response.uri().toString());
-        if (response.statusCode() != 200) {
-            throw new IOException("download returned HTTP " + response.statusCode());
+    /// Starts the source entry an operator picked from the catalogue.
+    public InstallJob startSourceArtifact(String id, Set<String> features) throws IOException {
+        FfmpegCatalog.Entry entry = module.catalog().find(id);
+        if (entry == null) {
+            throw new IOException("ffmpeg_no_candidate: unknown catalog id " + id);
         }
-        MessageDigest digest = MessageDigest.getInstance("SHA-256");
-        try (InputStream in = new BufferedInputStream(response.body());
-             var out = Files.newOutputStream(archive)) {
-            byte[] buffer = new byte[8192];
-            int read;
-            long total = 0;
-            while ((read = in.read(buffer)) >= 0) {
-                out.write(buffer, 0, read);
-                digest.update(buffer, 0, read);
-                total += read;
-                if (total % (1024 * 1024) < 8192) {
-                    job.progress = Math.min(0.7, total / (200.0 * 1024 * 1024));
-                    job.message = "downloading " + (total / (1024 * 1024)) + " MiB";
-                }
-            }
+        if (!entry.isSource()) {
+            throw new IOException("ffmpeg_artifact_invalid: " + id + " is not a source entry");
         }
-        String actual = HexFormat.of().formatHex(digest.digest());
-        String expected = expectedSha(sha256, uri, archive.getFileName().toString());
-        if (!actual.equalsIgnoreCase(expected)) {
-            Files.deleteIfExists(archive);
-            throw new IOException("SHA-256 mismatch: expected " + expected + ", got " + actual);
+        FfmpegCapabilities.Host host = FfmpegCapabilities.detect();
+        if (!entry.matches(host.os(), host.arch(), host.libc())) {
+            throw new IOException("ffmpeg_unsupported_platform: " + id + " is for "
+                    + entry.os() + "/" + entry.arch() + "/" + entry.libc());
         }
-        job.progress = 0.7;
-        return archive;
+        return startSourceEntry(entry, features, "source build " + id);
     }
 
-    private void copyToCurrent(InstallJob job, Path ffmpeg, Path ffprobe) throws IOException {
-        if (Files.isRegularFile(toolsDir.resolve("current.json"))
-                || Files.isSymbolicLink(toolsDir.resolve("current"))) {
-            throw new IOException("ffmpeg: a managed runtime is active; use the runtime manager"
-                    + " instead of the legacy source-build copy");
+    private InstallJob startSourceEntry(FfmpegCatalog.Entry entry, Set<String> features,
+                                        String reason) throws IOException {
+        String versionId = FfmpegRuntimeManager.safeId("source-" + entry.ffmpegVersion()
+                + "-" + (entry.buildRecipe().isEmpty() ? "default" : entry.buildRecipe()));
+        Path versionDir = toolsDir.resolve(versionId);
+        if (Files.isRegularFile(versionDir.resolve("runtime.json"))) {
+            throw new IOException("ffmpeg_already_installed: " + versionId
+                    + "; delete the installed version before rebuilding");
         }
-        Path current = toolsDir.resolve("current").resolve("bin");
-        Files.createDirectories(current);
-        Files.copy(ffmpeg, current.resolve("ffmpeg"), StandardCopyOption.REPLACE_EXISTING);
-        Files.copy(ffprobe, current.resolve("ffprobe"), StandardCopyOption.REPLACE_EXISTING);
-        makeExecutable(current.resolve("ffmpeg"));
-        makeExecutable(current.resolve("ffprobe"));
-        job.progress = 0.95;
+        InstallJob job = newJob("source");
+        job.logPath = module.buildKit().logFor(job.id).toString();
+        job.log = reason + "\n";
+        executor.execute(() -> runSource(job, entry, versionDir, features));
+        return job;
     }
 
-    /// `auto` (or an empty field) means "read the publisher's sidecar": `<url>.sha256`,
-    /// then `checksums.sha256` / `SHA256SUMS` in the same directory. If none exists the
-    /// job fails with the exact URL it tried; a custom URL must still supply a hash.
-    private static String expectedSha(@Nullable String sha256, URI uri, String fileName)
-            throws IOException, InterruptedException {
-        if (sha256 != null && !sha256.isBlank() && !"auto".equalsIgnoreCase(sha256)) {
-            return sha256.trim();
-        }
-        for (String candidate : List.of(uri.toString() + ".sha256",
-                uri.resolve("checksums.sha256").toString(),
-                uri.resolve("SHA256SUMS").toString())) {
-            String body = fetchSmall(candidate);
-            if (body == null) {
-                continue;
-            }
-            for (String line : body.split("\\R")) {
-                String trimmed = line.trim();
-                if (trimmed.isEmpty()) {
-                    continue;
-                }
-                String[] parts = trimmed.split("\s+");
-                if (parts.length >= 2 && parts[1].contains(fileName)) {
-                    String hash = parts[0].replace("*", "");
-                    if (hash.matches("[0-9a-fA-F]{64}")) {
-                        return hash;
-                    }
-                }
-                if (parts.length == 1 && parts[0].matches("[0-9a-fA-F]{64}")) {
-                    return parts[0];
-                }
-            }
-        }
-        throw new IOException("no SHA-256 sidecar at " + uri + ".sha256; fill the SHA-256 field");
-    }
-
-    private static @Nullable String fetchSmall(String url) throws IOException, InterruptedException {
+    private void runSource(InstallJob job, FfmpegCatalog.Entry entry, Path versionDir,
+                           Set<String> features) {
         try {
-            HttpClient client = HttpClient.newBuilder()
-                    .followRedirects(HttpClient.Redirect.NORMAL)
-                    .connectTimeout(Duration.ofSeconds(5))
-                    .build();
-            HttpResponse<String> response = client.send(
-                    HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(10)).GET().build(),
-                    HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() == 200 && response.body().length() < 2_000_000) {
-                return response.body();
+            FfmpegBuildKit.BuildResult result = module.buildKit().build(
+                    entry, versionDir, job.id, features,
+                    (message, fraction) -> {
+                        // Called from the build thread and the output reader;
+                        // cancellation is observed by the BooleanSupplier below,
+                        // not by throwing out of a reader thread.
+                        if (job.state != State.CANCELLED) {
+                            job.message = message;
+                            job.progress = fraction;
+                            log(job, message + "\n");
+                        }
+                    },
+                    () -> job.state == State.CANCELLED);
+            if (job.state != State.CANCELLED) {
+                job.state = State.DONE;
+                job.progress = 1;
+                job.message = "done";
+                job.endedAt = System.currentTimeMillis();
+                log(job, "built " + entry.ffmpegVersion() + " with "
+                        + result.featuresEnabled().size() + " features"
+                        + (result.logFile() == null ? "" : "; log: " + result.logFile()) + "\n");
+                module.runtime().refresh();
             }
-        } catch (RuntimeException ignored) {
-        }
-        return null;
-    }
-
-    private static void extract(Path archive, Path destination) throws Exception {
-        String name = archive.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
-        if (name.endsWith(".zip")) {
-            try (ZipInputStream zip = new ZipInputStream(Files.newInputStream(archive))) {
-                ZipEntry entry;
-                while ((entry = zip.getNextEntry()) != null) {
-                    Path target = destination.resolve(entry.getName()).normalize();
-                    if (!target.startsWith(destination)) {
-                        throw new IOException("zip entry escapes the destination: " + entry.getName());
-                    }
-                    if (entry.isDirectory()) {
-                        Files.createDirectories(target);
-                    } else {
-                        Files.createDirectories(target.getParent());
-                        Files.copy(zip, target, StandardCopyOption.REPLACE_EXISTING);
-                    }
-                }
+        } catch (CancellationException e) {
+            job.state = State.CANCELLED;
+            job.message = "cancelled";
+            job.endedAt = System.currentTimeMillis();
+        } catch (Exception e) {
+            if (job.state != State.CANCELLED) {
+                job.state = State.FAILED;
+                job.error = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                job.message = "failed";
+                job.endedAt = System.currentTimeMillis();
             }
-            return;
-        }
-        List<String> command = name.endsWith(".tar.xz") || name.endsWith(".txz")
-                ? List.of("tar", "-xJf", archive.toString(), "-C", destination.toString())
-                : List.of("tar", "-xf", archive.toString(), "-C", destination.toString());
-        Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
-        if (!process.waitFor(10, TimeUnit.MINUTES)) {
-            process.destroyForcibly();
-            throw new IOException("archive extraction timed out");
-        }
-        if (process.exitValue() != 0) {
-            throw new IOException("archive extraction failed with code " + process.exitValue());
         }
     }
 
@@ -517,45 +415,6 @@ public final class FfmpegInstaller {
         if (process.exitValue() != 0) {
             throw new IOException("command failed with code " + process.exitValue()
                     + ": " + String.join(" ", command));
-        }
-    }
-
-    private static @Nullable Path find(Path root, String name) throws IOException {
-        try (var stream = Files.walk(root, 8)) {
-            return stream.filter(Files::isRegularFile)
-                    .filter(path -> path.getFileName().toString().equals(name)
-                            || path.getFileName().toString().equals(name + ".exe"))
-                    .findFirst().orElse(null);
-        }
-    }
-
-    private static @Nullable Path findConfigure(Path root) throws IOException {
-        try (var stream = Files.walk(root, 6)) {
-            return stream.filter(Files::isRegularFile)
-                    .filter(path -> path.getFileName().toString().equals("configure"))
-                    .findFirst().orElse(null);
-        }
-    }
-
-    private static String suffix(@Nullable String path) {
-        if (path == null) {
-            return ".bin";
-        }
-        if (path.endsWith(".tar.xz")) return ".tar.xz";
-        if (path.endsWith(".tar.gz")) return ".tar.gz";
-        if (path.endsWith(".zip")) return ".zip";
-        return ".bin";
-    }
-
-    private static void makeExecutable(Path file) {
-        try {
-            var permissions = Files.getPosixFilePermissions(file);
-            permissions.add(java.nio.file.attribute.PosixFilePermission.OWNER_EXECUTE);
-            permissions.add(java.nio.file.attribute.PosixFilePermission.GROUP_EXECUTE);
-            permissions.add(java.nio.file.attribute.PosixFilePermission.OTHERS_EXECUTE);
-            Files.setPosixFilePermissions(file, permissions);
-        } catch (Exception ignored) {
-            // Windows: the extension decides, not the mode bits.
         }
     }
 
@@ -590,18 +449,4 @@ public final class FfmpegInstaller {
         }
     }
 
-    private static void deleteTree(Path path) {
-        if (path == null || !Files.exists(path)) {
-            return;
-        }
-        try (var stream = Files.walk(path)) {
-            stream.sorted(java.util.Comparator.reverseOrder()).forEach(candidate -> {
-                try {
-                    Files.deleteIfExists(candidate);
-                } catch (IOException ignored) {
-                }
-            });
-        } catch (IOException ignored) {
-        }
-    }
 }

@@ -138,8 +138,75 @@ class FfmpegSelectorTest {
         assertTrue(selected.reason().contains("features 1/1"), selected.reason());
     }
 
+    @Test
+    void sourceSelectionHonoursMajorAndFeatures() throws Exception {
+        FfmpegCatalog.Catalog catalog = catalog(
+                sourceEntry("seven-source", "7.1.5", "7.1", "libx264"),
+                sourceEntry("eight-source", "8.1.3", "8.1", "libx264", "libvmaf"));
+        FfmpegCapabilities.Host host = linuxHost("2.36");
+
+        assertEquals("eight-source", FfmpegSelector.selectSource(
+                catalog, host, Set.of(), "auto").entry().id());
+        assertEquals("seven-source", FfmpegSelector.selectSource(
+                catalog, host, Set.of(), "7.1").entry().id());
+        assertEquals("eight-source", FfmpegSelector.selectSource(
+                catalog, host, Set.of("libvmaf"), "auto").entry().id());
+        assertTrue(FfmpegSelector.selectSource(catalog, host, Set.of(), "auto")
+                .reason().contains("source build"));
+    }
+
+    @Test
+    void explicitSourceMajorNeverSilentlySwitches() {
+        FfmpegCatalog.Catalog catalog = catalog(
+                sourceEntry("eight-source", "8.1.3", "8.1", "libx264"));
+        IOException error = assertThrows(IOException.class, () -> FfmpegSelector.selectSource(
+                catalog, linuxHost("2.36"), Set.of(), "7.1"));
+        assertTrue(error.getMessage().contains("on major 7.1"), error.getMessage());
+    }
+
+    @Test
+    void sourceSelectionReportsUnavailableFeatures() {
+        FfmpegCatalog.Catalog catalog = catalog(
+                sourceEntry("eight-source", "8.1.3", "8.1", "libx264"));
+        IOException error = assertThrows(IOException.class, () -> FfmpegSelector.selectSource(
+                catalog, linuxHost("2.36"), Set.of("libvmaf"), "auto"));
+        assertTrue(error.getMessage().contains("missing libvmaf"), error.getMessage());
+    }
+
     private static FfmpegCatalog.Catalog catalog(FfmpegCatalog.Entry... entries) {
         return new FfmpegCatalog.Catalog(1, "", List.of(entries));
+    }
+
+    private static FfmpegCatalog.Entry sourceEntry(String id, String version, String major,
+                                                    String... features) {
+        String featureJson = String.join(",", Arrays.stream(features)
+                .map(value -> "\"" + value + "\"")
+                .toList());
+        String json = """
+                {
+                  "schema": 1,
+                  "entries": [
+                    {
+                      "id": "%s",
+                      "os": "any",
+                      "arch": "any",
+                      "libc": "any",
+                      "ffmpegVersion": "%s",
+                      "license": "LGPL-2.1-or-later",
+                      "kind": "source",
+                      "vendor": "ffmpeg.org",
+                      "major": "%s",
+                      "variant": "source",
+                      "features": [%s],
+                      "url": "https://ffmpeg.org/releases/ffmpeg-%s.tar.xz",
+                      "sha256": "%s",
+                      "archive": "tar.xz",
+                      "buildRecipe": "gpl-static-v1"
+                    }
+                  ]
+                }
+                """.formatted(id, version, major, featureJson, version, "a".repeat(64));
+        return FfmpegCatalog.parse(json, "test").entries().get(0);
     }
 
     private static FfmpegCatalog.Entry entry(String id, String version, String minGlibc,

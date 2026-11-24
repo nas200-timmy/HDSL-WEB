@@ -170,6 +170,74 @@ public final class FfmpegSelector {
                 reason(host, chosen, required, AUTO, fallback));
     }
 
+    /// Picks a `kind=source` catalogue entry for this host and version line.
+    ///
+    /// Unlike a binary artifact, a source entry cannot promise a feature: whether
+    /// `--enable-libx264` survives depends on the host's development packages.
+    /// The entry's `features` therefore describe what the recipe *can* enable,
+    /// and the selector only rejects a request those declarations cannot cover.
+    /// The build records what was actually enabled in `featuresDeclared`.
+    public static Recommendation selectSource(FfmpegCatalog.Catalog catalog,
+                                              FfmpegCapabilities.Host host,
+                                              Set<String> requiredFeatures,
+                                              @Nullable String preferredMajor) throws IOException {
+        Set<String> required = lower(requiredFeatures);
+        String requested = normalizeMajor(preferredMajor);
+        if (!AUTO.equals(requested) && !requested.matches("\\d+\\.\\d+")) {
+            throw new IOException("ffmpeg_no_candidate: unsupported major '" + preferredMajor
+                    + "' (expected auto, 7.1 or 8.1)");
+        }
+
+        List<FfmpegCatalog.Entry> candidates = new ArrayList<>();
+        List<String> rejected = new ArrayList<>();
+        boolean sawSource = false;
+        for (FfmpegCatalog.Entry entry : catalog.entries()) {
+            if (!entry.isSource()) {
+                continue;
+            }
+            sawSource = true;
+            if (!entry.matches(host.os(), host.arch(), host.libc())) {
+                rejected.add(entry.id() + ": platform " + entry.os() + "/" + entry.arch()
+                        + "/" + entry.libc() + " does not match " + host.describe());
+                continue;
+            }
+            if (!AUTO.equals(requested) && !requested.equalsIgnoreCase(entry.major())) {
+                continue;
+            }
+            Set<String> have = lower(entry.features());
+            if (!have.containsAll(required)) {
+                rejected.add(label(entry, entry.major()) + ": missing " + missing(required, have));
+                continue;
+            }
+            candidates.add(entry);
+        }
+
+        if (!sawSource) {
+            throw new IOException("ffmpeg_no_candidate: the catalogue has no source entry"
+                    + describeRequired(required));
+        }
+        if (candidates.isEmpty()) {
+            throw new IOException("ffmpeg_no_candidate: no source entry for " + host.describe()
+                    + (AUTO.equals(requested) ? "" : " on major " + requested)
+                    + describeRequired(required) + summarize(rejected));
+        }
+
+        candidates.sort(Comparator
+                .comparing((FfmpegCatalog.Entry entry) -> VersionNumber.asVersion(entry.ffmpegVersion()))
+                .reversed()
+                .thenComparing(FfmpegCatalog.Entry::major, Comparator.reverseOrder())
+                .thenComparing(FfmpegCatalog.Entry::id));
+        FfmpegCatalog.Entry chosen = candidates.get(0);
+        String recipe = chosen.buildRecipe().isEmpty() ? "default" : chosen.buildRecipe();
+        String reason = "source build " + chosen.ffmpegVersion()
+                + " (major " + (chosen.major().isEmpty() ? "unknown" : chosen.major()) + ")"
+                + " from " + (chosen.vendor().isEmpty() ? "the catalogue" : chosen.vendor())
+                + "; recipe " + recipe
+                + "; features are enabled only when the host toolchain provides their development packages"
+                + (required.isEmpty() ? "" : "; requested " + String.join(", ", required));
+        return new Recommendation(chosen, reason);
+    }
+
     private static Candidate best(List<Candidate> candidates) {
         List<Candidate> sorted = new ArrayList<>(candidates);
         sorted.sort(Comparator

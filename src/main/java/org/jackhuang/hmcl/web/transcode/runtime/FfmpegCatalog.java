@@ -126,6 +126,10 @@ public final class FfmpegCatalog {
             return "binary".equals(kind);
         }
 
+        public boolean isSource() {
+            return "source".equals(kind);
+        }
+
         /// Whether this entry can run on the host. `any` in the catalogue is a
         /// deliberate wildcard; an empty libc means "not applicable" (Windows,
         /// macOS) and matches the host's `none`.
@@ -349,6 +353,7 @@ public final class FfmpegCatalog {
                 if (mirror.isJsonPrimitive()) {
                     String value = mirror.getAsString().trim();
                     if (!value.isEmpty()) {
+                        validateUrl(value);
                         mirrors.add(value);
                     }
                 }
@@ -358,10 +363,14 @@ public final class FfmpegCatalog {
         if (major.isEmpty()) {
             major = Entry.inferMajor(ffmpegVersion);
         }
+        String signatureUrl = string(object, "signatureUrl");
+        if (!signatureUrl.isEmpty()) {
+            validateUrl(signatureUrl);
+        }
         return new Entry(id, os, arch, libc, ffmpegVersion, license, features,
                 url, sha256, size, archive, string(object, "notes"),
                 kind, string(object, "vendor"), major, string(object, "variant"),
-                string(object, "minGlibc"), mirrors, string(object, "signatureUrl"),
+                string(object, "minGlibc"), mirrors, signatureUrl,
                 string(object, "buildRecipe"));
     }
 

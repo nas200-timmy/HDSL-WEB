@@ -23,9 +23,11 @@ import org.jackhuang.hmcl.web.transcode.media.MediaBrowser;
 import org.jackhuang.hmcl.web.transcode.preset.PresetStore;
 import org.jackhuang.hmcl.web.transcode.quality.QualityService;
 import org.jackhuang.hmcl.web.transcode.queue.TranscodeQueue;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegBuildKit;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegCatalog;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegInstaller;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegRuntimeManager;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegToolchainManager;
 import org.jackhuang.hmcl.web.transcode.runtime.TranscodeRuntime;
 import org.jackhuang.hmcl.web.transcode.tools.TranscodeTools;
 import org.jetbrains.annotations.NotNullByDefault;
@@ -52,6 +54,8 @@ public final class TranscodeModule {
     private final FfmpegInstaller installer;
     private final FfmpegCatalog.Catalog catalog;
     private final FfmpegRuntimeManager runtimeManager;
+    private final FfmpegToolchainManager toolchains;
+    private final FfmpegBuildKit buildKit;
 
     public TranscodeModule(ServerConfig config, EventBus eventBus) {
         this.config = config;
@@ -65,6 +69,10 @@ public final class TranscodeModule {
         this.catalog = FfmpegCatalog.load(catalogPath(config));
         this.runtimeManager = new FfmpegRuntimeManager(
                 TranscodePaths.dataDir(config).resolve("tools").resolve("ffmpeg"), catalog);
+        this.toolchains = new FfmpegToolchainManager(config.dataDir.resolve("toolchains"));
+        this.buildKit = new FfmpegBuildKit(
+                TranscodePaths.dataDir(config).resolve("tools").resolve("ffmpeg"),
+                runtimeManager, toolchains, TranscodePaths.dataDir(config).resolve("logs"));
         this.installer = new FfmpegInstaller(this);
         if (feature.enabled()) {
             queue.start();
@@ -113,6 +121,14 @@ public final class TranscodeModule {
 
     public FfmpegRuntimeManager runtimeManager() {
         return runtimeManager;
+    }
+
+    public FfmpegToolchainManager toolchains() {
+        return toolchains;
+    }
+
+    public FfmpegBuildKit buildKit() {
+        return buildKit;
     }
 
     private static @org.jetbrains.annotations.Nullable Path catalogPath(ServerConfig config) {

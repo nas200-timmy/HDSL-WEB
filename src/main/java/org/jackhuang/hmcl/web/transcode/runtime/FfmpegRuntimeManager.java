@@ -92,6 +92,10 @@ public final class FfmpegRuntimeManager {
         public List<String> featuresProbed = List.of();
         public String probeVersion = "";
         public String notes = "";
+        /// Source builds only: where the tarball came from and which recipe ran.
+        public String builtFrom = "";
+        public String buildRecipe = "";
+        public String toolchain = "";
     }
 
     public record Installed(String id, Path directory, RuntimeRecord runtime, boolean current) {
@@ -514,7 +518,7 @@ public final class FfmpegRuntimeManager {
         }
     }
 
-    private static List<String> probedFeatures(List<String> declared, FfmpegProbe.FfmpegInfo info) {
+    static List<String> probedFeatures(List<String> declared, FfmpegProbe.FfmpegInfo info) {
         List<String> result = new ArrayList<>();
         for (String feature : declared) {
             String needle = feature.toLowerCase(Locale.ROOT);
@@ -565,7 +569,9 @@ public final class FfmpegRuntimeManager {
         }
     }
 
-    private static void writeRuntime(Path directory, RuntimeRecord record) throws IOException {
+    /// Source builds write the same record shape as downloaded artifacts. It is
+    /// package-visible so `FfmpegBuildKit` cannot invent a second ledger.
+    static void writeRuntime(Path directory, RuntimeRecord record) throws IOException {
         atomicWrite(directory.resolve("runtime.json"), GSON.toJson(record));
     }
 
@@ -654,7 +660,7 @@ public final class FfmpegRuntimeManager {
         }
     }
 
-    private static void makeExecutable(Path file) {
+    static void makeExecutable(Path file) {
         try {
             var permissions = Files.getPosixFilePermissions(file);
             permissions.add(java.nio.file.attribute.PosixFilePermission.OWNER_EXECUTE);
@@ -666,7 +672,7 @@ public final class FfmpegRuntimeManager {
         }
     }
 
-    private static String exe(String name) {
+    static String exe(String name) {
         return org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
                 == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS
                 ? name + ".exe" : name;
@@ -684,7 +690,7 @@ public final class FfmpegRuntimeManager {
     }
 
     /// Keeps ids to a path-safe alphabet; a catalogue id is metadata, not a path.
-    private static String safeId(String id) {
+    static String safeId(String id) {
         String value = id == null ? "" : id.trim().replaceAll("[^A-Za-z0-9._-]", "_");
         if (value.isBlank()) {
             value = "ffmpeg";

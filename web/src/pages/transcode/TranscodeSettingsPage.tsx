@@ -1,33 +1,24 @@
 import { useEffect, useState } from "react";
-import { api, type TranscodeCapabilities, type TranscodeInstallJob, type TranscodeRuntime } from "../../api";
+import { api, type TranscodeCapabilities, type TranscodeInstallJob, type TranscodeRuntime, type TranscodeSourceStatus } from "../../api";
 import { refreshTranscodeFeature, setTranscodeFeature, useTranscodeFeature } from "../../transcodeFeature";
 import { errMsg } from "../../utils";
 import { toast } from "../../store";
 import { ProgressBar } from "../../components/ProgressBar";
 import { HelpNote } from "./common";
 
-const INSTALL_SOURCES = [
-  { id: "linux-source", label: "Linux 源码 · ffmpeg 7.1.5", kind: "compile" as const,
-    url: "https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz" },
-  { id: "linux-static", label: "Linux 静态包 · BtbN GPL", kind: "static" as const,
-    url: "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-linux64-gpl.tar.xz" },
-  { id: "win-static", label: "Windows 静态包 · gyan.dev", kind: "static" as const,
-    url: "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" },
-  { id: "mac-static", label: "macOS 静态包 · evermeet.cx", kind: "static" as const,
-    url: "https://evermeet.cx/ffmpeg/getrelease/zip" },
-];
 
 export function TranscodeSettingsPage() {
   const feature = useTranscodeFeature();
   const [capabilities, setCapabilities] = useState<TranscodeCapabilities | null>(null);
   const [runtime, setRuntime] = useState<TranscodeRuntime | null>(null);
+  const [sourceStatus, setSourceStatus] = useState<TranscodeSourceStatus | null>(null);
   const [preferredMajor, setPreferredMajor] = useState("auto");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [policy, setPolicy] = useState("ask");
   const [timeoutMinutes, setTimeoutMinutes] = useState(10);
   const [saving, setSaving] = useState(false);
-  const [installKind, setInstallKind] = useState<"static" | "package" | "compile">("package");
+  const [installKind, setInstallKind] = useState<"static" | "package">("package");
   const [installUrl, setInstallUrl] = useState("");
   const [installSha, setInstallSha] = useState("");
   const [installVersion, setInstallVersion] = useState("");
@@ -46,6 +37,7 @@ export function TranscodeSettingsPage() {
       ]);
       setCapabilities(nextCapabilities);
       setRuntime(nextRuntime);
+      setSourceStatus(await api.transcode.runtimeSource().catch(() => null));
       await refreshTranscodeFeature();
     } catch (e) {
       setError(errMsg(e));
@@ -88,7 +80,12 @@ export function TranscodeSettingsPage() {
     }
   };
 
-  const startRuntimeInstall = async (body: { mode: "auto" | "artifact"; id?: string; major?: string }) => {
+  const startRuntimeInstall = async (body: {
+    mode: "auto" | "artifact" | "source";
+    id?: string;
+    major?: string;
+    features?: string[];
+  }) => {
     try {
       setInstallJob(await api.transcode.runtimeInstallArtifact(body));
     } catch (e) {
@@ -229,6 +226,52 @@ export function TranscodeSettingsPage() {
             可以用 `transcode.ffmpeg_catalog` 指向一份已验证的本地目录，或在下面用自定义 URL。
           </p>
         )}
+        {runtime && (
+          <div style={{ padding: "0 8px 8px", display: "grid", gap: 6,
+                        borderTop: "1px solid var(--monet-outline-variant)" }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", paddingTop: 8 }}>
+              <span style={{ fontSize: 12, fontWeight: 600 }}>源码构建</span>
+              <button className="btn btn-raised"
+                      disabled={installJob?.state === "running" || !sourceStatus?.buildable}
+                      onClick={() => void startRuntimeInstall({ mode: "source", major: preferredMajor })}>
+                构建 {preferredMajor === "auto" ? "自动版本线" : preferredMajor}
+              </button>
+              <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                {sourceStatus
+                  ? sourceStatus.toolchain.usable
+                    ? `${sourceStatus.toolchain.portable ? "便携" : "系统"}工具链 · ${sourceStatus.toolchain.binDir || "PATH"}`
+                    : sourceStatus.portableFallback
+                      ? "缺少系统工具链；开始构建时会下载固定版本的便携 MinGW"
+                      : "缺少构建工具链"
+                  : "读取构建环境…"}
+              </span>
+            </div>
+            {sourceStatus && (
+              <>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {sourceStatus.toolchain.features.length > 0
+                    ? sourceStatus.toolchain.features.map((feature) => (
+                      <span key={feature} className="tag running" style={{ fontSize: 11 }}>{feature}</span>
+                    ))
+                    : <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
+                        未检测到外部编解码开发包：将做最小构建（无 x264/x265 等）
+                      </span>}
+                </div>
+                {sourceStatus.toolchain.missing.length > 0 && (
+                  <span style={{ fontSize: 11, color: sourceStatus.buildable ? "var(--monet-on-surface-variant)" : "var(--monet-error)" }}>
+                    缺少/未验证：{sourceStatus.toolchain.missing.slice(0, 12).join("、")}
+                    {sourceStatus.toolchain.missing.length > 12 ? " …" : ""}
+                  </span>
+                )}
+                {sourceStatus.toolchain.detail && (
+                  <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
+                    {sourceStatus.toolchain.detail}
+                  </span>
+                )}
+              </>
+            )}
+          </div>
+        )}
         {runtime && runtime.installed.length > 0 && (
           <div style={{ padding: "0 8px 8px", display: "grid", gap: 4 }}>
             {runtime.installed.map((item) => (
@@ -237,7 +280,8 @@ export function TranscodeSettingsPage() {
                             padding: "6px 0", borderTop: "1px solid var(--monet-outline-variant)" }}>
                 <span className="mono" style={{ fontSize: 12, minWidth: 120 }}>{item.id}</span>
                 <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-                  {item.major ? `${item.major} · ` : ""}{item.version} · {item.license} · {item.featuresProbed.length}/{item.featuresDeclared.length} 特性
+                  {item.major ? `${item.major} · ` : ""}{item.version} · {item.license}
+                  {item.buildRecipe ? ` · ${item.buildRecipe}` : ""} · {item.featuresProbed.length}/{item.featuresDeclared.length} 特性
                 </span>
                 {item.current
                   ? <span className="tag running">当前</span>
@@ -266,7 +310,14 @@ export function TranscodeSettingsPage() {
                   {entry.major ? `${entry.major} · ` : ""}{entry.ffmpegVersion} · {entry.license} · {entry.os}/{entry.arch}/{entry.libc}
                 </span>
                 {entry.kind === "source"
-                  ? <span className="tag plain" style={{ fontSize: 11 }}>源码（M2）</span>
+                  ? <>
+                      <span className="tag plain" style={{ fontSize: 11 }}>源码</span>
+                      <button className="btn btn-text"
+                              disabled={installJob?.state === "running" || !sourceStatus?.buildable}
+                              onClick={() => void startRuntimeInstall({ mode: "source", id: entry.id })}>
+                        源码构建
+                      </button>
+                    </>
                   : <button className="btn btn-text" disabled={installJob?.state === "running"}
                             onClick={() => void startRuntimeInstall({ mode: "artifact", id: entry.id })}>
                       安装
@@ -314,29 +365,13 @@ export function TranscodeSettingsPage() {
                   onChange={(e) => setInstallKind(e.target.value as typeof installKind)}>
             <option value="package">包管理器（apt-get / dnf / zypper）</option>
             <option value="static">下载静态包（Windows/macOS/Linux）</option>
-            <option value="compile">源码编译（最后手段）</option>
           </select>
           {installKind !== "package" && (
             <>
-              <select className="input" value=""
-                      onChange={(e) => {
-                        const source = INSTALL_SOURCES.find((item) => item.id === e.target.value);
-                        if (source) {
-                          setInstallKind(source.kind);
-                          setInstallUrl(source.url);
-                        }
-                      }}>
-                <option value="">填入常用来源…</option>
-                {INSTALL_SOURCES.map((source) => (
-                  <option key={source.id} value={source.id}>{source.label}</option>
-                ))}
-              </select>
               <input className="input"
-                     placeholder={installKind === "compile"
-                       ? "https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz"
-                       : "https://…/ffmpeg-release-essentials.zip 或 .tar.xz"}
+                     placeholder="https://…/ffmpeg-release-essentials.zip 或 .tar.xz"
                      value={installUrl} onChange={(e) => setInstallUrl(e.target.value)} />
-              <input className="input" placeholder="SHA-256（留空 = 自动读取 .sha256 / checksums.sha256）"
+              <input className="input" placeholder="SHA-256（必填；64 位十六进制）"
                      value={installSha} onChange={(e) => setInstallSha(e.target.value)} />
               <input className="input" placeholder="安装目录名（可选，例如 7.1.5）"
                      value={installVersion} onChange={(e) => setInstallVersion(e.target.value)} />
@@ -344,9 +379,9 @@ export function TranscodeSettingsPage() {
           )}
           <div style={{ display: "flex", gap: 8 }}>
             <button className="btn btn-raised" disabled={installJob?.state === "running"
-              || (installKind !== "package" && !installUrl)}
+              || (installKind !== "package" && (!installUrl || !/^[0-9a-fA-F]{64}$/.test(installSha)))}
                     onClick={() => void startInstall()}>
-              {installKind === "package" ? "开始安装" : installKind === "static" ? "下载并安装" : "开始编译"}
+              {installKind === "package" ? "开始安装" : "下载并安装"}
             </button>
             {installJob?.state === "running" && (
               <button className="btn btn-text danger"
@@ -356,9 +391,9 @@ export function TranscodeSettingsPage() {
             )}
           </div>
           <p style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", lineHeight: 1.6 }}>
-            SHA-256 留空时面板会尝试读取发布方的 `.sha256` / `checksums.sha256`；读不到会失败并给
-            出地址，不会跳过校验。源码编译需要 make/gcc/pkg-config 与 libx264/libx265/libva 开发包。
-            包管理器安装只对当前容器有效，重建后需重装；静态包与编译结果在数据卷里。
+            自定义下载必须填写 SHA-256（面板不再把同源 sidecar 当作唯一信任）。源码构建在运行时卡片里，
+            需要 make/gcc/pkg-config 与可选的 libx264/libx265/libva 开发包；包管理器安装只对当前容器有效，
+            重建后需重装；静态包与源码构建结果都在数据卷里。
           </p>
           {installJob && (
             <>
@@ -372,6 +407,11 @@ export function TranscodeSettingsPage() {
                 </span>
               </div>
               <ProgressBar fraction={installJob.progress} />
+              {installJob.logPath && (
+                <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
+                  构建日志：<span className="mono">{installJob.logPath}</span>
+                </span>
+              )}
               {installJob.error && (
                 <span style={{ fontSize: 12, color: "var(--monet-error)" }}>{installJob.error}</span>
               )}

@@ -39,6 +39,7 @@ import org.jackhuang.hmcl.web.transcode.preset.PresetStore;
 import org.jackhuang.hmcl.web.transcode.preset.PresetTransfer;
 import org.jackhuang.hmcl.web.transcode.preset.TranscodePreset;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegCapabilities;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegToolchainManager;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegInstaller;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegCatalog;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegProbe;
@@ -146,6 +147,10 @@ public final class TranscodeApiServlet extends HttpServlet {
         }
         if ("/runtime/catalog".equals(path)) {
             catalogJson(response);
+            return;
+        }
+        if ("/runtime/source".equals(path)) {
+            sourceJson(response);
             return;
         }
         if (path.startsWith("/runtime/jobs/")) {
@@ -767,8 +772,12 @@ public final class TranscodeApiServlet extends HttpServlet {
                             requiredField(body, "sha256"),
                             stringField(body, "version"));
                     case "package" -> module.installer().start("package", null, null, null);
-                    case "source" -> throw new IOException(
-                            "ffmpeg_source_unsupported: source builds are not part of this stage");
+                    case "source" -> {
+                        String id = stringField(body, "id");
+                        yield id != null && !id.isBlank()
+                                ? module.installer().startSourceArtifact(id, features(body))
+                                : module.installer().startSource(features(body), stringField(body, "major"));
+                    }
                     default -> throw new IOException("unknown ffmpeg install mode: " + mode);
                 };
             } else {
@@ -870,6 +879,72 @@ public final class TranscodeApiServlet extends HttpServlet {
         Json.write(response, body);
     }
 
+    /// Read-only build precheck for the settings page: the source catalogue
+    /// entries plus what this host is missing. Starting the build still goes
+    /// through POST /runtime/install with `mode=source` and developer elevation.
+    private void sourceJson(HttpServletResponse response) throws IOException {
+        FfmpegCapabilities.Host host = FfmpegCapabilities.detect();
+        JsonObject body = new JsonObject();
+        JsonObject hostJson = new JsonObject();
+        hostJson.addProperty("os", host.os());
+        hostJson.addProperty("arch", host.arch());
+        hostJson.addProperty("libc", host.libc());
+        hostJson.addProperty("libcVersion", host.libcVersion());
+        body.add("host", hostJson);
+
+        JsonArray candidates = new JsonArray();
+        for (FfmpegCatalog.Entry entry : module.catalog().entries()) {
+            if (entry.isSource()) {
+                candidates.add(entryJson(entry));
+            }
+        }
+        body.add("candidates", candidates);
+
+        FfmpegToolchainManager.Toolchain toolchain = module.toolchains().detect();
+        body.add("toolchain", toolchainJson(toolchain));
+        boolean portableFallback = host.os().equals("windows") && host.arch().equals("x64");
+        body.addProperty("buildable", candidates.size() > 0 && (toolchain.usable() || portableFallback));
+        body.addProperty("portableFallback", portableFallback);
+        Json.write(response, body);
+    }
+
+    private static JsonObject toolchainJson(FfmpegToolchainManager.Toolchain toolchain) {
+        JsonObject object = new JsonObject();
+        object.addProperty("os", toolchain.os());
+        object.addProperty("arch", toolchain.arch());
+        object.addProperty("usable", toolchain.usable());
+        object.addProperty("portable", toolchain.portable());
+        object.addProperty("binDir", toolchain.binDir() == null ? "" : toolchain.binDir().toString());
+        object.addProperty("detail", toolchain.detail());
+        object.addProperty("x86asm", toolchain.hasX86Asm());
+        JsonArray tools = new JsonArray();
+        for (FfmpegToolchainManager.Tool tool : toolchain.tools()) {
+            JsonObject item = new JsonObject();
+            item.addProperty("name", tool.name());
+            item.addProperty("path", tool.path() == null ? "" : tool.path());
+            item.addProperty("version", tool.version());
+            item.addProperty("present", tool.present());
+            tools.add(item);
+        }
+        object.add("tools", tools);
+        JsonArray dependencies = new JsonArray();
+        for (FfmpegToolchainManager.Dependency dependency : toolchain.dependencies()) {
+            JsonObject item = new JsonObject();
+            item.addProperty("feature", dependency.feature());
+            item.addProperty("module", dependency.module());
+            item.addProperty("package", dependency.packageName());
+            item.addProperty("present", dependency.present());
+            item.addProperty("version", dependency.version());
+            dependencies.add(item);
+        }
+        object.add("dependencies", dependencies);
+        object.add("missing", strings(toolchain.missing()));
+        JsonArray features = new JsonArray();
+        toolchain.features().forEach(features::add);
+        object.add("features", features);
+        return object;
+    }
+
     private void catalogJson(HttpServletResponse response) throws IOException {
         JsonArray catalog = new JsonArray();
         for (FfmpegCatalog.Entry entry : module.catalog().entries()) {
@@ -894,6 +969,9 @@ public final class TranscodeApiServlet extends HttpServlet {
         object.addProperty("archive", record.archive);
         object.addProperty("probeVersion", record.probeVersion);
         object.addProperty("notes", record.notes);
+        object.addProperty("builtFrom", record.builtFrom == null ? "" : record.builtFrom);
+        object.addProperty("buildRecipe", record.buildRecipe == null ? "" : record.buildRecipe);
+        object.addProperty("toolchain", record.toolchain == null ? "" : record.toolchain);
         object.addProperty("current", installed.current());
         object.add("featuresDeclared", strings(record.featuresDeclared));
         object.add("featuresProbed", strings(record.featuresProbed));

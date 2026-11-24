@@ -413,9 +413,7 @@ python3 scripts/api-smoke.py
 > 目标不是把 ffmpeg 塞进 jar（体积与许可证都不允许），而是让面板像管 Node/JDK 一样管它：
 > **按宿主能力选对一个制品、原子地装上、能探测、能回滚、能说清缺什么。**
 >
-> **实现状态（2026-11-24）**：M0 已落地——内置目录（Linux x64/arm64、Windows x64 的 BtbN 8.1.3 钉扎条目）、
-> `FfmpegRuntimeManager`（Java 解包、原子 `current`、`runtime.json`、回滚/GC）、`/api/transcode/runtime*`
-> 与设置页运行时卡片。M1 硬件能力矩阵与 M2 源码构建仍按本文后续阶段实现。
+> **实现状态（2026-11-24）**：M0/M1/M2 的主体已落地——M0 目录与原子安装/回滚/GC；M1 的 7.1/8.1/auto、glibc 版本与 minGlibc 过滤、目录 v2；M2 的官方源码构建、Linux 系统工具链与 Windows 便携 MinGW 解析。M1 的多 GPU/硬件能力矩阵仍待补；Windows MinGW 真机与完整 GPL 构建尚未验证。
 
 ### 1. 为什么 ffmpeg 是唯一“装上了也可能白装”的依赖
 

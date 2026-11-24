@@ -1304,6 +1304,7 @@ export const api = {
     runtime: (major?: string) => request<TranscodeRuntime>(
       `/api/transcode/runtime${major ? `?major=${encodeURIComponent(major)}` : ""}`),
     runtimeCatalog: () => request<{ entries: TranscodeCatalogEntry[] }>("/api/transcode/runtime/catalog"),
+    runtimeSource: () => request<TranscodeSourceStatus>("/api/transcode/runtime/source"),
     runtimeInstallArtifact: (body: {
       mode: "auto" | "artifact" | "custom" | "package" | "source";
       id?: string;
@@ -1739,11 +1740,12 @@ export interface TranscodeQualityJob {
 
 export interface TranscodeInstallJob {
   id: string;
-  kind: "static" | "package" | "compile" | "artifact" | "auto" | "custom";
+  kind: "static" | "package" | "compile" | "artifact" | "auto" | "custom" | "source";
   state: "running" | "done" | "failed" | "cancelled";
   progress: number;
   message: string;
   log: string;
+  logPath?: string;
   error?: string | null;
   createdAt: number;
   endedAt: number;
@@ -1761,6 +1763,9 @@ export interface TranscodeRuntimeVersion {
   archive: string;
   probeVersion: string;
   notes: string;
+  builtFrom?: string;
+  buildRecipe?: string;
+  toolchain?: string;
   current: boolean;
   featuresDeclared: string[];
   featuresProbed: string[];
@@ -1787,6 +1792,43 @@ export interface TranscodeCatalogEntry {
   signatureUrl: string;
   buildRecipe: string;
   features: string[];
+}
+
+export interface TranscodeToolchainTool {
+  name: string;
+  path: string;
+  version: string;
+  present: boolean;
+}
+
+export interface TranscodeToolchainDependency {
+  feature: string;
+  module: string;
+  package: string;
+  present: boolean;
+  version: string;
+}
+
+export interface TranscodeToolchain {
+  os: string;
+  arch: string;
+  usable: boolean;
+  portable: boolean;
+  binDir: string;
+  detail: string;
+  x86asm: boolean;
+  tools: TranscodeToolchainTool[];
+  dependencies: TranscodeToolchainDependency[];
+  missing: string[];
+  features: string[];
+}
+
+export interface TranscodeSourceStatus {
+  host: { os: string; arch: string; libc: string; libcVersion: string };
+  candidates: TranscodeCatalogEntry[];
+  toolchain: TranscodeToolchain;
+  buildable: boolean;
+  portableFallback: boolean;
 }
 
 export interface TranscodeRuntime {

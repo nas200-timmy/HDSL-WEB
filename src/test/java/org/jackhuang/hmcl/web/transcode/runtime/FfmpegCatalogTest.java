@@ -75,7 +75,8 @@ class FfmpegCatalogTest {
         assertFalse(catalog.entries().isEmpty());
         assertNotNull(catalog.find("linux-x64-glibc-gpl-btbn-8.1.3-2026-10"));
         assertEquals(List.of("7.1", "8.1"), catalog.majors());
-        assertEquals(6, catalog.entries().size());
+        assertEquals(8, catalog.entries().size());
+        assertEquals(2, catalog.entries().stream().filter(FfmpegCatalog.Entry::isSource).count());
     }
 
     @Test
@@ -100,6 +101,41 @@ class FfmpegCatalogTest {
         assertFalse(linuxArm64.features().contains("qsv"));
         assertTrue(linuxArm64.features().contains("nvenc"));
         assertTrue(windowsX64.features().containsAll(List.of("qsv", "nvenc", "amf")));
+    }
+
+    @Test
+    void builtinSourceEntriesArePinnedAndPlatformIndependent() {
+        FfmpegCatalog.Catalog catalog = FfmpegCatalog.load(null);
+        FfmpegCatalog.Entry seven = catalog.find("ffmpeg-source-7.1.5-gpl-static-v1");
+        FfmpegCatalog.Entry eight = catalog.find("ffmpeg-source-8.1.3-gpl-static-v1");
+        assertNotNull(seven);
+        assertNotNull(eight);
+
+        assertEquals("source", seven.kind());
+        assertEquals("ffmpeg.org", seven.vendor());
+        assertEquals("source", seven.variant());
+        assertEquals("7.1", seven.major());
+        assertEquals("8.1", eight.major());
+        assertEquals("any", seven.os());
+        assertEquals("any", seven.arch());
+        assertEquals("any", seven.libc());
+        assertEquals("gpl-static-v1", seven.buildRecipe());
+        assertEquals("https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz", seven.url());
+        assertEquals("https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz.asc", seven.signatureUrl());
+        assertEquals("de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f",
+                seven.sha256());
+        assertEquals("7138d28c96d9d3e3af4ee3d8cad72741f8ffb40da90c1112235dea3ecd3178a3",
+                eight.sha256());
+        assertEquals(11050340, seven.size());
+        assertEquals(11732036, eight.size());
+        assertTrue(seven.mirrors().contains(
+                "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n7.1.5.tar.gz"));
+        assertTrue(eight.mirrors().contains(
+                "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n8.1.3.tar.gz"));
+        assertTrue(seven.matches("linux", "x64", "glibc"));
+        assertTrue(seven.matches("windows", "x64", "none"));
+        assertTrue(seven.matches("macos", "arm64", "none"));
+        assertFalse(seven.features().isEmpty());
     }
 
     @Test
