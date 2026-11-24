@@ -57,8 +57,9 @@ public class BootstrapCatalogTest {
         assertNotNull(catalog.toolchain());
         assertNotNull(catalog.toolchain().windows());
         assertNotNull(catalog.toolchain().linux());
-        assertEquals(5, catalog.toolchain().linux().artifacts().size());
-        assertEquals("zig", catalog.toolchain().linux().artifacts().get(0).name());
+        assertEquals(5, catalog.toolchain().linux().artifacts("x64").size());
+        assertEquals(5, catalog.toolchain().linux().artifacts("arm64").size());
+        assertEquals("zig", catalog.toolchain().linux().artifacts("x64").get(0).name());
 
         assertEquals("embedded", BootstrapCatalog.origin().kind());
     }

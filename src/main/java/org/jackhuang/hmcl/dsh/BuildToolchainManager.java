@@ -136,8 +136,26 @@ public final class BuildToolchainManager {
     }
 
     /// The directory the portable Linux combination is published under.
+    ///
+    /// x64 keeps the name it has always had, so an existing install is not
+    /// downloaded again; arm64 appends its architecture, which is also what
+    /// keeps a shared `<data>` from mixing the two.
     public static String linuxVersion() {
-        return "zig-" + zigVersion() + "+debian11";
+        return "zig-" + zigVersion() + "+debian11"
+                + ("x64".equals(hostArch()) ? "" : "-" + hostArch());
+    }
+
+    /// Whether a portable toolchain exists for this platform.
+    ///
+    /// Linux arm64 joined when its pins were added; Windows stays x64, where
+    /// w64devkit is the only supply chain with a pinned digest.
+    static boolean portableSupported() {
+        return switch (OperatingSystem.CURRENT_OS) {
+            case LINUX -> Architecture.CURRENT_ARCH == Architecture.X86_64
+                    || Architecture.CURRENT_ARCH == Architecture.ARM64;
+            case WINDOWS -> Architecture.CURRENT_ARCH == Architecture.X86_64;
+            default -> false;
+        };
     }
 
     private static BootstrapCatalog.Toolchain toolchainCatalog() {
@@ -442,11 +460,7 @@ public final class BuildToolchainManager {
         if (current.usable()) {
             return current;
         }
-        if (OperatingSystem.CURRENT_OS != OperatingSystem.WINDOWS
-                && OperatingSystem.CURRENT_OS != OperatingSystem.LINUX) {
-            throw new IOException(current.missingMessage());
-        }
-        if (Architecture.CURRENT_ARCH != Architecture.X86_64) {
+        if (!portableSupported()) {
             throw new IOException(current.missingMessage());
         }
         try {
@@ -480,11 +494,11 @@ public final class BuildToolchainManager {
     public Toolchain installPortable(BootstrapRuntimeManager.Progress progress,
                                      BooleanSupplier cancelled) throws IOException {
         synchronized (lock) {
-            if (Architecture.CURRENT_ARCH != Architecture.X86_64) {
+            if (!portableSupported()) {
                 throw new IOException("build_toolchain_missing: no portable build toolchain is pinned for "
                         + hostOs() + "/" + hostArch()
-                        + " (only x64 is); install gcc, g++, make, pkg-config and nasm with the"
-                        + " distribution package manager");
+                        + " (Linux x64/arm64 and Windows x64 are); install gcc, g++, make,"
+                        + " pkg-config and nasm with the distribution package manager");
             }
             if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS) {
                 return installWindows(progress, cancelled);
@@ -826,7 +840,7 @@ public final class BuildToolchainManager {
     /// The pinned Linux artifacts, in install order, from the catalogue.
     static List<Artifact> linuxArtifacts() {
         List<Artifact> artifacts = new ArrayList<>();
-        for (BootstrapCatalog.ToolchainArtifact pinned : linuxCatalog().artifacts()) {
+        for (BootstrapCatalog.ToolchainArtifact pinned : linuxCatalog().artifacts(hostArch())) {
             artifacts.add(new Artifact(pinned.name(), pinned.url(), pinned.sha256(),
                     pinned.size(), pinned.archive(), pinned.includes()));
         }

@@ -32,8 +32,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /// The pinned artifacts that make a minimal image able to run the panel's tools.
 ///
@@ -281,16 +283,38 @@ public final class BootstrapCatalog {
         }
     }
 
-    /// The portable Linux combination.
-    public record Linux(String version, List<ToolchainArtifact> artifacts) {
+    /// The portable Linux combination, one artifact list per architecture.
+    ///
+    /// Keyed by architecture because a Debian package names its library
+    /// directory after the triplet: `usr/lib/x86_64-linux-gnu` and
+    /// `usr/lib/aarch64-linux-gnu` are different members of different files.
+    /// The Zig archive differs too, so "the same list with another digest"
+    /// is not a thing here.
+    public record Linux(String version, Map<String, List<ToolchainArtifact>> artifacts) {
         public Linux {
             if (version == null || !version.matches("[A-Za-z0-9._+-]{1,40}")) {
                 throw new IllegalArgumentException("invalid portable toolchain version: " + version);
             }
-            artifacts = artifacts == null ? List.of() : List.copyOf(artifacts);
-            if (artifacts.isEmpty()) {
+            Map<String, List<ToolchainArtifact>> copy = new LinkedHashMap<>();
+            if (artifacts != null) {
+                artifacts.forEach((arch, list) -> {
+                    validateArch(arch);
+                    if (list == null || list.isEmpty()) {
+                        throw new IllegalArgumentException(
+                                "the portable Linux toolchain pins no artifact for " + arch);
+                    }
+                    copy.put(arch, List.copyOf(list));
+                });
+            }
+            if (copy.isEmpty()) {
                 throw new IllegalArgumentException("the portable Linux toolchain pins no artifact");
             }
+            artifacts = Map.copyOf(copy);
+        }
+
+        /// The artifacts for an architecture, or an empty list.
+        public List<ToolchainArtifact> artifacts(String arch) {
+            return artifacts.getOrDefault(arch, List.of());
         }
     }
 
@@ -452,26 +476,19 @@ public final class BootstrapCatalog {
             Linux linux = null;
             if (object.has("linux") && object.get("linux").isJsonObject()) {
                 JsonObject value = object.getAsJsonObject("linux");
-                List<ToolchainArtifact> artifacts = new ArrayList<>();
-                if (value.has("artifacts") && value.get("artifacts").isJsonArray()) {
-                    for (JsonElement element : value.getAsJsonArray("artifacts")) {
-                        JsonObject artifact = element.getAsJsonObject();
-                        List<Include> includes = new ArrayList<>();
-                        if (artifact.has("includes") && artifact.get("includes").isJsonArray()) {
-                            for (JsonElement item : artifact.getAsJsonArray("includes")) {
-                                JsonObject include = item.getAsJsonObject();
-                                includes.add(new Include(string(include, "prefix"),
-                                        string(include, "destination")));
-                            }
-                        }
-                        artifacts.add(new ToolchainArtifact(string(artifact, "name"),
-                                string(artifact, "archive"), string(artifact, "url"),
-                                string(artifact, "sha256"),
-                                artifact.has("size") ? artifact.get("size").getAsLong() : 0,
-                                includes));
+                Map<String, List<ToolchainArtifact>> byArch = new LinkedHashMap<>();
+                JsonElement artifacts = value.get("artifacts");
+                if (artifacts != null && artifacts.isJsonArray()) {
+                    // Older catalogues listed one architecture; that was x64.
+                    byArch.put("x64", parseToolchainArtifacts(artifacts.getAsJsonArray()));
+                } else if (artifacts != null && artifacts.isJsonObject()) {
+                    for (Map.Entry<String, JsonElement> entry
+                            : artifacts.getAsJsonObject().entrySet()) {
+                        byArch.put(entry.getKey(),
+                                parseToolchainArtifacts(entry.getValue().getAsJsonArray()));
                     }
                 }
-                linux = new Linux(string(value, "version"), artifacts);
+                linux = new Linux(string(value, "version"), byArch);
             }
             return new Toolchain(windows, linux);
         }
@@ -499,6 +516,27 @@ public final class BootstrapCatalog {
             return new Artifact(string(object, "name"), string(object, "archive"), string(object, "url"),
                     string(object, "sha256"), object.has("size") ? object.get("size").getAsLong() : 0,
                     includes);
+        }
+
+        private static List<ToolchainArtifact> parseToolchainArtifacts(JsonArray array) {
+            List<ToolchainArtifact> artifacts = new ArrayList<>();
+            for (JsonElement element : array) {
+                JsonObject artifact = element.getAsJsonObject();
+                List<Include> includes = new ArrayList<>();
+                if (artifact.has("includes") && artifact.get("includes").isJsonArray()) {
+                    for (JsonElement item : artifact.getAsJsonArray("includes")) {
+                        JsonObject include = item.getAsJsonObject();
+                        includes.add(new Include(string(include, "prefix"),
+                                string(include, "destination")));
+                    }
+                }
+                artifacts.add(new ToolchainArtifact(string(artifact, "name"),
+                        string(artifact, "archive"), string(artifact, "url"),
+                        string(artifact, "sha256"),
+                        artifact.has("size") ? artifact.get("size").getAsLong() : 0,
+                        includes));
+            }
+            return artifacts;
         }
 
         private static String string(JsonObject object, String name) {
@@ -635,6 +673,13 @@ public final class BootstrapCatalog {
         }
         if (url.toLowerCase(Locale.ROOT).contains("latest")) {
             throw new IllegalArgumentException("artifact URLs must be pinned, not moving: " + url);
+        }
+    }
+
+    /// An architecture key such as `x64` or `arm64`.
+    static void validateArch(@Nullable String arch) {
+        if (arch == null || !arch.matches("[a-z0-9]+")) {
+            throw new IllegalArgumentException("invalid architecture key: " + arch);
         }
     }
 

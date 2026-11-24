@@ -265,9 +265,12 @@ public final class BootstrapApiServlet extends HttpServlet {
     }
 
     static boolean canInstallToolchain() {
-        return (OperatingSystem.CURRENT_OS == OperatingSystem.LINUX
-                || OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS)
-                && Architecture.CURRENT_ARCH == Architecture.X86_64;
+        return switch (OperatingSystem.CURRENT_OS) {
+            case LINUX -> Architecture.CURRENT_ARCH == Architecture.X86_64
+                    || Architecture.CURRENT_ARCH == Architecture.ARM64;
+            case WINDOWS -> Architecture.CURRENT_ARCH == Architecture.X86_64;
+            default -> false;
+        };
     }
 
     /// `x64`, `arm64`, or the enum name — the keys the catalogue uses.

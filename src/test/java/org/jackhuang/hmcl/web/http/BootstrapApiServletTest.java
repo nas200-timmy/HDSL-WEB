@@ -86,10 +86,10 @@ public class BootstrapApiServletTest {
     public void thePlatformTagMatchesTheCatalogueKeys() {
         String tag = BootstrapApiServlet.archTag();
         assertTrue(tag.equals("x64") || tag.equals("arm64") || tag.matches("[a-z0-9]+"), tag);
-        // The portable bundles exist for x64 only, so an offer to install one
-        // proves which architecture the page thinks it is on.
+        // Portable bundles exist for x64 and Linux arm64; an offer to install
+        // one proves which architecture the page thinks it is on.
         if (BootstrapApiServlet.canInstallToolchain()) {
-            assertEquals("x64", tag);
+            assertTrue(tag.equals("x64") || tag.equals("arm64"), tag);
         }
     }
 }

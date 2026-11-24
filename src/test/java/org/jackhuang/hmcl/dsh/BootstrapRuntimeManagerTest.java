@@ -187,7 +187,7 @@ class BootstrapRuntimeManagerTest {
         assertNotNull(catalog.python());
         assertNotNull(catalog.toolchain());
         assertNotNull(catalog.toolchain().windows());
-        assertEquals(5, catalog.toolchain().linux().artifacts().size());
+        assertEquals(5, catalog.toolchain().linux().artifacts("x64").size());
 
         BootstrapCatalog.Ca ca = catalog.ca();
         assertNotNull(ca);
@@ -208,8 +208,13 @@ class BootstrapRuntimeManagerTest {
 
         BootstrapCatalog.Runtime arm64 = catalog.runtime("linux", "arm64");
         assertNotNull(arm64);
-        assertFalse(arm64.available(), "no arm64 package was verified, so it must not look available");
-        assertTrue(arm64.artifacts().isEmpty());
+        assertTrue(arm64.available(), "the arm64 closure is pinned from verified snapshot packages");
+        assertEquals(5, arm64.artifacts().size());
+        for (BootstrapCatalog.Artifact artifact : arm64.artifacts()) {
+            assertTrue(artifact.url().startsWith("https://"), artifact.url());
+            assertTrue(artifact.sha256().matches("[0-9a-f]{64}"), artifact.name());
+            assertTrue(artifact.size() > 0, artifact.name());
+        }
     }
 
     @Test

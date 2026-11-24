@@ -284,9 +284,15 @@ public final class FfmpegToolchainManager {
             throw new IOException("ffmpeg_unsupported_platform: the portable build toolchain is"
                     + " pinned for Windows and Linux only");
         }
-        if (Architecture.SYSTEM_ARCH != Architecture.X86_64) {
+        // Linux arm64 joined when its pins were added; Windows stays x64,
+        // where w64devkit is the only supply chain with a pinned digest.
+        boolean supported = Architecture.SYSTEM_ARCH == Architecture.X86_64
+                || (OperatingSystem.CURRENT_OS == OperatingSystem.LINUX
+                && Architecture.SYSTEM_ARCH == Architecture.ARM64);
+        if (!supported) {
             throw new IOException("ffmpeg_unsupported_platform: the portable build toolchain is"
-                    + " x64-only (host is " + Architecture.SYSTEM_ARCH + ")");
+                    + " pinned for x64 and Linux arm64 (host is "
+                    + Architecture.SYSTEM_ARCH + ")");
         }
         synchronized (lock) {
             try {
