@@ -74,6 +74,7 @@ public final class ServerConfigLoader {
     public static final String ENV_MC_JAVA_PATH = "HDSL_MC_JAVA_PATH";
     public static final String ENV_MEDIA_ROOT = "HDSL_MEDIA_ROOT";
     public static final String ENV_FFMPEG_PATH = "HDSL_FFMPEG_PATH";
+    public static final String ENV_FFMPEG_CATALOG = "HDSL_FFMPEG_CATALOG";
     public static final String ENV_TRANSCODE_MAX_CONCURRENT = "HDSL_TRANSCODE_MAX_CONCURRENT";
     public static final String ENV_TRANSCODE_MAX_QUEUE = "HDSL_TRANSCODE_MAX_QUEUE";
     public static final String ENV_TRANSCODE_FAILURE_POLICY = "HDSL_TRANSCODE_FAILURE_POLICY";
@@ -382,6 +383,9 @@ public final class ServerConfigLoader {
         if (section.containsKey("ffmpeg_path")) {
             target.ffmpegPath = stringField(section, "ffmpeg_path");
         }
+        if (section.containsKey("ffmpeg_catalog")) {
+            target.ffmpegCatalog = stringField(section, "ffmpeg_catalog");
+        }
         if (section.containsKey("max_concurrent")) {
             target.maxConcurrent = intField(section, "max_concurrent");
             if (target.maxConcurrent < 1 || target.maxConcurrent > 8) {
@@ -602,6 +606,9 @@ public final class ServerConfigLoader {
         }
         if (env.containsKey(ENV_FFMPEG_PATH)) {
             config.transcode.ffmpegPath = env.get(ENV_FFMPEG_PATH);
+        }
+        if (env.containsKey(ENV_FFMPEG_CATALOG)) {
+            config.transcode.ffmpegCatalog = env.get(ENV_FFMPEG_CATALOG);
         }
         if (env.containsKey(ENV_TRANSCODE_MAX_CONCURRENT)) {
             config.transcode.maxConcurrent = parseInt(env.get(ENV_TRANSCODE_MAX_CONCURRENT),

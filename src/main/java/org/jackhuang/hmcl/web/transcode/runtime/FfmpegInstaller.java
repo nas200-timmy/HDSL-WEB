@@ -42,7 +42,9 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -82,6 +84,7 @@ public final class FfmpegInstaller {
 
     private final TranscodeModule module;
     private final Path toolsDir;
+    private final FfmpegRuntimeManager runtimes;
     private final Map<String, InstallJob> jobs = new ConcurrentHashMap<>();
     private final ExecutorService executor = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "transcode-installer");
@@ -92,6 +95,95 @@ public final class FfmpegInstaller {
     public FfmpegInstaller(TranscodeModule module) {
         this.module = module;
         this.toolsDir = module.dataDir().resolve("tools").resolve("ffmpeg");
+        this.runtimes = module.runtimeManager();
+    }
+
+    public FfmpegRuntimeManager runtimes() {
+        return runtimes;
+    }
+
+    /// Installs one catalogue entry and activates it. `id` must exist in the
+    /// current catalogue; there is no "latest" here.
+    public InstallJob startArtifact(String id) throws IOException {
+        FfmpegCatalog.Entry entry = module.catalog().find(id);
+        if (entry == null) {
+            throw new IOException("ffmpeg_no_candidate: unknown catalog id " + id);
+        }
+        FfmpegCapabilities.Host host = FfmpegCapabilities.detect();
+        if (!entry.matches(host.os(), host.arch(), host.libc())) {
+            throw new IOException("ffmpeg_unsupported_platform: " + entry.id()
+                    + " is for " + entry.os() + "/" + entry.arch() + "/" + entry.libc()
+                    + ", this host is " + host.describe());
+        }
+        InstallJob job = newJob("artifact");
+        executor.execute(() -> runArtifact(job, entry));
+        return job;
+    }
+
+    /// Lets the selector choose an entry for this host.
+    public InstallJob startAuto(Set<String> requiredFeatures) throws IOException {
+        FfmpegSelector.Recommendation recommendation = FfmpegSelector.select(
+                module.catalog(), FfmpegCapabilities.detect(), requiredFeatures);
+        InstallJob job = newJob("auto");
+        job.log = "selected " + recommendation.entry().id() + ": " + recommendation.reason() + "\n";
+        executor.execute(() -> runArtifact(job, recommendation.entry()));
+        return job;
+    }
+
+    /// Operator-supplied URL. An explicit SHA-256 is required; the catalogue's
+    /// pinned hash is what makes "auto" trustworthy, and a custom URL has no
+    /// catalogue entry to borrow one from.
+    public InstallJob startCustom(String url, String sha256, @Nullable String version) throws IOException {
+        if (url == null || url.isBlank()) {
+            throw new IOException("url is required");
+        }
+        if (sha256 == null || !sha256.matches("[0-9a-fA-F]{64}")) {
+            throw new IOException("a 64-hex SHA-256 is required for a custom URL");
+        }
+        validateUrl(url);
+        String id = "custom-" + sha256.substring(0, 12).toLowerCase(java.util.Locale.ROOT);
+        InstallJob job = newJob("custom");
+        executor.execute(() -> runArtifact(job, FfmpegCatalog.Entry.custom(id, url, sha256, version)));
+        return job;
+    }
+
+    private InstallJob newJob(String kind) {
+        InstallJob job = new InstallJob();
+        job.id = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+        job.kind = kind;
+        jobs.put(job.id, job);
+        return job;
+    }
+
+    private void runArtifact(InstallJob job, FfmpegCatalog.Entry entry) {
+        try {
+            runtimes.install(entry, (message, fraction) -> {
+                if (job.state == State.CANCELLED) {
+                    throw new CancellationException("cancelled");
+                }
+                job.message = message;
+                job.progress = fraction;
+                log(job, message + "\n");
+            });
+            if (job.state != State.CANCELLED) {
+                job.state = State.DONE;
+                job.progress = 1;
+                job.message = "done";
+                job.endedAt = System.currentTimeMillis();
+                module.runtime().refresh();
+            }
+        } catch (CancellationException e) {
+            job.state = State.CANCELLED;
+            job.message = "cancelled";
+            job.endedAt = System.currentTimeMillis();
+        } catch (Exception e) {
+            if (job.state != State.CANCELLED) {
+                job.state = State.FAILED;
+                job.error = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                job.message = "failed";
+                job.endedAt = System.currentTimeMillis();
+            }
+        }
     }
 
     public InstallJob start(String kind, @Nullable String url, @Nullable String sha256,
@@ -162,24 +254,34 @@ public final class FfmpegInstaller {
             throws Exception {
         String selectedVersion = version == null || version.isBlank()
                 ? "static-" + System.currentTimeMillis() : version;
-        Path archive = download(job, url, sha256);
-        Path extract = toolsDir.resolve(".extract-" + job.id);
-        deleteTree(extract);
-        Files.createDirectories(extract);
-        log(job, "extracting " + archive.getFileName());
-        extract(archive, extract);
-        Path ffmpeg = find(extract, "ffmpeg");
-        Path ffprobe = find(extract, "ffprobe");
-        if (ffmpeg == null || ffprobe == null) {
-            throw new IOException("the archive does not contain ffmpeg and ffprobe");
+        URI uri = URI.create(url);
+        String expected = expectedSha(sha256, uri, uriFileName(uri));
+        String id = "custom-" + expected.substring(0, 12).toLowerCase(java.util.Locale.ROOT);
+        FfmpegCatalog.Entry entry = FfmpegCatalog.Entry.custom(id, url, expected, selectedVersion);
+        runtimes.install(entry, (message, fraction) -> {
+            if (job.state == State.CANCELLED) {
+                throw new CancellationException("cancelled");
+            }
+            job.message = message;
+            job.progress = fraction;
+            log(job, message + "\n");
+        });
+        log(job, "installed " + selectedVersion + " via the runtime manager\n");
+    }
+
+    private static String uriFileName(URI uri) {
+        String path = uri.getPath();
+        if (path == null || path.isBlank() || path.endsWith("/")) {
+            return "ffmpeg.bin";
         }
-        Path target = installTo(job, selectedVersion, ffmpeg, ffprobe);
-        log(job, "installed " + target);
-        deleteTree(extract);
-        Files.deleteIfExists(archive);
+        return path.substring(path.lastIndexOf('/') + 1);
     }
 
     private void installPackage(InstallJob job) throws Exception {
+        if (Files.isRegularFile(toolsDir.resolve("current.json"))) {
+            throw new IOException("ffmpeg: a managed runtime is active; switch or remove it"
+                    + " before using the package manager");
+        }
         String command;
         List<String> args;
         if (commandExists("apt-get")) {
@@ -281,19 +383,12 @@ public final class FfmpegInstaller {
         return archive;
     }
 
-    private Path installTo(InstallJob job, String version, Path ffmpeg, Path ffprobe) throws IOException {
-        Path target = toolsDir.resolve(version);
-        Path bin = target.resolve("bin");
-        Files.createDirectories(bin);
-        Files.copy(ffmpeg, bin.resolve("ffmpeg"), StandardCopyOption.REPLACE_EXISTING);
-        Files.copy(ffprobe, bin.resolve("ffprobe"), StandardCopyOption.REPLACE_EXISTING);
-        makeExecutable(bin.resolve("ffmpeg"));
-        makeExecutable(bin.resolve("ffprobe"));
-        copyToCurrent(job, bin.resolve("ffmpeg"), bin.resolve("ffprobe"));
-        return target;
-    }
-
     private void copyToCurrent(InstallJob job, Path ffmpeg, Path ffprobe) throws IOException {
+        if (Files.isRegularFile(toolsDir.resolve("current.json"))
+                || Files.isSymbolicLink(toolsDir.resolve("current"))) {
+            throw new IOException("ffmpeg: a managed runtime is active; use the runtime manager"
+                    + " instead of the legacy source-build copy");
+        }
         Path current = toolsDir.resolve("current").resolve("bin");
         Files.createDirectories(current);
         Files.copy(ffmpeg, current.resolve("ffmpeg"), StandardCopyOption.REPLACE_EXISTING);

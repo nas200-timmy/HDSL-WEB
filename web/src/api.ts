@@ -1301,6 +1301,22 @@ export const api = {
       request<TranscodeFeature>("/api/transcode/settings", jsonInit("PUT", body)),
     runtimeInstall: (body: { kind: "static" | "package" | "compile"; url?: string; sha256?: string; version?: string }) =>
       request<TranscodeInstallJob>("/api/transcode/runtime/install", jsonInit("POST", body)),
+    runtime: () => request<TranscodeRuntime>("/api/transcode/runtime"),
+    runtimeCatalog: () => request<{ entries: TranscodeCatalogEntry[] }>("/api/transcode/runtime/catalog"),
+    runtimeInstallArtifact: (body: {
+      mode: "auto" | "artifact" | "custom" | "package" | "source";
+      id?: string;
+      features?: string[];
+      url?: string;
+      sha256?: string;
+      version?: string;
+    }) => request<TranscodeInstallJob>("/api/transcode/runtime/install", jsonInit("POST", body)),
+    runtimeSelect: (version: string) =>
+      request<TranscodeRuntime>("/api/transcode/runtime/select", jsonInit("POST", { version })),
+    runtimeRollback: () =>
+      request<TranscodeRuntime>("/api/transcode/runtime/rollback", jsonInit("POST", {})),
+    runtimeDelete: (id: string) =>
+      request<{ ok: boolean }>(`/api/transcode/runtime/${encodeURIComponent(id)}`, { method: "DELETE" }),
     runtimeJob: (id: string) =>
       request<TranscodeInstallJob>(`/api/transcode/runtime/install/${encodeURIComponent(id)}`),
     runtimeCancel: (id: string) =>
@@ -1721,7 +1737,7 @@ export interface TranscodeQualityJob {
 
 export interface TranscodeInstallJob {
   id: string;
-  kind: "static" | "package" | "compile";
+  kind: "static" | "package" | "compile" | "artifact" | "auto" | "custom";
   state: "running" | "done" | "failed" | "cancelled";
   progress: number;
   message: string;
@@ -1729,6 +1745,46 @@ export interface TranscodeInstallJob {
   error?: string | null;
   createdAt: number;
   endedAt: number;
+}
+
+export interface TranscodeRuntimeVersion {
+  id: string;
+  version: string;
+  catalogId: string;
+  source: string;
+  license: string;
+  sha256: string;
+  installedAt: string;
+  archive: string;
+  probeVersion: string;
+  notes: string;
+  current: boolean;
+  featuresDeclared: string[];
+  featuresProbed: string[];
+}
+
+export interface TranscodeCatalogEntry {
+  id: string;
+  os: string;
+  arch: string;
+  libc: string;
+  ffmpegVersion: string;
+  license: string;
+  url: string;
+  sha256: string;
+  size: number;
+  archive: string;
+  notes: string;
+  features: string[];
+}
+
+export interface TranscodeRuntime {
+  host: { os: string; arch: string; libc: string };
+  current: TranscodeRuntimeVersion | null;
+  installed: TranscodeRuntimeVersion[];
+  catalog: TranscodeCatalogEntry[];
+  recommended: { entry: TranscodeCatalogEntry; reason: string } | null;
+  recommendationError?: string;
 }
 
 /// GET /api/mc/feature：功能开关与内存锁。

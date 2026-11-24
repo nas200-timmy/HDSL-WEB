@@ -24,6 +24,11 @@ import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Optional;
@@ -76,13 +81,42 @@ public final class FfmpegLocator {
             return null;
         }
 
-        Path managed = TranscodePaths.dataDir(config)
-                .resolve("tools").resolve("ffmpeg").resolve("current").resolve("bin")
-                .resolve(executableName(name));
+        Path toolsDir = TranscodePaths.dataDir(config)
+                .resolve("tools").resolve("ffmpeg");
+        String pointed = pointerVersion(toolsDir);
+        if (pointed != null) {
+            Path version = toolsDir.resolve(pointed).normalize();
+            if (version.startsWith(toolsDir)) {
+                Path candidate = version.resolve("bin").resolve(executableName(name));
+                if (Files.isRegularFile(candidate)) {
+                    return candidate.toAbsolutePath().normalize();
+                }
+            }
+        }
+        Path managed = toolsDir.resolve("current").resolve("bin").resolve(executableName(name));
         if (Files.isRegularFile(managed)) {
             return managed.toAbsolutePath().normalize();
         }
         return Executables.resolve(name).orElse(null);
+    }
+
+    /// Reads the runtime manager's `current.json` pointer. A malformed pointer
+    /// is ignored; the legacy `current` directory remains the next fallback.
+    private static @Nullable String pointerVersion(Path toolsDir) {
+        Path pointer = toolsDir.resolve("current.json");
+        if (!Files.isRegularFile(pointer)) {
+            return null;
+        }
+        try {
+            JsonObject object = JsonParser.parseString(
+                    Files.readString(pointer, StandardCharsets.UTF_8)).getAsJsonObject();
+            if (object.has("version") && object.get("version").isJsonPrimitive()) {
+                String version = object.get("version").getAsString();
+                return version.isBlank() ? null : version;
+            }
+        } catch (IOException | RuntimeException ignored) {
+        }
+        return null;
     }
 
     private static @Nullable Path sibling(Path ffmpeg, String name) {

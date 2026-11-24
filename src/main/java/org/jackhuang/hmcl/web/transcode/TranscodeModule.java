@@ -23,7 +23,9 @@ import org.jackhuang.hmcl.web.transcode.media.MediaBrowser;
 import org.jackhuang.hmcl.web.transcode.preset.PresetStore;
 import org.jackhuang.hmcl.web.transcode.quality.QualityService;
 import org.jackhuang.hmcl.web.transcode.queue.TranscodeQueue;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegCatalog;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegInstaller;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegRuntimeManager;
 import org.jackhuang.hmcl.web.transcode.runtime.TranscodeRuntime;
 import org.jackhuang.hmcl.web.transcode.tools.TranscodeTools;
 import org.jetbrains.annotations.NotNullByDefault;
@@ -48,6 +50,8 @@ public final class TranscodeModule {
     private final TranscodeTools tools;
     private final QualityService quality;
     private final FfmpegInstaller installer;
+    private final FfmpegCatalog.Catalog catalog;
+    private final FfmpegRuntimeManager runtimeManager;
 
     public TranscodeModule(ServerConfig config, EventBus eventBus) {
         this.config = config;
@@ -58,6 +62,9 @@ public final class TranscodeModule {
         this.queue = new TranscodeQueue(this, eventBus);
         this.tools = new TranscodeTools(this);
         this.quality = new QualityService(this);
+        this.catalog = FfmpegCatalog.load(catalogPath(config));
+        this.runtimeManager = new FfmpegRuntimeManager(
+                TranscodePaths.dataDir(config).resolve("tools").resolve("ffmpeg"), catalog);
         this.installer = new FfmpegInstaller(this);
         if (feature.enabled()) {
             queue.start();
@@ -98,6 +105,26 @@ public final class TranscodeModule {
 
     public FfmpegInstaller installer() {
         return installer;
+    }
+
+    public FfmpegCatalog.Catalog catalog() {
+        return catalog;
+    }
+
+    public FfmpegRuntimeManager runtimeManager() {
+        return runtimeManager;
+    }
+
+    private static @org.jetbrains.annotations.Nullable Path catalogPath(ServerConfig config) {
+        String configured = config.transcode.ffmpegCatalog;
+        if (configured == null || configured.isBlank()) {
+            return null;
+        }
+        try {
+            return Path.of(configured.trim());
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     public Path dataDir() {

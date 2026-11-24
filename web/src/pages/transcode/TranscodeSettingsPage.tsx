@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type TranscodeCapabilities, type TranscodeInstallJob } from "../../api";
+import { api, type TranscodeCapabilities, type TranscodeInstallJob, type TranscodeRuntime } from "../../api";
 import { refreshTranscodeFeature, setTranscodeFeature, useTranscodeFeature } from "../../transcodeFeature";
 import { errMsg } from "../../utils";
 import { toast } from "../../store";
@@ -20,6 +20,7 @@ const INSTALL_SOURCES = [
 export function TranscodeSettingsPage() {
   const feature = useTranscodeFeature();
   const [capabilities, setCapabilities] = useState<TranscodeCapabilities | null>(null);
+  const [runtime, setRuntime] = useState<TranscodeRuntime | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [policy, setPolicy] = useState("ask");
@@ -38,7 +39,12 @@ export function TranscodeSettingsPage() {
     setBusy(true);
     setError(null);
     try {
-      setCapabilities(await api.transcode.capabilities());
+      const [nextCapabilities, nextRuntime] = await Promise.all([
+        api.transcode.capabilities(),
+        api.transcode.runtime(),
+      ]);
+      setCapabilities(nextCapabilities);
+      setRuntime(nextRuntime);
       await refreshTranscodeFeature();
     } catch (e) {
       setError(errMsg(e));
@@ -81,6 +87,44 @@ export function TranscodeSettingsPage() {
     }
   };
 
+  const startRuntimeInstall = async (body: { mode: "auto" | "artifact"; id?: string }) => {
+    try {
+      setInstallJob(await api.transcode.runtimeInstallArtifact(body));
+    } catch (e) {
+      toast("error", errMsg(e));
+    }
+  };
+
+  const selectRuntime = async (version: string) => {
+    try {
+      setRuntime(await api.transcode.runtimeSelect(version));
+      toast("success", "已切换 ffmpeg 版本");
+      await load();
+    } catch (e) {
+      toast("error", errMsg(e));
+    }
+  };
+
+  const rollbackRuntime = async () => {
+    try {
+      setRuntime(await api.transcode.runtimeRollback());
+      toast("success", "已回滚到上一个版本");
+      await load();
+    } catch (e) {
+      toast("error", errMsg(e));
+    }
+  };
+
+  const deleteRuntime = async (id: string) => {
+    try {
+      await api.transcode.runtimeDelete(id);
+      toast("success", "已删除该版本");
+      await load();
+    } catch (e) {
+      toast("error", errMsg(e));
+    }
+  };
+
   const savePolicy = async () => {
     setSaving(true);
     try {
@@ -117,6 +161,99 @@ export function TranscodeSettingsPage() {
           <li>「探测编码器」只跑 1 帧试编码，用来区分“参数写错”和“硬件根本不可用”。</li>
         </ul>
       </HelpNote>
+
+      <div className="card">
+        <div className="comp-row">
+          <span className="comp-label">ffmpeg 运行时</span>
+          <span className="comp-value">
+            {runtime?.current
+              ? <span className="tag running">{runtime.current.version}</span>
+              : <span className="tag plain">未托管</span>}
+          </span>
+        </div>
+        {runtime && (
+          <div className="comp-row">
+            <span className="comp-label">宿主</span>
+            <span className="comp-value mono" style={{ fontSize: 12 }}>
+              {runtime.host.os}/{runtime.host.arch}/{runtime.host.libc}
+            </span>
+          </div>
+        )}
+        {runtime?.current && (
+          <div className="comp-row">
+            <span className="comp-label">当前</span>
+            <span className="comp-value" style={{ fontSize: 12 }}>
+              {runtime.current.id} · {runtime.current.source} · {runtime.current.license}
+              {runtime.current.featuresProbed.length > 0
+                ? ` · ${runtime.current.featuresProbed.slice(0, 6).join(" / ")}`
+                : " · 未探测到声明特性"}
+            </span>
+          </div>
+        )}
+        {runtime?.recommended && (
+          <div style={{ display: "flex", gap: 8, padding: "8px", flexWrap: "wrap", alignItems: "center" }}>
+            <button className="btn btn-raised"
+                    disabled={installJob?.state === "running"}
+                    onClick={() => void startRuntimeInstall({ mode: "auto" })}>
+              安装推荐版本
+            </button>
+            <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+              {runtime.recommended.entry.ffmpegVersion} · {runtime.recommended.reason}
+            </span>
+          </div>
+        )}
+        {runtime && !runtime.recommended && (
+          <p style={{ margin: 0, padding: "0 8px 8px", fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+            内置目录还没有匹配当前平台的条目。
+            {runtime.recommendationError ? `（${runtime.recommendationError}）` : ""}
+            可以用 `transcode.ffmpeg_catalog` 指向一份已验证的本地目录，或在下面用自定义 URL。
+          </p>
+        )}
+        {runtime && runtime.installed.length > 0 && (
+          <div style={{ padding: "0 8px 8px", display: "grid", gap: 4 }}>
+            {runtime.installed.map((item) => (
+              <div key={item.id}
+                   style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap",
+                            padding: "6px 0", borderTop: "1px solid var(--monet-outline-variant)" }}>
+                <span className="mono" style={{ fontSize: 12, minWidth: 120 }}>{item.id}</span>
+                <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                  {item.version} · {item.license} · {item.featuresProbed.length}/{item.featuresDeclared.length} 特性
+                </span>
+                {item.current
+                  ? <span className="tag running">当前</span>
+                  : <button className="btn btn-text" onClick={() => void selectRuntime(item.id)}>启用</button>}
+                {!item.current && (
+                  <button className="btn btn-text danger" onClick={() => void deleteRuntime(item.id)}>删除</button>
+                )}
+              </div>
+            ))}
+            {runtime.installed.length > 1 && (
+              <button className="btn btn-text" style={{ justifySelf: "start" }}
+                      onClick={() => void rollbackRuntime()}>
+                回滚到上一个版本
+              </button>
+            )}
+          </div>
+        )}
+        {runtime && runtime.catalog.length > 0 && (
+          <div style={{ padding: "0 8px 8px", display: "grid", gap: 4 }}>
+            <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>目录条目</span>
+            {runtime.catalog.map((entry) => (
+              <div key={entry.id}
+                   style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <span className="mono" style={{ fontSize: 12, minWidth: 160 }}>{entry.id}</span>
+                <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                  {entry.ffmpegVersion} · {entry.license} · {entry.os}/{entry.arch}/{entry.libc}
+                </span>
+                <button className="btn btn-text" disabled={installJob?.state === "running"}
+                        onClick={() => void startRuntimeInstall({ mode: "artifact", id: entry.id })}>
+                  安装
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       <div className="card">
         <div className="comp-row">

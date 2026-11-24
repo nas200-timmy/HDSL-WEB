@@ -38,7 +38,12 @@ import org.jackhuang.hmcl.web.transcode.preset.PresetSchema;
 import org.jackhuang.hmcl.web.transcode.preset.PresetStore;
 import org.jackhuang.hmcl.web.transcode.preset.PresetTransfer;
 import org.jackhuang.hmcl.web.transcode.preset.TranscodePreset;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegCapabilities;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegInstaller;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegCatalog;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegProbe;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegRuntimeManager;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegSelector;
 import org.jackhuang.hmcl.web.transcode.runtime.HardwareProbe;
 import org.jackhuang.hmcl.web.transcode.command.CommandBuilder;
 import org.jetbrains.annotations.NotNullByDefault;
@@ -51,6 +56,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.BooleanSupplier;
 
@@ -134,6 +140,18 @@ public final class TranscodeApiServlet extends HttpServlet {
             qualityGet(request, response, path.substring("/tools/quality/".length()));
             return;
         }
+        if ("/runtime".equals(path)) {
+            runtimeJson(response);
+            return;
+        }
+        if ("/runtime/catalog".equals(path)) {
+            catalogJson(response);
+            return;
+        }
+        if (path.startsWith("/runtime/jobs/")) {
+            runtimeGet(response, path.substring("/runtime/jobs/".length()));
+            return;
+        }
         if (path.startsWith("/runtime/install/")) {
             runtimeGet(response, path.substring("/runtime/install/".length()));
             return;
@@ -178,10 +196,16 @@ public final class TranscodeApiServlet extends HttpServlet {
             case "/tools/extract" -> extractTool(request, response);
             case "/tools/quality" -> qualityTool(request, response);
             case "/runtime/install" -> runtimeInstall(request, response);
+            case "/runtime/select" -> runtimeSelect(request, response);
+            case "/runtime/rollback" -> runtimeRollback(request, response);
             case "/capabilities/probe" -> capabilityProbe(request, response);
             default -> {
                 if (path.startsWith("/queue/jobs/")) {
                     queueJobAction(request, response, path.substring("/queue/jobs/".length()));
+                } else if (path.startsWith("/runtime/jobs/") && path.endsWith("/cancel")) {
+                    String rest = path.substring("/runtime/jobs/".length(),
+                            path.length() - "/cancel".length());
+                    runtimeCancel(response, rest);
                 } else if (path.startsWith("/runtime/install/") && path.endsWith("/cancel")) {
                     String rest = path.substring("/runtime/install/".length(),
                             path.length() - "/cancel".length());
@@ -252,6 +276,24 @@ public final class TranscodeApiServlet extends HttpServlet {
             }
             audit("transcode.queue.remove", id, "success", request);
             Json.write(response, module.queue().snapshot());
+            return;
+        }
+        if (path.startsWith("/runtime/")) {
+            if (!requireHumanElevation(request, response)) {
+                return;
+            }
+            String id = path.substring("/runtime/".length());
+            if (id.isBlank() || id.contains("/")) {
+                Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+                return;
+            }
+            try {
+                module.runtimeManager().delete(id);
+                audit("transcode.runtime.delete", id, "success", request);
+                Json.write(response, Map.of("ok", true));
+            } catch (IOException e) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
+            }
             return;
         }
         if (!path.startsWith("/presets/")) {
@@ -705,22 +747,190 @@ public final class TranscodeApiServlet extends HttpServlet {
     }
 
     private void runtimeInstall(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireHumanElevation(request, response)) {
+            return;
+        }
         JsonObject body = readJson(request);
         if (body == null) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must be a JSON object");
             return;
         }
         try {
-            var job = module.installer().start(
-                    stringField(body, "kind"),
-                    stringField(body, "url"),
-                    stringField(body, "sha256"),
-                    stringField(body, "version"));
+            FfmpegInstaller.InstallJob job;
+            String mode = stringField(body, "mode");
+            if (mode != null && !mode.isBlank()) {
+                job = switch (mode) {
+                    case "auto" -> module.installer().startAuto(features(body));
+                    case "artifact" -> module.installer().startArtifact(requiredField(body, "id"));
+                    case "custom" -> module.installer().startCustom(
+                            requiredField(body, "url"),
+                            requiredField(body, "sha256"),
+                            stringField(body, "version"));
+                    case "package" -> module.installer().start("package", null, null, null);
+                    case "source" -> throw new IOException(
+                            "ffmpeg_source_unsupported: source builds are not part of this stage");
+                    default -> throw new IOException("unknown ffmpeg install mode: " + mode);
+                };
+            } else {
+                // Backwards compatible with the old settings page: it posts
+                // `kind`, not `mode`.
+                job = module.installer().start(
+                        stringField(body, "kind"),
+                        stringField(body, "url"),
+                        stringField(body, "sha256"),
+                        stringField(body, "version"));
+            }
             audit("transcode.runtime.install", job.kind, "success", request);
             Json.write(response, job);
         } catch (IOException | IllegalArgumentException e) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
         }
+    }
+
+    private void runtimeSelect(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireHumanElevation(request, response)) {
+            return;
+        }
+        JsonObject body = readJson(request);
+        String version = body == null ? null : stringField(body, "version");
+        if (version == null || version.isBlank()) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "version is required");
+            return;
+        }
+        try {
+            module.runtimeManager().activate(version);
+            module.runtime().refresh();
+            audit("transcode.runtime.select", version, "success", request);
+            runtimeJson(response);
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
+        }
+    }
+
+    private void runtimeRollback(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireHumanElevation(request, response)) {
+            return;
+        }
+        try {
+            module.runtimeManager().rollback();
+            module.runtime().refresh();
+            audit("transcode.runtime.rollback", "", "success", request);
+            runtimeJson(response);
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
+        }
+    }
+
+    private void runtimeJson(HttpServletResponse response) throws IOException {
+        FfmpegRuntimeManager manager = module.runtimeManager();
+        FfmpegCapabilities.Host host = FfmpegCapabilities.detect();
+        JsonObject body = new JsonObject();
+        JsonObject hostJson = new JsonObject();
+        hostJson.addProperty("os", host.os());
+        hostJson.addProperty("arch", host.arch());
+        hostJson.addProperty("libc", host.libc());
+        body.add("host", hostJson);
+
+        FfmpegRuntimeManager.Installed current = manager.current();
+        body.add("current", current == null ? null : installedJson(current));
+        JsonArray installed = new JsonArray();
+        for (FfmpegRuntimeManager.Installed entry : manager.installed()) {
+            installed.add(installedJson(entry));
+        }
+        body.add("installed", installed);
+
+        JsonArray catalog = new JsonArray();
+        for (FfmpegCatalog.Entry entry : module.catalog().entries()) {
+            catalog.add(entryJson(entry));
+        }
+        body.add("catalog", catalog);
+
+        try {
+            FfmpegSelector.Recommendation recommendation = FfmpegSelector.select(
+                    module.catalog(), host, Set.of());
+            JsonObject recommended = new JsonObject();
+            recommended.add("entry", entryJson(recommendation.entry()));
+            recommended.addProperty("reason", recommendation.reason());
+            body.add("recommended", recommended);
+        } catch (IOException e) {
+            body.add("recommended", null);
+            body.addProperty("recommendationError", e.getMessage());
+        }
+        Json.write(response, body);
+    }
+
+    private void catalogJson(HttpServletResponse response) throws IOException {
+        JsonArray catalog = new JsonArray();
+        for (FfmpegCatalog.Entry entry : module.catalog().entries()) {
+            catalog.add(entryJson(entry));
+        }
+        JsonObject body = new JsonObject();
+        body.add("entries", catalog);
+        Json.write(response, body);
+    }
+
+    private static JsonObject installedJson(FfmpegRuntimeManager.Installed installed) {
+        FfmpegRuntimeManager.RuntimeRecord record = installed.runtime();
+        JsonObject object = new JsonObject();
+        object.addProperty("id", installed.id());
+        object.addProperty("version", record.version);
+        object.addProperty("catalogId", record.catalogId);
+        object.addProperty("source", record.source);
+        object.addProperty("license", record.license);
+        object.addProperty("sha256", record.sha256);
+        object.addProperty("installedAt", record.installedAt);
+        object.addProperty("archive", record.archive);
+        object.addProperty("probeVersion", record.probeVersion);
+        object.addProperty("notes", record.notes);
+        object.addProperty("current", installed.current());
+        object.add("featuresDeclared", strings(record.featuresDeclared));
+        object.add("featuresProbed", strings(record.featuresProbed));
+        return object;
+    }
+
+    private static JsonObject entryJson(FfmpegCatalog.Entry entry) {
+        JsonObject object = new JsonObject();
+        object.addProperty("id", entry.id());
+        object.addProperty("os", entry.os());
+        object.addProperty("arch", entry.arch());
+        object.addProperty("libc", entry.libc());
+        object.addProperty("ffmpegVersion", entry.ffmpegVersion());
+        object.addProperty("license", entry.license());
+        object.addProperty("url", entry.url());
+        object.addProperty("sha256", entry.sha256());
+        object.addProperty("size", entry.size());
+        object.addProperty("archive", entry.archive());
+        object.addProperty("notes", entry.notes());
+        object.add("features", strings(entry.features()));
+        return object;
+    }
+
+    private static JsonArray strings(List<String> values) {
+        JsonArray array = new JsonArray();
+        if (values != null) {
+            values.forEach(array::add);
+        }
+        return array;
+    }
+
+    private static Set<String> features(JsonObject body) {
+        Set<String> result = new LinkedHashSet<>();
+        if (body.has("features") && body.get("features").isJsonArray()) {
+            for (var element : body.getAsJsonArray("features")) {
+                if (element.isJsonPrimitive()) {
+                    result.add(element.getAsString());
+                }
+            }
+        }
+        return result;
+    }
+
+    private static String requiredField(JsonObject body, String name) {
+        String value = stringField(body, name);
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(name + " is required");
+        }
+        return value;
     }
 
     private void runtimeGet(HttpServletResponse response, String id) throws IOException {
@@ -1061,6 +1271,18 @@ public final class TranscodeApiServlet extends HttpServlet {
         feature.disable();
         audit("transcode.feature.disable", "transcode feature", "success", request);
         featureJson(response);
+    }
+
+    /// Installing/switching ffmpeg executes a downloaded binary, so an agent
+    /// ticket is not enough even when its scope covers transcode. The runtime
+    /// page is a human-session operation.
+    private boolean requireHumanElevation(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (request.getAttribute(AuthFilter.AGENT_GRANT_ATTRIBUTE) != null) {
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                    "ffmpeg_install_human_only: agent tickets cannot install or switch ffmpeg");
+            return false;
+        }
+        return requireElevation(request, response);
     }
 
     /// The same second-password check the Minecraft surface uses: only over TLS,

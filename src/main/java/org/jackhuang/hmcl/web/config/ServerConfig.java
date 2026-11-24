@@ -310,6 +310,12 @@ public final class ServerConfig {
         /// means resolve from `PATH` and then from `<data>/transcode/tools/ffmpeg`.
         public volatile String ffmpegPath = "";
 
+        /// Optional local ffmpeg catalogue (`transcode.ffmpeg_catalog`,
+        /// `HDSL_FFMPEG_CATALOG`). Empty means the built-in jar resource; a
+        /// path is read as-is and may add or override entries. Remote URLs are
+        /// deliberately not accepted.
+        public volatile String ffmpegCatalog = "";
+
         /// How many jobs may run at once (`transcode.max_concurrent`, default 1).
         public volatile int maxConcurrent = 1;
 
