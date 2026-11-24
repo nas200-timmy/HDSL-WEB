@@ -72,15 +72,71 @@ class PrivilegesTest {
     void droppingPrefixesSetprivAndKeepsTheCommandIntact() {
         List<String> command = List.of("/opt/node/bin/node", "--version");
 
-        List<String> wrapped = Privileges.wrap(command, true);
+        List<String> wrapped = Privileges.wrap(command, true, List.of(44, 109));
 
         assertEquals("--reuid=" + Privileges.AGENT_UID, wrapped.get(1), wrapped.toString());
         assertEquals("--regid=" + Privileges.AGENT_UID, wrapped.get(2), wrapped.toString());
-        assertEquals("--init-groups", wrapped.get(3), wrapped.toString());
-        assertEquals("--", wrapped.get(4), wrapped.toString());
-        assertEquals(command, wrapped.subList(5, wrapped.size()),
+        assertEquals("--clear-groups", wrapped.get(3), wrapped.toString());
+        assertEquals("--groups=44,109", wrapped.get(4), wrapped.toString());
+        assertEquals("--", wrapped.get(5), wrapped.toString());
+        assertEquals(command, wrapped.subList(6, wrapped.size()),
                 "the agent's argv must arrive unchanged after the separator");
         assertTrue(wrapped.get(0).endsWith("setpriv"), wrapped.get(0));
+    }
+
+    @Test
+    void noSupplementaryGroupsLeavesOnlyTheClearGroupsFlag() {
+        List<String> command = List.of("/opt/node/bin/node", "--version");
+
+        List<String> wrapped = Privileges.wrap(command, true, List.of());
+
+        assertEquals("--clear-groups", wrapped.get(3), wrapped.toString());
+        assertEquals("--", wrapped.get(4), wrapped.toString());
+        assertEquals(command, wrapped.subList(5, wrapped.size()));
+    }
+
+    @Test
+    void supplementaryGroupsComeFromTheGroupFile() {
+        String groups = """
+                root:x:0:
+                hdsl:x:1000:
+                video:x:44:hdsl
+                render:x:109:hdsl
+                docker:x:998:someone-else
+                """;
+        assertEquals(List.of(44, 109),
+                Privileges.supplementaryGids(groups, "hdsl", 1000, "Groups:\t0 1000 44 109"));
+    }
+
+    @Test
+    void anUnrelatedGroupRootCarriesDoesNotTravelToTheAgent() {
+        String groups = """
+                hdsl:x:1000:
+                video:x:44:hdsl
+                """;
+        // The group file exists and does not name 998; root's membership is not a
+        // reason to hand the agent a group the image never granted it.
+        assertEquals(List.of(44),
+                Privileges.supplementaryGids(groups, "hdsl", 1000, "Groups:\t0 1000 44 998"));
+    }
+
+    @Test
+    void withNoGroupFileTheContainersOwnGroupsAreTheOnlyEvidence() {
+        assertEquals(List.of(44, 109),
+                Privileges.supplementaryGids(null, null, 1000, "Groups:\t0 1000 44 109"));
+        assertEquals(List.of(),
+                Privileges.supplementaryGids("", "hdsl", 1000, "Groups:\t0 1000"));
+    }
+
+    @Test
+    void theAgentsNameIsReadFromPasswd() {
+        String passwd = """
+                root:x:0:0:root:/root:/bin/bash
+                hdsl:x:1001:1001::/home/hdsl:/bin/bash
+                """;
+        assertEquals("hdsl", Privileges.userNameForUid(passwd, 1001));
+        assertNull(Privileges.userNameForUid(passwd, 1002));
+        assertNull(Privileges.userNameForUid(null, 1000));
     }
 
     @Test

@@ -110,9 +110,12 @@ public record DshNodeRuntime(
         // npm/pnpm 是 `#!/usr/bin/env node` 脚本（Windows 上是 `%~dp0\node.exe` 的
         // 批处理）：探测和日后 spawn 都得先把运行时自己的目录塞进 PATH，否则裸部署
         // （PATH 无 node）下「装好了却报 npm 缺失」。
-        java.util.Map<String, String> env = java.util.Map.of("PATH",
-                bin.toString() + java.io.File.pathSeparator
-                        + java.util.Optional.ofNullable(System.getenv("PATH")).orElse(""));
+        //
+        // The bootstrap additions come first: a minimal image's `node` needs the
+        // managed closure on LD_LIBRARY_PATH before it can even print `--version`.
+        java.util.Map<String, String> env = new java.util.HashMap<>(BootstrapEnvironment.additions());
+        env.put("PATH", bin.toString() + java.io.File.pathSeparator
+                + env.getOrDefault("PATH", java.util.Optional.ofNullable(System.getenv("PATH")).orElse("")));
 
         return new DshNodeRuntime(
                 runtime.node(),
@@ -335,11 +338,16 @@ public record DshNodeRuntime(
     ///
     /// @return the environment additions
     public java.util.Map<String, String> pathEnvironment() {
-        String existing = System.getenv("PATH");
+        java.util.Map<String, String> environment = new java.util.HashMap<>(BootstrapEnvironment.additions());
+        String existing = environment.get("PATH");
+        if (existing == null || existing.isBlank()) {
+            existing = System.getenv("PATH");
+        }
         String bin = binDirectory().toString();
-        return java.util.Map.of("PATH", existing == null || existing.isBlank()
+        environment.put("PATH", existing == null || existing.isBlank()
                 ? bin
                 : bin + java.io.File.pathSeparator + existing);
+        return environment;
     }
 
     /// Returns the directory holding this runtime's executables.
@@ -412,7 +420,7 @@ public record DshNodeRuntime(
     /// @param executable the program to run with `--version`
     /// @return the trimmed first output line, or `null` when the probe failed
     private static @Nullable String versionOf(Path executable) {
-        return versionOf(executable, java.util.Map.of());
+        return versionOf(executable, BootstrapEnvironment.additions());
     }
 
     /// @param environment extra variables for the probe (PATH prepends)

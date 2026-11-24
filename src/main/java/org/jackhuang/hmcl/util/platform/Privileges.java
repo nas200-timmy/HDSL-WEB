@@ -175,6 +175,31 @@ public final class Privileges {
         return DROP_CHILDREN;
     }
 
+    /// The `setpriv` the panel's bootstrap closure provided, if any.
+    ///
+    /// Set by the bootstrap manager when it finds or installs a closure. It is a
+    /// registration rather than a lookup because `util` must not depend on
+    /// `dsh`, and because the answer only changes when that manager changes it.
+    private static volatile @Nullable Path bootstrapSetpriv;
+
+    /// Registers (or clears) the closure's `setpriv`.
+    ///
+    /// @param path the executable, or `null`
+    public static void registerBootstrapSetpriv(@Nullable Path path) {
+        bootstrapSetpriv = path;
+    }
+
+    /// Whether this process is root.
+    ///
+    /// Public because the bootstrap runtime manager needs the same question
+    /// before it writes the passwd/group entries a minimal image may lack: the
+    /// panel is the only process that can, and it must not try otherwise.
+    ///
+    /// @return whether the effective uid is 0
+    public static boolean isRoot() {
+        return euid() == 0;
+    }
+
     /// Hands a file or directory to the agent, so that the uid its children run
     /// as can read — and where it needs to, rewrite — what the panel put there.
     ///
@@ -392,10 +417,17 @@ public final class Privileges {
     /// The argv to run `command` with, as an agent.
     ///
     /// Inside a container running as root this is
-    /// `setpriv --reuid=1000 --regid=1000 --init-groups -- <command>`; anywhere
-    /// else it is the command itself. `setpriv` execs in place, so the child
-    /// still owns its process group and the PTY's session semantics are
+    /// `setpriv --reuid=1000 --regid=1000 --clear-groups [--groups=…] -- <command>`;
+    /// anywhere else it is the command itself. `setpriv` execs in place, so the
+    /// child still owns its process group and the PTY's session semantics are
     /// unchanged.
+    ///
+    /// `--clear-groups` plus an explicit list replaced `--init-groups` because
+    /// the latter reads `/etc/passwd` and `/etc/group`. A minimal image may ship
+    /// neither, and then every agent launch failed with `setpriv: could not
+    /// initialize groups`. The list keeps the image's supplementary groups —
+    /// `render`, `video`, whatever the entrypoint granted — while never
+    /// inheriting root's group 0.
     ///
     /// @param command the program and its arguments, program first
     /// @return the argv to hand to the process builder
@@ -410,25 +442,175 @@ public final class Privileges {
     /// @param drop    whether to prefix `setpriv`
     /// @return the argv to hand to the process builder
     static List<String> wrap(List<String> command, boolean drop) {
+        return wrap(command, drop, drop ? agentGroups() : List.of());
+    }
+
+    /// The wrapping with the supplementary groups named, so the argv shape can
+    /// be tested without reading this machine's `/etc/group`.
+    ///
+    /// @param command the program and its arguments
+    /// @param drop    whether to prefix `setpriv`
+    /// @param groups  the supplementary gids to grant
+    /// @return the argv to hand to the process builder
+    static List<String> wrap(List<String> command, boolean drop, List<Integer> groups) {
         if (!drop || command.isEmpty()) {
             return command;
         }
-        List<String> wrapped = new ArrayList<>(command.size() + 5);
+        List<String> wrapped = new ArrayList<>(command.size() + 6);
         wrapped.add(setpriv());
         wrapped.add("--reuid=" + AGENT_UID);
         wrapped.add("--regid=" + AGENT_UID);
-        wrapped.add("--init-groups");
+        wrapped.add("--clear-groups");
+        if (!groups.isEmpty()) {
+            StringBuilder list = new StringBuilder("--groups=");
+            for (int i = 0; i < groups.size(); i++) {
+                if (i > 0) {
+                    list.append(',');
+                }
+                list.append(groups.get(i));
+            }
+            wrapped.add(list.toString());
+        }
         wrapped.add("--");
         wrapped.addAll(command);
         return wrapped;
     }
 
-    /// The `setpriv` to exec, resolved when the panel can see it. A bare name is
-    /// left alone: the child inherits the panel's `PATH`, and failing here would
-    /// turn a missing tool into a crash instead of the exec error the spawner
-    /// already reports.
+    /// The supplementary groups an agent process should keep.
+    ///
+    /// Two sources, both read-only: the groups `/etc/group` says `hdsl` belongs
+    /// to, and the container's own supplementary groups when they name a group
+    /// the image knows. Group 0 and the primary gid are never on the list; a
+    /// missing or unreadable file is an empty list, not a failure.
+    ///
+    /// @return the gids, ascending
+    static List<Integer> agentGroups() {
+        if (OperatingSystem.CURRENT_OS != OperatingSystem.LINUX) {
+            return List.of();
+        }
+        String groupFile = readQuietly(Path.of("/etc/group"));
+        String passwdFile = readQuietly(Path.of("/etc/passwd"));
+        String procStatus = readQuietly(Path.of("/proc/self/status"));
+        String user = userNameForUid(passwdFile, AGENT_UID);
+        if (user == null) {
+            // The image's convention; a group may still name it even when the
+            // passwd entry is the thing that is missing.
+            user = "hdsl";
+        }
+        return supplementaryGids(groupFile, user, AGENT_UID, procStatus);
+    }
+
+    /// The pure group-selection rule.
+    ///
+    /// @param groupFile  `/etc/group` contents, or `null`
+    /// @param userName   the account whose memberships to keep, or `null`
+    /// @param primaryGid the gid already used for `--regid`
+    /// @param procStatus `/proc/self/status` contents, or `null`
+    /// @return the supplementary gids, ascending
+    static List<Integer> supplementaryGids(@Nullable String groupFile, @Nullable String userName,
+                                           int primaryGid, @Nullable String procStatus) {
+        java.util.TreeSet<Integer> gids = new java.util.TreeSet<>();
+        java.util.Set<Integer> known = new java.util.HashSet<>();
+        if (groupFile != null) {
+            for (String line : groupFile.split("\\R")) {
+                if (line.isBlank() || line.startsWith("#")) {
+                    continue;
+                }
+                String[] fields = line.split(":", -1);
+                if (fields.length < 4) {
+                    continue;
+                }
+                int gid;
+                try {
+                    gid = Integer.parseInt(fields[2].trim());
+                } catch (NumberFormatException e) {
+                    continue;
+                }
+                if (gid <= 0) {
+                    continue;
+                }
+                known.add(gid);
+                if (userName != null) {
+                    for (String member : fields[3].split(",")) {
+                        if (member.trim().equals(userName)) {
+                            gids.add(gid);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        // With no group file there is no name to check a gid against; the
+        // container's own supplementary groups are then the only evidence of
+        // what the image meant to grant the agent (render, video, ...). When a
+        // group file exists it decides, so an unrelated group root happens to
+        // carry does not travel to the agent.
+        boolean groupFileMissing = groupFile == null || groupFile.isBlank();
+        if (procStatus != null) {
+            for (String line : procStatus.split("\\R")) {
+                if (!line.startsWith("Groups:")) {
+                    continue;
+                }
+                for (String value : line.substring("Groups:".length()).trim().split("\\s+")) {
+                    try {
+                        int gid = Integer.parseInt(value);
+                        // Only a group the image names, and never root's group.
+                        if (gid > 0 && gid != primaryGid
+                                && (groupFileMissing || known.contains(gid))) {
+                            gids.add(gid);
+                        }
+                    } catch (NumberFormatException ignored) {
+                    }
+                }
+            }
+        }
+        gids.remove(primaryGid);
+        gids.remove(0);
+        return List.copyOf(gids);
+    }
+
+    /// The account name with `uid`, or `null` when the passwd file does not name it.
+    static @Nullable String userNameForUid(@Nullable String passwdFile, int uid) {
+        if (passwdFile == null) {
+            return null;
+        }
+        for (String line : passwdFile.split("\\R")) {
+            if (line.isBlank() || line.startsWith("#")) {
+                continue;
+            }
+            String[] fields = line.split(":", -1);
+            if (fields.length >= 3 && fields[2].trim().equals(Integer.toString(uid))
+                    && !fields[0].isBlank()) {
+                return fields[0];
+            }
+        }
+        return null;
+    }
+
+    private static String readQuietly(Path file) {
+        try {
+            return Files.readString(file);
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    /// The `setpriv` to exec, resolved when the panel can see it.
+    ///
+    /// The system one is preferred: it is the version the image ships and was
+    /// tested with. A minimal image has none, which is exactly what the bootstrap
+    /// closure's `setpriv` is for — the child's `PATH` is not consulted by
+    /// `ProcessBuilder` when it resolves a bare program name, so the absolute
+    /// path has to be named here.
+    ///
+    /// @return the program to exec
     private static String setpriv() {
-        return Executables.resolve("setpriv").map(Path::toString).orElse("setpriv");
+        return Executables.resolve("setpriv").map(Path::toString)
+                .orElseGet(() -> {
+                    Path bundled = bootstrapSetpriv;
+                    return bundled != null && Files.isExecutable(bundled)
+                            ? bundled.toString() : "setpriv";
+                });
     }
 
     /// One line for the startup banner, or `null` when there is nothing to say.

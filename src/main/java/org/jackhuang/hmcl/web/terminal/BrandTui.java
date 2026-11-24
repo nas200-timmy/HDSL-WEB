@@ -155,6 +155,9 @@ public interface BrandTui {
         environment.put("USERPROFILE", home.toString());
         environment.put("TERM", "xterm-256color");
         environment.put("COLORTERM", "truecolor");
+        // A terminal agent needs `SHELL`, the closure's `PATH` and — on a
+        // minimal image — `LD_LIBRARY_PATH` for the Node.js it runs on.
+        org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(environment);
         return Map.copyOf(environment);
     }
 }

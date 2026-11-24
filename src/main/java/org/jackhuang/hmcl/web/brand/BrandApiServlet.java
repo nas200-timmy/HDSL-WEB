@@ -1603,6 +1603,7 @@ public final class BrandApiServlet extends HttpServlet {
         builder.directory(home.toFile());
         builder.redirectErrorStream(true);
         builder.environment().put("OCTOP_HOME", home.toString());
+        org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(builder);
         Process process = builder.start();
         StringBuilder output = new StringBuilder();
         Thread reader = new Thread(() -> {
@@ -1682,6 +1683,7 @@ public final class BrandApiServlet extends HttpServlet {
             builder.directory(home.toFile());
             builder.redirectErrorStream(true);
             builder.environment().put("OCTOP_HOME", home.toString());
+            org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(builder);
             Process process = builder.start();
             String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
             if (!process.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)) {

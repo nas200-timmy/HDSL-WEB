@@ -839,10 +839,11 @@ public final class ZcodeBuilder {
         step.log("=== 该运行时没有 pnpm，正在装进 " + prefix + "（只需一次）");
         String registry = org.jackhuang.hmcl.dsh.NpmRegistry.effective().registry();
         try {
-            Process process = new ProcessBuilder(Executables.startable(List.of(npm.toString(),
-                    "install", "--global", "pnpm@11", "--prefix", prefix.toString(), "--registry=" + registry)))
-                    .redirectErrorStream(true)
-                    .start();
+            ProcessBuilder pnpmBuilder = new ProcessBuilder(Executables.startable(List.of(npm.toString(),
+                    "install", "--global", "pnpm@11", "--prefix", prefix.toString(), "--registry=" + registry)));
+            pnpmBuilder.redirectErrorStream(true);
+            org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(pnpmBuilder);
+            Process process = pnpmBuilder.start();
             try (var reader = new java.io.BufferedReader(
                     new java.io.InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
@@ -932,6 +933,7 @@ public final class ZcodeBuilder {
         builder.directory(workingDirectory.toFile());
         builder.redirectErrorStream(true);
         builder.environment().put("PATH", searchPath.toString());
+        org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(builder);
         // Everything a child of the launcher is given: the proxy the settings describe, the npm
         // registry, and the knobs that keep a native build from fetching from the slow half of the
         // internet. The build runs pnpm, node-gyp and git, and all three read these — the proxy

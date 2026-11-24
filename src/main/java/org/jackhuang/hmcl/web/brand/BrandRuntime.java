@@ -437,6 +437,7 @@ public final class BrandRuntime {
                             + " without a usable Node.js (" + node.reason()
                             + "); the tool may fail to start — Settings -> Node.js installs one");
                 }
+                org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(builder);
                 process = builder.start();
             } catch (IOException e) {
                 STATES.put(id, State.ERROR);
@@ -904,6 +905,7 @@ public final class BrandRuntime {
                 == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
             builder.environment().put("USERPROFILE", home.toString());
         }
+        org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(builder);
         Process process = builder.start();
         // Drain on a side thread with a bounded buffer: the old code read the
         // whole stream before waiting, so a wedged `octop init` blocked for

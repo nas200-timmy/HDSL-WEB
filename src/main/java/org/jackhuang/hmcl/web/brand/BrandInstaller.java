@@ -2192,8 +2192,10 @@ public final class BrandInstaller {
             return binary;
         }
         try {
-            Process probe = new ProcessBuilder("uv", "--version")
-                    .redirectErrorStream(true).start();
+            ProcessBuilder probeBuilder = new ProcessBuilder("uv", "--version");
+            probeBuilder.redirectErrorStream(true);
+            org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(probeBuilder);
+            Process probe = probeBuilder.start();
             if (probe.waitFor(10, java.util.concurrent.TimeUnit.SECONDS) && probe.exitValue() == 0) {
                 return Path.of("uv");
             }
@@ -2854,6 +2856,7 @@ public final class BrandInstaller {
                 org.jackhuang.hmcl.util.platform.Executables.startable(command, environment.get("PATH")));
         builder.directory(directory.toFile());
         builder.environment().putAll(environment);
+        org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(builder);
         builder.redirectErrorStream(true);
         Process process = builder.start();
         output.attach(process);

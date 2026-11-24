@@ -261,6 +261,7 @@ public final class ZcodeRuntime {
                 // was passed that path), so asking it for assets put upstream's
                 // candidate #3 one level too deep and the helper was never found.
                 builder.environment().putAll(ZcodeWindowsRuntimeHost.environment(manager.dataRoot()));
+                org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(builder);
                 process = builder.start();
             } catch (IOException e) {
                 STATES.put(id, State.ERROR);

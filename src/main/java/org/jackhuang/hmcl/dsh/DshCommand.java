@@ -168,6 +168,10 @@ public final class DshCommand {
         if (home == null || home.isBlank()) {
             builder.environment().putAll(homeFallback());
         }
+        // Every short command the launcher runs may be a Node.js program: give
+        // it the closure's libraries and the panel's CA roots unless its own
+        // environment already says otherwise.
+        BootstrapEnvironment.apply(builder);
         builder.redirectErrorStream(true);
 
         ManagedProcess process = new ManagedProcess(builder);

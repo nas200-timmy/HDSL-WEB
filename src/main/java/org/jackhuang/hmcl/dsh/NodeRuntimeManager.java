@@ -26,6 +26,7 @@ import org.jackhuang.hmcl.util.io.FileUtils;
 import org.jackhuang.hmcl.util.io.Links;
 import org.jackhuang.hmcl.util.io.NetworkUtils;
 import org.jackhuang.hmcl.util.io.SafePaths;
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.jackhuang.hmcl.util.platform.Platform;
 import org.jackhuang.hmcl.util.tree.ArchiveFileTree;
 import org.jackhuang.hmcl.util.tree.TarFileTree;
@@ -443,6 +444,8 @@ public final class NodeRuntimeManager {
         if (findInstalled(normalized) != null) {
             throw new DshException("Node.js " + normalized + " is already installed");
         }
+        checkRuntimeClosure();
+        ensureCertificateBundle();
 
         String platform = platformTag();
         Path target = DshPaths.runtimeDirectory(normalized);
@@ -548,6 +551,9 @@ public final class NodeRuntimeManager {
                 runtime.binDirectory() + java.io.File.pathSeparator
                         + String.valueOf(System.getenv("PATH")));
         builder.environment().put("npm_config_registry", registry);
+        // `npm` runs on this runtime's node, which needs the closure's libraries
+        // on LD_LIBRARY_PATH when the image is a minimal one.
+        BootstrapEnvironment.apply(builder);
         builder.redirectErrorStream(true);
 
         try {
@@ -617,11 +623,12 @@ public final class NodeRuntimeManager {
         }
         Process process;
         try {
-            process = new ProcessBuilder(
+            ProcessBuilder builder = new ProcessBuilder(
                     org.jackhuang.hmcl.util.platform.Executables.startableProgram(node.toString()),
-                    "--version")
-                    .redirectErrorStream(true)
-                    .start();
+                    "--version");
+            builder.redirectErrorStream(true);
+            BootstrapEnvironment.apply(builder);
+            process = builder.start();
         } catch (IOException e) {
             return new NodeProbe(null, String.valueOf(e.getMessage()));
         }
@@ -692,6 +699,69 @@ public final class NodeRuntimeManager {
         return fresh.runs();
     }
 
+    /// Refuses a Node install whose shared libraries cannot be found.
+    ///
+    /// The check runs before anything is downloaded: a runtime that unpacks and
+    /// then exits 127 is a twenty-minute wait that ends in a message about
+    /// `npm`. On Linux the panel first asks whether the libraries are visible
+    /// (system paths or its own closure), and only then tries to install the
+    /// pinned closure. `libatomic.so.1` is the usual missing one on Debian slim
+    /// images, `libstdc++.so.6` on images with no C++ runtime at all.
+    ///
+    /// @throws DshException naming the missing libraries and both ways to fix it
+    static void checkRuntimeClosure() throws DshException {
+        if (OperatingSystem.CURRENT_OS != OperatingSystem.LINUX) {
+            return;
+        }
+        if (BootstrapRuntimeManager.nodeLibrariesAvailable()) {
+            return;
+        }
+        @Nullable String attempt = null;
+        try {
+            BootstrapRuntimeManager.ensureRuntimeClosure();
+        } catch (IOException | RuntimeException e) {
+            attempt = e.getMessage();
+        }
+        List<String> missing = BootstrapRuntimeManager.missingNodeLibraries();
+        if (missing.isEmpty()) {
+            return;
+        }
+        throw missingClosureError(missing, attempt);
+    }
+
+    /// The actionable refusal, with its inputs named so the wording is testable.
+    ///
+    /// @param missing what the loader cannot find
+    /// @param attempt why installing the closure did not help, or `null` when it did not run
+    /// @return the exception to throw
+    static DshException missingClosureError(List<String> missing, @Nullable String attempt) {
+        String detail = attempt == null || attempt.isBlank()
+                ? " The panel's bootstrap runtime closure could not be installed."
+                : " Installing the panel's bootstrap runtime closure did not help: " + attempt;
+        return new DshException("node_runtime_closure_missing: this machine has no "
+                + String.join(", ", missing)
+                + " visible to the dynamic loader, so Node.js would unpack but not start."
+                + detail
+                + " Install libstdc++6, libgcc-s1 and libatomic1 (Debian/Ubuntu: apt-get install"
+                + " libstdc++6 libgcc-s1 libatomic1) or use an image that ships them.");
+    }
+
+    /// Installs the panel's CA bundle when it is missing, without failing the install.
+    ///
+    /// npm, pnpm and the agents all fetch over TLS. An image with an empty
+    /// `/etc/ssl` fails those requests with a certificate error that reads like
+    /// a network problem; the bundle is small and pinned, so trying once before
+    /// the first download is cheaper than diagnosing that later. A failure is
+    /// logged: a proxy with its own roots may make the bundle unnecessary, and
+    /// the Node.js install itself does not depend on this step.
+    private static void ensureCertificateBundle() {
+        try {
+            BootstrapRuntimeManager.ensureCaBundle();
+        } catch (IOException | RuntimeException e) {
+            LOG.warning("Could not install the bootstrap CA bundle: " + e.getMessage());
+        }
+    }
+
     /// Refuses a runtime whose binary does not run, removing it.
     ///
     /// Called once the archive is unpacked and before anything is installed into
@@ -709,8 +779,11 @@ public final class NodeRuntimeManager {
         PROBES.remove(runtime.directory());
         throw new DshException("Node.js " + runtime.version() + " unpacked but does not run: "
                 + probe.detail()
-                + " — the base image is probably missing a shared library Node.js needs"
-                + " (libatomic1 on Debian-based images)");
+                + " — the base image is missing a shared library Node.js needs"
+                + " (libatomic1/libstdc++6 on Debian-based images). The panel's bootstrap"
+                + " runtime closure supplies libstdc++.so.6, libgcc_s.so.1 and libatomic.so.1;"
+                + " install it from Settings -> Node.js, or apt-get install libstdc++6"
+                + " libgcc-s1 libatomic1 and retry.");
     }
 
     /// Adopts a Node installation the user already has.
@@ -728,6 +801,7 @@ public final class NodeRuntimeManager {
         if (findInstalled(version) != null) {
             throw new DshException("Node.js " + version + " is already managed");
         }
+        checkRuntimeClosure();
 
         Path target = DshPaths.runtimeDirectory(version);
         Path staging = target.resolveSibling(target.getFileName() + ".adopting");
