@@ -161,8 +161,14 @@ public final class DshDoctor {
         out.println("Bootstrap");
         out.println("  catalog:         " + BootstrapCatalog.origin().describe());
         BootstrapRuntimeManager.Installed closure = BootstrapRuntimeManager.currentRuntimeClosure();
-        java.util.List<String> missingLibraries = BootstrapRuntimeManager.missingNodeLibraries();
-        out.println("  runtime closure: " + formatClosure(closure, missingLibraries));
+        // The library closure is a glibc concern: Windows and macOS Node builds do
+        // not link libstdc++/libatomic, so asking on those hosts reports a failure
+        // that is not one.
+        boolean linux = org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                == org.jackhuang.hmcl.util.platform.OperatingSystem.LINUX;
+        out.println("  runtime closure: " + (linux
+                ? formatClosure(closure, BootstrapRuntimeManager.missingNodeLibraries(), true)
+                : formatClosure(closure, java.util.List.of(), false)));
         BootstrapRuntimeManager.CaInstalled ca = BootstrapRuntimeManager.currentCaBundle();
         out.println("  ca bundle:       " + (ca == null
                 ? "not installed (child processes fall back to the JVM's trust store)"
@@ -251,8 +257,17 @@ public final class DshDoctor {
     }
 
     /// The closure row: what the loader can see, and whether anything was fetched.
+    ///
+    /// @param closure the managed closure, or `null`
+    /// @param missing the Node.js libraries the loader cannot find (Linux only)
+    /// @param linux   whether the host is Linux, where the question applies at all
     static String formatClosure(@Nullable BootstrapRuntimeManager.Installed closure,
-                                java.util.List<String> missing) {
+                                java.util.List<String> missing, boolean linux) {
+        if (!linux) {
+            return "not applicable  [the Node.js build for this OS does not link"
+                    + " libstdc++/libatomic]"
+                    + (closure == null ? "" : "  (managed bundle present: " + closure.version() + ")");
+        }
         if (!missing.isEmpty()) {
             return "MISSING " + String.join(", ", missing)
                     + "  [a Node.js binary would not start]";

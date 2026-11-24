@@ -48,15 +48,23 @@ public class DshDoctorBootstrapTest {
 
     @Test
     public void aHostThatProvidesTheClosureSaysNothingWasDownloaded() {
-        String line = DshDoctor.formatClosure(null, List.of());
+        String line = DshDoctor.formatClosure(null, List.of(), true);
         assertTrue(line.contains("nothing downloaded"), line);
     }
 
     @Test
     public void aMissingLibraryIsShouted() {
-        String line = DshDoctor.formatClosure(null, List.of("libatomic.so.1", "libstdc++.so.6"));
+        String line = DshDoctor.formatClosure(null,
+                List.of("libatomic.so.1", "libstdc++.so.6"), true);
         assertTrue(line.startsWith("MISSING libatomic.so.1"), line);
         assertTrue(line.contains("would not start"), line);
+    }
+
+    @Test
+    public void windowsSaysTheClosureQuestionDoesNotApply() {
+        String line = DshDoctor.formatClosure(null, List.of(), false);
+        assertTrue(line.startsWith("not applicable"), line);
+        assertTrue(line.contains("libstdc++/libatomic"), line);
     }
 
     @Test
