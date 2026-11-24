@@ -435,17 +435,30 @@ public final class FfmpegRuntimeManager {
                 ? binDir.getParent() : null;
         if (root != null && root.equals(staging)) {
             move(staging, versionDir);
-            return;
-        }
-        if (root != null && root.startsWith(staging) && !Files.exists(versionDir)) {
+        } else if (root != null && root.startsWith(staging) && !Files.exists(versionDir)) {
             move(root, versionDir);
             FfmpegArchive.deleteTree(staging);
+        } else {
+            Path targetBin = versionDir.resolve("bin");
+            Files.createDirectories(targetBin);
+            Files.copy(ffmpeg, targetBin.resolve(ffmpeg.getFileName()),
+                    StandardCopyOption.REPLACE_EXISTING);
+            Files.copy(ffprobe, targetBin.resolve(ffprobe.getFileName()),
+                    StandardCopyOption.REPLACE_EXISTING);
             return;
         }
+        // Some portable archives (Jellyfin's, for one) put the binaries at the
+        // root instead of under `bin/`; the rest of the manager assumes one
+        // layout, so normalise here rather than in every caller.
         Path targetBin = versionDir.resolve("bin");
         Files.createDirectories(targetBin);
-        Files.copy(ffmpeg, targetBin.resolve(ffmpeg.getFileName()), StandardCopyOption.REPLACE_EXISTING);
-        Files.copy(ffprobe, targetBin.resolve(ffprobe.getFileName()), StandardCopyOption.REPLACE_EXISTING);
+        for (Path binary : java.util.List.of(ffmpeg, ffprobe)) {
+            Path flat = versionDir.resolve(binary.getFileName());
+            if (Files.isRegularFile(flat)) {
+                Files.move(flat, targetBin.resolve(binary.getFileName()),
+                        StandardCopyOption.REPLACE_EXISTING);
+            }
+        }
     }
 
     private static void move(Path source, Path target) throws IOException {

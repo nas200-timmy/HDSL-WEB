@@ -75,7 +75,7 @@ class FfmpegCatalogTest {
         assertFalse(catalog.entries().isEmpty());
         assertNotNull(catalog.find("linux-x64-glibc-gpl-btbn-8.1.3-2026-10"));
         assertEquals(List.of("7.1", "8.1", "9.1"), catalog.majors());
-        assertEquals(10, catalog.entries().size());
+        assertEquals(12, catalog.entries().size());
         assertEquals(3, catalog.entries().stream().filter(FfmpegCatalog.Entry::isSource).count());
     }
 

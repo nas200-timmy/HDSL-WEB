@@ -320,6 +320,77 @@
       "size": 12557532,
       "archive": "tar.xz",
       "notes": "官方 9.1 源码（ffmpeg.org），SHA-256 由本机下载 tar.xz 计算；.asc 为官方签名。features 是构建脚本可尝试启用的集合，实际以工具链预检为准；GPL 仅当启用 libx264/libx265 时记录。"
+    },
+    {
+      "id": "linux-x64-glibc-gpl-jellyfin-8.1.3-2",
+      "os": "linux",
+      "arch": "x64",
+      "libc": "glibc",
+      "ffmpegVersion": "8.1.3",
+      "license": "GPL-3.0",
+      "kind": "binary",
+      "vendor": "jellyfin",
+      "major": "8.1",
+      "variant": "portable",
+      "minGlibc": "2.28",
+      "mirrors": [
+        "https://mirror.lzu.edu.cn/jellyfin/ffmpeg/linux/8.x/8.1.3-2/amd64/jellyfin-ffmpeg_8.1.3-2_portable_linux64-gpl.tar.xz"
+      ],
+      "signatureUrl": "",
+      "buildRecipe": "",
+      "features": [
+        "libx264",
+        "libx265",
+        "libvpx",
+        "libsvtav1",
+        "libopus",
+        "libmp3lame",
+        "nvenc",
+        "qsv",
+        "vaapi",
+        "amf"
+      ],
+      "url": "https://repo.jellyfin.org/files/ffmpeg/linux/8.x/8.1.3-2/amd64/jellyfin-ffmpeg_8.1.3-2_portable_linux64-gpl.tar.xz",
+      "sha256": "1df84d04c4322902dba81c290508cdf3d89524d210b9fe03154bea6c4e3bfbb6",
+      "size": 60657368,
+      "archive": "tar.xz",
+      "notes": "Jellyfin 的便携 ffmpeg 8.1.3-2（Linux x64，GPL）。归档里 ffmpeg/ffprobe 直接在根目录，安装器会归位到 bin/。SHA-256 由本机下载计算；兰州大学镜像为同一份字节。"
+    },
+    {
+      "id": "windows-x64-gpl-jellyfin-8.1.3-2",
+      "os": "windows",
+      "arch": "x64",
+      "libc": "none",
+      "ffmpegVersion": "8.1.3",
+      "license": "GPL-3.0",
+      "kind": "binary",
+      "vendor": "jellyfin",
+      "major": "8.1",
+      "variant": "portable",
+      "minGlibc": "",
+      "mirrors": [
+        "https://mirror.lzu.edu.cn/jellyfin/ffmpeg/windows/8.x/8.1.3-2/win64/jellyfin-ffmpeg_8.1.3-2_portable_win64-clang-gpl.zip"
+      ],
+      "signatureUrl": "",
+      "buildRecipe": "",
+      "features": [
+        "libx264",
+        "libx265",
+        "libvpx",
+        "libsvtav1",
+        "libopus",
+        "libmp3lame",
+        "nvenc",
+        "qsv",
+        "amf",
+        "d3d11va",
+        "dxva2"
+      ],
+      "url": "https://repo.jellyfin.org/files/ffmpeg/windows/8.x/8.1.3-2/win64/jellyfin-ffmpeg_8.1.3-2_portable_win64-clang-gpl.zip",
+      "sha256": "b65dd5011a80b5abec08bd559489cf188217238c8e38b5bf553504c974f5694d",
+      "size": 68466554,
+      "archive": "zip",
+      "notes": "Jellyfin 的便携 ffmpeg 8.1.3-2（Windows x64，clang 构建，GPL）。归档里 ffmpeg.exe/ffprobe.exe 直接在根目录，安装器会归位到 bin/。SHA-256 由本机下载计算；兰州大学镜像为同一份字节。"
     }
   ]
 }
