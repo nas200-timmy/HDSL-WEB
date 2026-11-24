@@ -2410,6 +2410,8 @@ public final class BrandInstaller {
             // name `uv`, so a mismatched download can never be executed later.
             UvRuntime.verify(extracted, url);
             Files.move(extracted, binary, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            org.jackhuang.hmcl.dsh.BootstrapTrace.installed("uv", "brand-build", url,
+                    "pinned-sha256:" + UvRuntime.binarySha256(), binary);
             Files.setPosixFilePermissions(binary,
                     java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"));
             Files.deleteIfExists(archive);
@@ -2610,6 +2612,9 @@ public final class BrandInstaller {
             }
             UvRuntime.verify(staged, url);
             Files.move(staged, binary, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            org.jackhuang.hmcl.dsh.BootstrapTrace.installed("uv", "brand-build", url,
+                    (declaredSha == null ? "pinned-sha256:" : "index+pinned-sha256:")
+                            + UvRuntime.binarySha256(), binary);
             try {
                 Files.setPosixFilePermissions(binary, PosixFilePermissions.fromString("rwxr-xr-x"));
             } catch (UnsupportedOperationException ignored) {

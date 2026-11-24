@@ -707,6 +707,7 @@ public final class BuildToolchainManager {
                                      BooleanSupplier cancelled) throws IOException {
         Toolchain existing = installedWindows();
         if (existing != null) {
+            BootstrapTrace.reused("toolchain", WINDOWS_VERSION, existing.directory());
             return existing;
         }
         Files.createDirectories(root);
@@ -757,6 +758,7 @@ public final class BuildToolchainManager {
                                    BooleanSupplier cancelled) throws IOException {
         Toolchain existing = installedLinux();
         if (existing != null) {
+            BootstrapTrace.reused("toolchain", LINUX_VERSION, existing.directory());
             return existing;
         }
         Files.createDirectories(root);
@@ -1046,6 +1048,10 @@ public final class BuildToolchainManager {
         Privileges.handTreeToAgent(target);
         activate(version);
         detectCache = null;
+        for (ArtifactRecord artifact : record.artifacts) {
+            BootstrapTrace.installed("toolchain", artifact.name, artifact.url,
+                    "sha256:" + artifact.sha256, target);
+        }
     }
 
     private void activate(String version) throws IOException {

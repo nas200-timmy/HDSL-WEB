@@ -409,6 +409,7 @@ public final class PythonRuntimeManager {
         Installed existing = find(version);
         if (existing != null) {
             activate(version);
+            BootstrapTrace.reused("python", version, existing.directory());
             return new Installed(existing.version(), existing.directory(),
                     existing.interpreter(), existing.record(), true);
         }
@@ -455,6 +456,7 @@ public final class PythonRuntimeManager {
             Installed existing = find(version);
             if (existing != null) {
                 activate(version);
+                BootstrapTrace.reused("python", version, existing.directory());
                 return new Installed(existing.version(), existing.directory(),
                         existing.interpreter(), existing.record(), true);
             }
@@ -505,6 +507,8 @@ public final class PythonRuntimeManager {
                 activate(version);
                 activated = true;
                 progress.stage("CPython " + version + " installed", 1);
+                BootstrapTrace.installed("python", version, artifact.url(),
+                        "sha256:" + artifact.sha256(), versionDir);
                 return new Installed(version, versionDir, versionDir.resolve(record.interpreter),
                         record, true);
             } finally {

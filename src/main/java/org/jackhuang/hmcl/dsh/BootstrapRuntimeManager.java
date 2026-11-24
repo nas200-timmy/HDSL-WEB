@@ -415,6 +415,10 @@ public final class BootstrapRuntimeManager {
                 activate(runtimeRoot, runtime.version(), RUNTIME_RECORD);
                 activated = true;
                 progress.stage("runtime closure " + runtime.version() + " installed", 1);
+                for (ArtifactRecord artifact : artifacts) {
+                    BootstrapTrace.installed("closure", artifact.name, artifact.url,
+                            "snapshot-sha256:" + artifact.sha256, versionDir);
+                }
                 return new Installed(runtime.version(), versionDir, record, true);
             } finally {
                 deleteTree(staging);
@@ -533,6 +537,8 @@ public final class BootstrapRuntimeManager {
                 move(staging, versionDir);
                 activate(caRoot, ca.version(), CA_RECORD);
                 activated = true;
+                BootstrapTrace.installed("ca", ca.version(), ca.url(),
+                        "sha256:" + ca.sha256(), versionDir);
                 progress.stage("CA bundle " + ca.version() + " installed", 1);
                 return new CaInstalled(ca.version(), versionDir,
                         versionDir.resolve(ca.fileName()), record, true);

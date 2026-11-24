@@ -714,6 +714,8 @@ public final class NodeRuntimeManager {
             return;
         }
         if (BootstrapRuntimeManager.nodeLibrariesAvailable()) {
+            BootstrapTrace.note("closure", "the host's loader finds the Node libraries;"
+                    + " nothing is downloaded");
             return;
         }
         @Nullable String attempt = null;
@@ -735,6 +737,8 @@ public final class NodeRuntimeManager {
     /// @param attempt why installing the closure did not help, or `null` when it did not run
     /// @return the exception to throw
     static DshException missingClosureError(List<String> missing, @Nullable String attempt) {
+        BootstrapTrace.refused("closure", "node", "missing " + String.join(", ", missing)
+                + (attempt == null ? "" : "; installing the closure did not help: " + attempt));
         String detail = attempt == null || attempt.isBlank()
                 ? " The panel's bootstrap runtime closure could not be installed."
                 : " Installing the panel's bootstrap runtime closure did not help: " + attempt;
@@ -755,6 +759,8 @@ public final class NodeRuntimeManager {
     /// logged: a proxy with its own roots may make the bundle unnecessary, and
     /// the Node.js install itself does not depend on this step.
     private static void ensureCertificateBundle() {
+        BootstrapTrace.note("ca", "installed before the first fetch on purpose: a missing"
+                + " bundle fails as a certificate error that reads like a network problem");
         try {
             BootstrapRuntimeManager.ensureCaBundle();
         } catch (IOException | RuntimeException e) {

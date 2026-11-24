@@ -147,6 +147,29 @@ public final class DshDoctor {
         }
         out.println();
 
+        out.println("Python");
+        PythonResolver.Interpreter python = PythonResolver.resolve();
+        out.println("  interpreter: " + formatPython(python));
+        PythonRuntimeManager.Installed managed = PythonRuntimeManager.currentShared();
+        out.println("  managed:     " + (managed == null
+                ? "not installed (downloaded only when an install needs a version the host lacks)"
+                : managed.version() + " " + managed.directory()));
+        out.println("  policy:      HDSL_PYTHON/PYTHON wins, then a system python3, then the"
+                + " managed line; PATH is only touched for the managed one");
+        out.println();
+
+        out.println("Bootstrap");
+        BootstrapRuntimeManager.Installed closure = BootstrapRuntimeManager.currentRuntimeClosure();
+        java.util.List<String> missingLibraries = BootstrapRuntimeManager.missingNodeLibraries();
+        out.println("  runtime closure: " + formatClosure(closure, missingLibraries));
+        BootstrapRuntimeManager.CaInstalled ca = BootstrapRuntimeManager.currentCaBundle();
+        out.println("  ca bundle:       " + (ca == null
+                ? "not installed (child processes fall back to the JVM's trust store)"
+                : "installed " + ca.version() + " " + ca.file()));
+        out.println("  build toolchain: " + formatToolchain(BuildToolchainManager.currentInstalled()));
+        out.println("  uv:              " + UvRuntime.summary());
+        out.println();
+
         out.println("File watchers");
         if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
                 == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
@@ -198,6 +221,49 @@ public final class DshDoctor {
         out.println(runtimeOk ? "Result: ready to install DeepSeek Harness versions."
                 : "Result: the JavaScript toolchain is incomplete.");
         return runtimeOk ? 0 : 1;
+    }
+
+    /// The Python row: version, path, origin and the two capabilities that decide
+    /// whether a brand's `uv sync` can work at all.
+    static String formatPython(PythonResolver.Interpreter python) {
+        if (!python.usable()) {
+            return "none (" + python.detail() + ")";
+        }
+        return python.version() + "  " + python.executable()
+                + "  [" + python.origin().name().toLowerCase(java.util.Locale.ROOT) + "]"
+                + "  venv=" + (python.venv() ? "yes" : "no")
+                + "  pep668=" + (python.externallyManaged() ? "yes" : "no")
+                + (python.detail().isEmpty() ? "" : "  (" + python.detail() + ")");
+    }
+
+    /// The closure row: what the loader can see, and whether anything was fetched.
+    static String formatClosure(@Nullable BootstrapRuntimeManager.Installed closure,
+                                java.util.List<String> missing) {
+        if (!missing.isEmpty()) {
+            return "MISSING " + String.join(", ", missing)
+                    + "  [a Node.js binary would not start]";
+        }
+        if (closure == null) {
+            return "not installed  [the host's loader finds the libraries; nothing downloaded]";
+        }
+        return "installed " + closure.version() + "  " + closure.directory();
+    }
+
+    /// The build-toolchain row: a portable bundle or the host's own programs.
+    static String formatToolchain(@Nullable BuildToolchainManager.Toolchain toolchain) {
+        if (toolchain == null) {
+            return "none  [no host cc/c++/make and no portable bundle]";
+        }
+        if (toolchain.portable() && toolchain.directory() != null) {
+            return "portable " + toolchain.os() + "-" + toolchain.arch() + "  "
+                    + toolchain.directory()
+                    + (toolchain.usable() ? "" : "  [INCOMPLETE: " + String.join(", ",
+                    toolchain.missing()) + "]");
+        }
+        return "host " + toolchain.os() + "-" + toolchain.arch()
+                + "  cc=" + String.valueOf(toolchain.pathOf("cc"))
+                + (toolchain.usable() ? "" : "  [MISSING: " + String.join(", ",
+                        toolchain.missing()) + "]");
     }
 
     /// Prints the kernel's file-watch budget as a section of the report.
