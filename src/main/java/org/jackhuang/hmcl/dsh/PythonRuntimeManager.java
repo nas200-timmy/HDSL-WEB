@@ -810,7 +810,55 @@ public final class PythonRuntimeManager {
         }
     }
 
-    private static void verifyRuns(Path interpreter) throws IOException {
+    /// Proves the interpreter starts, and repairs the one Windows failure that
+    /// is not the archive's fault.
+    ///
+    /// python-build-standalone's Windows builds link the MSVC runtime. On a
+    /// machine with only a JDK the first missing thing is `VCRUNTIME140.dll`,
+    /// which reads like "the download is broken" while it is really "the image
+    /// has no Visual C++ runtime". The JDK is itself an MSVC product and often
+    /// carries a copy, and Windows searches the application directory before
+    /// `System32`, so dropping one next to `python.exe` fixes it without
+    /// touching the system. When no copy exists the refusal names the DLL
+    /// instead of reporting a generic exit code.
+    ///
+    /// @param interpreter the extracted interpreter
+    /// @throws IOException `python_runtime_vcruntime_missing` when the DLL is
+    ///                     absent and nothing could be copied, `python_runtime_invalid`
+    ///                     for any other startup failure
+    static void verifyRuns(Path interpreter) throws IOException {
+        ProcessResult result = runPythonOnce(interpreter);
+        if (result.exitCode() == 0) {
+            return;
+        }
+        String tail = tail(result.output());
+        if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS
+                && mentionsVcruntime(result.output())) {
+            List<Path> copied = installWindowsRuntime(interpreter.getParent(),
+                    vcruntimeCandidates(Path.of(System.getProperty("java.home")),
+                            System.getenv("SystemRoot")));
+            if (!copied.isEmpty()) {
+                BootstrapTrace.note("python", "copied the MSVC runtime next to python.exe: "
+                        + String.join(", ", copied.stream().map(Path::toString).toList()));
+                ProcessResult retried = runPythonOnce(interpreter);
+                if (retried.exitCode() == 0) {
+                    return;
+                }
+                result = retried;
+                tail = tail(retried.output());
+            }
+            throw new IOException("python_runtime_vcruntime_missing: " + interpreter
+                    + " cannot start because VCRUNTIME140.dll is not present."
+                    + " No copy was found beside the JDK either; install the Microsoft Visual C++"
+                    + " Redistributable, or place vcruntime140.dll next to python.exe."
+                    + (tail.isEmpty() ? "" : " Output: " + tail));
+        }
+        throw new IOException("python_runtime_invalid: " + interpreter + " exited with "
+                + result.exitCode() + (tail.isEmpty() ? "" : ": " + tail));
+    }
+
+    /// One `-c pass` run, with the timeout the old inline check used.
+    private static ProcessResult runPythonOnce(Path interpreter) throws IOException {
         ProcessBuilder builder = new ProcessBuilder(interpreter.toString(), "-c", "pass");
         builder.redirectErrorStream(true);
         Process process;
@@ -831,18 +879,73 @@ public final class PythonRuntimeManager {
             process.destroyForcibly();
             throw new IOException("python_runtime_interrupted", e);
         }
-        String output;
         try (InputStream in = process.getInputStream()) {
-            output = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            return new ProcessResult(process.exitValue(),
+                    new String(in.readAllBytes(), StandardCharsets.UTF_8));
         }
-        if (process.exitValue() != 0) {
-            String tail = output.strip();
-            if (tail.length() > 400) {
-                tail = tail.substring(tail.length() - 400);
+    }
+
+    /// The last 400 characters of an output block.
+    static String tail(String output) {
+        String stripped = output == null ? "" : output.strip();
+        return stripped.length() > 400 ? stripped.substring(stripped.length() - 400) : stripped;
+    }
+
+    /// Whether a startup failure is the MSVC runtime one.
+    static boolean mentionsVcruntime(String output) {
+        return output != null && output.toLowerCase(java.util.Locale.ROOT).contains("vcruntime");
+    }
+
+    /// Where a redistributable MSVC runtime may already exist.
+    ///
+    /// The JDK first: Temurin and friends are built with MSVC and their `bin`
+    /// sometimes carries the runtime. `System32` is the fallback, where an
+    /// installed redistributable puts it.
+    ///
+    /// @param javaHome   `java.home`
+    /// @param systemRoot `%SystemRoot%`, or `null`
+    /// @return existing candidate files, one per name
+    static List<Path> vcruntimeCandidates(Path javaHome, @Nullable String systemRoot) {
+        List<Path> directories = new ArrayList<>();
+        directories.add(javaHome.resolve("bin"));
+        directories.add(javaHome);
+        if (systemRoot != null && !systemRoot.isBlank()) {
+            directories.add(Path.of(systemRoot, "System32"));
+        }
+        List<Path> found = new ArrayList<>();
+        for (String name : List.of("vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll")) {
+            for (Path directory : directories) {
+                Path candidate = directory.resolve(name);
+                if (Files.isRegularFile(candidate)) {
+                    found.add(candidate);
+                    break;
+                }
             }
-            throw new IOException("python_runtime_invalid: " + interpreter + " exited with "
-                    + process.exitValue() + (tail.isEmpty() ? "" : ": " + tail));
         }
+        return found;
+    }
+
+    /// Copies those files next to the interpreter, skipping ones already there.
+    ///
+    /// @param directory  the interpreter's directory
+    /// @param candidates the files `vcruntimeCandidates` found
+    /// @return what was copied
+    static List<Path> installWindowsRuntime(Path directory, List<Path> candidates)
+            throws IOException {
+        List<Path> copied = new ArrayList<>();
+        Files.createDirectories(directory);
+        for (Path source : candidates) {
+            Path target = directory.resolve(source.getFileName().toString());
+            if (Files.isRegularFile(target)) {
+                continue;
+            }
+            Files.copy(source, target);
+            copied.add(target);
+        }
+        return copied;
+    }
+
+    private record ProcessResult(int exitCode, String output) {
     }
 
     // ------------------------------------------------------------- activation --

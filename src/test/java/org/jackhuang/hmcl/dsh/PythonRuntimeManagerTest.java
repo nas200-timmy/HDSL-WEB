@@ -318,4 +318,67 @@ class PythonRuntimeManagerTest {
                 path -> path.toString().equals("/lib/ld-musl-x86_64.so.1")));
         assertFalse(PythonRuntimeManager.isMusl(path -> false));
     }
+
+    @Test
+    void aVcruntimeFailureIsRecognised() {
+        assertTrue(PythonRuntimeManager.mentionsVcruntime(
+                "Error: [WinError 126] The specified module could not be found.\n"
+                        + "VCRUNTIME140.dll was not found"));
+        assertFalse(PythonRuntimeManager.mentionsVcruntime("ImportError: no module named ssl"));
+        assertFalse(PythonRuntimeManager.mentionsVcruntime(null));
+    }
+
+    @Test
+    void theJdkIsProbedBeforeSystem32(@TempDir Path dir) throws Exception {
+        Path jdkBin = Files.createDirectories(dir.resolve("jdk/bin"));
+        Path system32 = Files.createDirectories(dir.resolve("windows/System32"));
+        Files.writeString(jdkBin.resolve("vcruntime140.dll"), "jdk copy");
+        Files.writeString(system32.resolve("vcruntime140.dll"), "system copy");
+        Files.writeString(system32.resolve("vcruntime140_1.dll"), "system copy 1");
+
+        java.util.List<Path> found = PythonRuntimeManager.vcruntimeCandidates(
+                dir.resolve("jdk"), dir.resolve("windows").toString());
+
+        assertEquals(jdkBin.resolve("vcruntime140.dll"), found.get(0));
+        assertEquals(2, found.size(), found.toString());
+    }
+
+    @Test
+    void onlyMissingRuntimeFilesAreCopied(@TempDir Path dir) throws Exception {
+        Path source = Files.createDirectories(dir.resolve("jdk/bin"));
+        Path target = Files.createDirectories(dir.resolve("python-3.12.16"));
+        Path first = source.resolve("vcruntime140.dll");
+        Path second = source.resolve("vcruntime140_1.dll");
+        Files.writeString(first, "one");
+        Files.writeString(second, "two");
+        Files.writeString(target.resolve("vcruntime140.dll"), "already here");
+
+        java.util.List<Path> copied = PythonRuntimeManager.installWindowsRuntime(
+                target, java.util.List.of(first, second));
+
+        assertEquals(java.util.List.of(target.resolve("vcruntime140_1.dll")), copied);
+        assertEquals("already here",
+                Files.readString(target.resolve("vcruntime140.dll")));
+        assertEquals("two", Files.readString(target.resolve("vcruntime140_1.dll")));
+    }
+
+    @Test
+    void aBrokenInterpreterNamesItsExitCode(@TempDir Path dir) throws Exception {
+        Path fake = dir.resolve("python3");
+        Files.writeString(fake, "#!/bin/sh\necho boom >&2\nexit 7\n");
+        fake.toFile().setExecutable(true);
+        java.io.IOException e = assertThrows(java.io.IOException.class,
+                () -> PythonRuntimeManager.verifyRuns(fake));
+        assertTrue(e.getMessage().startsWith("python_runtime_invalid"), e.getMessage());
+        assertTrue(e.getMessage().contains("exited with 7"), e.getMessage());
+        assertTrue(e.getMessage().contains("boom"), e.getMessage());
+    }
+
+    @Test
+    void aWorkingInterpreterPasses(@TempDir Path dir) throws Exception {
+        Path fake = dir.resolve("python3");
+        Files.writeString(fake, "#!/bin/sh\nexit 0\n");
+        fake.toFile().setExecutable(true);
+        PythonRuntimeManager.verifyRuns(fake);
+    }
 }
