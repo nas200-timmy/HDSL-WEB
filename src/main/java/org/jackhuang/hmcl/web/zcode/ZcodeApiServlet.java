@@ -802,7 +802,8 @@ public final class ZcodeApiServlet extends HttpServlet {
             template = template.replace("/refs/tags/", "/refs/heads/");
         }
         return new ZcodeBuilder.Settings(buildSettings.root(), buildSettings.buildBin(),
-                buildSettings.pnpm(), template, buildSettings.keepSources());
+                buildSettings.pnpm(), template, buildSettings.keepSources(),
+                buildSettings.pythonRoot());
     }
 
     private static JsonObject buildJson(ZcodeBuilder.Status status) {

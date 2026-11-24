@@ -24,7 +24,9 @@ import org.jetbrains.annotations.Nullable;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Predicate;
 
@@ -37,7 +39,10 @@ import java.util.function.Predicate;
 ///   and `libatomic` live — without it a Node.js binary that links them exits
 ///   127 before it prints a version;
 /// - `SSL_CERT_FILE` and its siblings point npm, git, Python requests and the
-///   agents' own TLS stacks at the panel's `cacert.pem`.
+///   agents' own TLS stacks at the panel's `cacert.pem`;
+/// - a shared CPython, when [PythonRuntimeManager] has installed one, puts its
+///   `bin` on `PATH` and names it in `PYTHON` and `npm_config_python`, which is
+///   what node-gyp reads.
 ///
 /// `SHELL` is only set when a real shell exists. A child that is told
 /// `SHELL=/bin/bash` on an image without bash does not fall back; it fails when
@@ -59,8 +64,11 @@ public final class BootstrapEnvironment {
     public static Map<String, String> additions() {
         Installed runtime = BootstrapRuntimeManager.currentRuntimeClosure();
         BootstrapRuntimeManager.CaInstalled ca = BootstrapRuntimeManager.currentCaBundle();
+        PythonRuntimeManager.Installed python = PythonRuntimeManager.currentShared();
         return additions(runtime == null ? null : runtime.directory(),
-                ca == null ? null : ca.file(), System.getenv(), Files::exists);
+                ca == null ? null : ca.file(),
+                python == null ? null : python.directory(),
+                System.getenv(), Files::exists);
     }
 
     /// Applies the additions to a mutable environment map.
@@ -72,8 +80,11 @@ public final class BootstrapEnvironment {
     public static void apply(Map<String, String> environment) {
         Installed runtime = BootstrapRuntimeManager.currentRuntimeClosure();
         BootstrapRuntimeManager.CaInstalled ca = BootstrapRuntimeManager.currentCaBundle();
+        PythonRuntimeManager.Installed python = PythonRuntimeManager.currentShared();
         environment.putAll(additions(runtime == null ? null : runtime.directory(),
-                ca == null ? null : ca.file(), environment, Files::exists));
+                ca == null ? null : ca.file(),
+                python == null ? null : python.directory(),
+                environment, Files::exists));
     }
 
     /// Applies the additions to a child process.
@@ -94,17 +105,56 @@ public final class BootstrapEnvironment {
     /// @return the variables to add or replace
     static Map<String, String> additions(@Nullable Path runtimeDirectory, @Nullable Path caFile,
                                          Map<String, String> base, Predicate<Path> exists) {
+        return additions(runtimeDirectory, caFile, null, base, exists);
+    }
+
+    /// The pure form including the shared Python runtime.
+    ///
+    /// @param runtimeDirectory the active runtime closure's version directory,
+    ///                         or `null`
+    /// @param caFile           the active `cacert.pem`, or `null`
+    /// @param pythonDirectory  the active CPython version directory, or `null`
+    /// @param base             the environment the additions are computed against
+    /// @param exists           how to ask whether a path exists
+    /// @return the variables to add or replace
+    static Map<String, String> additions(@Nullable Path runtimeDirectory, @Nullable Path caFile,
+                                         @Nullable Path pythonDirectory,
+                                         Map<String, String> base, Predicate<Path> exists) {
         Map<String, String> additions = new LinkedHashMap<>();
+        List<Path> pathPrefixes = new ArrayList<>();
         if (runtimeDirectory != null) {
             Path bin = runtimeDirectory.resolve("bin");
             Path lib = runtimeDirectory.resolve("lib");
             if (exists.test(bin) && (exists.test(bin.resolve("setpriv"))
                     || exists.test(bin.resolve("bash")))) {
-                additions.put("PATH", prepend(bin, base.get("PATH")));
+                pathPrefixes.add(bin);
             }
             if (exists.test(lib)) {
                 additions.put("LD_LIBRARY_PATH", prepend(lib, base.get("LD_LIBRARY_PATH")));
             }
+        }
+        if (pythonDirectory != null) {
+            Path interpreter = null;
+            for (String relative : List.of("bin/python3", "bin/python", "python.exe",
+                    "python/bin/python3", "python/bin/python", "python/python.exe")) {
+                Path candidate = pythonDirectory.resolve(relative);
+                if (exists.test(candidate)) {
+                    interpreter = candidate;
+                    break;
+                }
+            }
+            if (interpreter != null) {
+                pathPrefixes.add(interpreter.getParent());
+                putIfUnusable(additions, base, "PYTHON", interpreter.toString());
+                putIfUnusable(additions, base, "npm_config_python", interpreter.toString());
+            }
+        }
+        if (!pathPrefixes.isEmpty()) {
+            String path = base.get("PATH");
+            for (int i = pathPrefixes.size() - 1; i >= 0; i--) {
+                path = prepend(pathPrefixes.get(i), path);
+            }
+            additions.put("PATH", path);
         }
         if (caFile != null && exists.test(caFile)) {
             String path = caFile.toString();

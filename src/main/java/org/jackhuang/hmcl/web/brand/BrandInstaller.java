@@ -17,11 +17,13 @@
  */
 package org.jackhuang.hmcl.web.brand;
 
+import org.jackhuang.hmcl.dsh.BootstrapRuntimeManager;
 import org.jackhuang.hmcl.dsh.DshNodeRuntime;
 import org.jackhuang.hmcl.dsh.NodeRuntime;
 import org.jackhuang.hmcl.dsh.NodeRuntimeManager;
 import org.jackhuang.hmcl.dsh.NodeSemver;
 import org.jackhuang.hmcl.dsh.NpmRegistry;
+import org.jackhuang.hmcl.dsh.PythonRuntimeManager;
 import org.jackhuang.hmcl.util.io.FileUtils;
 import org.jackhuang.hmcl.util.io.Links;
 import org.jackhuang.hmcl.util.platform.Architecture;
@@ -1579,7 +1581,6 @@ public final class BrandInstaller {
                 + pythonMirror.url() + " (" + pythonMirror.source() + ")");
         Map<String, String> pythonEnv = new HashMap<>();
         pythonEnv.put("UV_CACHE_DIR", brandRoot.resolve("cache/uv").toString());
-        pythonEnv.put("UV_PYTHON_INSTALL_DIR", brandRoot.resolve("toolchain/python").toString());
         pythonEnv.put("UV_LINK_MODE", "copy");
         pythonEnv.put("PYTHONDONTWRITEBYTECODE", "1");
         // uv reads both names; the deprecated one is kept for older toolchains and for the
@@ -1589,11 +1590,16 @@ public final class BrandInstaller {
         if (!BrandSources.PYTHON_DEFAULT.equals(pythonMirror.url())) {
             pythonEnv.put("UV_PYTHON_INSTALL_MIRROR", pythonMirror.url());
         }
-        stage(message, 5, total, "安装 Python 依赖（uv sync + CPython 3.12）", 0.65, 0.30, 300, () -> {
+        stage(message, 5, total, "安装 Python 依赖（uv sync + 共享 CPython 3.12）", 0.65, 0.30, 300, () -> {
+            PythonRuntimeManager.Installed python = ensureSharedPython(message);
+            message.accept("共享 CPython " + PythonRuntimeManager.DEFAULT_VERSION + "："
+                    + python.interpreter() + "（缓存于 " + python.directory() + "）");
+            pythonEnv.put("PYTHON", python.interpreter().toString());
             UvWatcher uvProgress = new UvWatcher(message, brandRoot,
                     target.resolve(".venv"), brandRoot.resolve("cache/uv/archive-v0"));
             try (uvProgress) {
-                runChecked(List.of(uv.toString(), "sync", "--frozen", "--no-dev", "--python", "3.12"),
+                runChecked(List.of(uv.toString(), "sync", "--frozen", "--no-dev",
+                                "--python", python.interpreter().toString()),
                         target, pythonEnv, log, uvProgress, "installing the Python environment");
             }
         });
@@ -1886,26 +1892,29 @@ public final class BrandInstaller {
         }));
 
         Path[] pythonHolder = new Path[1];
-        stage(message, 2, total, "准备 CPython " + lock.pythonVersion(), 0.13, 0.12, 120, () -> ioStep(() -> {
-            Path pythonRoot = toolchainDirectory(brandRoot).resolve("python");
-            Files.createDirectories(pythonRoot);
-            Path destination = pythonRoot.resolve(lock.pythonVersion());
-            Path python = findInterpreter(destination);
-            if (python == null) {
-                Path archiveFile = Files.createTempFile(pythonRoot, "python", ".tar.gz");
-                try {
-                    downloadArtifact(lock.python(), archiveFile, message);
-                    extractTarGz(archiveFile, destination, message::cancelled);
-                } finally {
-                    Files.deleteIfExists(archiveFile);
-                }
-                python = findInterpreter(destination);
-            }
-            if (python == null) {
-                throw new BrandException("the CPython archive holds no interpreter under " + destination);
-            }
-            pythonHolder[0] = python;
-        }));
+        stage(message, 2, total, "准备 CPython " + lock.pythonVersion() + "（共享缓存）", 0.13, 0.12, 120,
+                () -> ioStep(() -> {
+                    PythonRuntimeManager.Artifact artifact;
+                    try {
+                        artifact = new PythonRuntimeManager.Artifact(
+                                lock.python().url(), lock.python().sha256(), 0, null);
+                    } catch (IllegalArgumentException e) {
+                        throw new BrandException("python_runtime_missing: the release pins no usable CPython"
+                                + " artifact (" + e.getMessage() + ")", e);
+                    }
+                    try {
+                        PythonRuntimeManager.Installed installed = PythonRuntimeManager.ensure(
+                                lock.pythonVersion(), artifact,
+                                hermesPythonSource(lock.python(), message),
+                                (line, fraction) -> message.accept(line));
+                        message.accept("CPython " + lock.pythonVersion() + " 复用共享缓存 "
+                                + installed.directory());
+                        pythonHolder[0] = installed.interpreter();
+                    } catch (IOException e) {
+                        throw new BrandException("python_runtime_missing: could not install CPython "
+                                + lock.pythonVersion() + " into the shared cache: " + e.getMessage(), e);
+                    }
+                }));
 
         Path[] lockBackup = new Path[1];
         stage(message, 3, total, "改写 lock 的下载源", 0.25, 0.02, 20, () -> ioStep(() -> {
@@ -2082,6 +2091,78 @@ public final class BrandInstaller {
                 + "当前使用的是 " + now + "。" + fix + "，然后重新安装。";
     }
 
+    /// The shared 3.12 interpreter, downloaded once for every brand that needs one.
+    ///
+    /// The configured CPython mirror is applied to the pinned archive's address;
+    /// its SHA-256 is unchanged, so a mirror that serves other bytes fails rather
+    /// than becoming trusted.
+    ///
+    /// @param message progress sink
+    /// @return the installed interpreter
+    /// @throws BrandException when the platform has no pinned archive or the
+    ///                          download fails
+    static PythonRuntimeManager.Installed ensureSharedPython(Consumer<String> message)
+            throws BrandException {
+        PythonRuntimeManager.Artifact artifact = PythonRuntimeManager.defaultArtifact();
+        if (artifact == null) {
+            throw new BrandException("python_runtime_missing: this build pins no CPython "
+                    + PythonRuntimeManager.DEFAULT_VERSION + " for "
+                    + OperatingSystem.CURRENT_OS + "/" + Architecture.CURRENT_ARCH);
+        }
+        BrandSources.Effective mirror = BrandSources.python();
+        if (!BrandSources.PYTHON_DEFAULT.equals(mirror.url())) {
+            try {
+                artifact = PythonRuntimeManager.relocated(artifact, mirror.url());
+            } catch (IllegalArgumentException e) {
+                throw new BrandException("python_runtime_missing: the configured CPython mirror ("
+                        + mirror.url() + ") is not usable: " + e.getMessage(), e);
+            }
+        }
+        BootstrapRuntimeManager.ArtifactSource source = (url, target) -> {
+            message.accept("Downloading " + url);
+            try (InputStream in = download(url)) {
+                Files.copy(in, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            } catch (BrandException e) {
+                throw new IOException(e.getMessage(), e);
+            }
+        };
+        try {
+            return PythonRuntimeManager.ensure(PythonRuntimeManager.DEFAULT_VERSION, artifact,
+                    source, (line, fraction) -> message.accept(line));
+        } catch (IOException e) {
+            throw new BrandException("python_runtime_missing: could not install CPython "
+                    + PythonRuntimeManager.DEFAULT_VERSION + " into the shared cache: "
+                    + e.getMessage(), e);
+        }
+    }
+
+    /// Hermes' CPython download, keeping its content-addressed CDN first.
+    ///
+    /// The lock names a fallback URL; the CDN is keyed by the digest and is the
+    /// address that measured 1.9 MB/s against the origins' 41 KB/s. Both paths
+    /// verify the lock's SHA-256 before [PythonRuntimeManager] sees the file.
+    static BootstrapRuntimeManager.ArtifactSource hermesPythonSource(HermesArtifact artifact,
+                                                                     Consumer<String> message) {
+        return (url, target) -> {
+            String fromCdn = HERMES_CDN + artifact.sha256();
+            try {
+                message.accept("Downloading " + fromCdn);
+                try (InputStream in = download(fromCdn)) {
+                    copyVerified(in, target, artifact.sha256());
+                }
+                return;
+            } catch (BrandException e) {
+                message.accept("Upstream CDN did not serve it (" + e.getMessage()
+                        + "); trying " + artifact.url());
+            }
+            try (InputStream in = download(artifact.url())) {
+                copyVerified(in, target, artifact.sha256());
+            } catch (BrandException e) {
+                throw new IOException(e.getMessage(), e);
+            }
+        };
+    }
+
     /// The interpreter inside an unpacked CPython artifact (`python/bin/python3.14`
     /// in the `install_only` archives).
     static @Nullable Path findInterpreter(Path root) {
@@ -2247,12 +2328,7 @@ public final class BrandInstaller {
             try (InputStream in = download(url)) {
                 Files.copy(in, archive, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             }
-            runChecked(List.of("tar", "-xzf", archive.toString(), "-C", toolchain.toString()),
-                    toolchain, Map.of(), log, message, "unpacking uv");
-            Path extracted = toolchain.resolve("uv-" + triple).resolve("uv");
-            if (!Files.isRegularFile(extracted)) {
-                throw new BrandException("uv archive did not contain uv-" + triple + "/uv");
-            }
+            Path extracted = unpackUv(archive, toolchain, triple);
             Files.move(extracted, binary, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             Files.setPosixFilePermissions(binary,
                     java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"));
@@ -2261,6 +2337,26 @@ public final class BrandInstaller {
         } catch (IOException e) {
             throw new BrandException("Could not install uv: " + e.getMessage(), e);
         }
+    }
+
+    /// Unpacks a uv release tarball with the panel's own reader.
+    ///
+    /// Not the system `tar`: a minimal image has none, and Windows' bsdtar is
+    /// whichever one is first on `PATH`. The archive holds exactly one
+    /// `uv-<triple>/uv` member.
+    ///
+    /// @param archive  the downloaded `uv-<triple>.tar.gz`
+    /// @param toolchain the directory to unpack into
+    /// @param triple   the target triple naming the archive's top-level member
+    /// @return the `uv` binary inside `toolchain`
+    /// @throws BrandException when the archive is unreadable or has no `uv`
+    static Path unpackUv(Path archive, Path toolchain, String triple) throws BrandException {
+        extractTarGz(archive, toolchain, () -> false);
+        Path extracted = toolchain.resolve("uv-" + triple).resolve("uv");
+        if (!Files.isRegularFile(extracted)) {
+            throw new BrandException("uv archive did not contain uv-" + triple + "/uv");
+        }
+        return extracted;
     }
 
     /// Downloads the uv wheel from PyPI and extracts `uv` from

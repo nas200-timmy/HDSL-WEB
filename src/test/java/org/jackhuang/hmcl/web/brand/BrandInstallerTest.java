@@ -17,13 +17,18 @@
  */
 package org.jackhuang.hmcl.web.brand;
 
+import kala.compress.archivers.tar.TarArchiveEntry;
+import kala.compress.archivers.tar.TarArchiveOutputStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.zip.GZIPOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -113,6 +118,33 @@ class BrandInstallerTest {
 
         assertThrows(BrandException.class,
                 () -> BrandInstaller.extractZip(new java.io.ByteArrayInputStream(zip), target));
+    }
+
+    /// The uv archive is unpacked by the panel's own tar reader, not by a
+    /// system `tar` a minimal image does not have. The production helper is
+    /// called directly, so this fails if the extraction path ever stops
+    /// producing `uv-<triple>/uv`.
+    @Test
+    void theUvTarballIsUnpackedInJava() throws IOException, BrandException {
+        Path archive = root.resolve("uv.tar.gz");
+        try (OutputStream out = Files.newOutputStream(archive);
+             GZIPOutputStream gzip = new GZIPOutputStream(out);
+             TarArchiveOutputStream tar = new TarArchiveOutputStream(gzip)) {
+            TarArchiveEntry entry = new TarArchiveEntry("uv-x86_64-unknown-linux-gnu/uv");
+            byte[] body = "#!/bin/sh\nexit 0\n".getBytes(StandardCharsets.US_ASCII);
+            entry.setSize(body.length);
+            entry.setMode(0755);
+            tar.putArchiveEntry(entry);
+            tar.write(body);
+            tar.closeArchiveEntry();
+        }
+        Path toolchain = root.resolve("toolchain");
+
+        Path uv = BrandInstaller.unpackUv(archive, toolchain, "x86_64-unknown-linux-gnu");
+
+        assertTrue(Files.isRegularFile(uv));
+        assertTrue(Files.isExecutable(uv));
+        assertEquals(toolchain.resolve("uv-x86_64-unknown-linux-gnu").resolve("uv"), uv);
     }
 
     /// A minimal zip holding the given path/content pairs.

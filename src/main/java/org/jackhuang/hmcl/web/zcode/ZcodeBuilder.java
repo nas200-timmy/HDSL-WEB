@@ -23,6 +23,7 @@ import org.jackhuang.hmcl.dsh.DshException;
 import org.jackhuang.hmcl.dsh.DshNodeRuntime;
 import org.jackhuang.hmcl.dsh.NodeRuntimeManager;
 import org.jackhuang.hmcl.dsh.NodeSource;
+import org.jackhuang.hmcl.dsh.PythonRuntimeManager;
 import org.jackhuang.hmcl.util.io.Links;
 import org.jackhuang.hmcl.util.platform.Executables;
 import org.jetbrains.annotations.NotNullByDefault;
@@ -96,7 +97,19 @@ public final class ZcodeBuilder {
     /// @param sourceUrl   a URL or path template for the source tarball; `%s`
     ///                    is the version (or branch) name
     /// @param keepSources whether to keep the scratch tree after the build
-    public record Settings(Path root, String buildBin, String pnpm, String sourceUrl, boolean keepSources) {
+    /// @param pythonRoot  `<data>/toolchains/python`, where the shared CPython
+    ///                    lives; `null` means the panel's default root
+    public record Settings(Path root, String buildBin, String pnpm, String sourceUrl, boolean keepSources,
+                           @Nullable Path pythonRoot) {
+
+        public Settings {
+            pythonRoot = pythonRoot == null ? PythonRuntimeManager.defaultRoot() : pythonRoot;
+        }
+
+        /// The five-field form: the panel's shared Python root.
+        public Settings(Path root, String buildBin, String pnpm, String sourceUrl, boolean keepSources) {
+            this(root, buildBin, pnpm, sourceUrl, keepSources, null);
+        }
     }
 
     private static final int LOG_TAIL_LINES = 400;
@@ -251,6 +264,7 @@ public final class ZcodeBuilder {
             // download: a bare deployment with no Node 24 and no pnpm would otherwise
             // fail an hour in, at the step that runs pnpm.
             Settings effective = withToolchain(settings, step);
+            ensurePython(effective, step);
             reportCompiler(step);
             step.set(0.03, "清理旧目录");
             deleteRecursively(settings.root().resolve("current"));
@@ -605,6 +619,31 @@ public final class ZcodeBuilder {
     /// 24.14+, and the SEA staging and Vite 8 toolchain both need the modern line).
     private static final int MINIMUM_BUILD_NODE_MAJOR = 24;
 
+    /// Makes sure a shared CPython exists before the long download.
+    ///
+    /// node-gyp is the only consumer — `node-pty` ships a Windows prebuild and
+    /// `cpu-features` is optional, so a build can finish without touching it —
+    /// but a native module that does compile fails without an interpreter, and
+    /// that failure would arrive after an hour of pnpm work. One 3.12 line is
+    /// shared with the brands and with every later build.
+    ///
+    /// @param settings the build settings, naming the shared root
+    /// @param step the build step, for the log
+    /// @throws ZcodeException with `python_runtime_missing` when it cannot be installed
+    private static void ensurePython(Settings settings, Step step) throws ZcodeException {
+        try {
+            PythonRuntimeManager.Installed python =
+                    new PythonRuntimeManager(settings.pythonRoot()).ensureDefault();
+            step.log("=== 共享 CPython " + PythonRuntimeManager.DEFAULT_VERSION + "：" + python.interpreter()
+                    + "（node-gyp 用；缓存于 " + python.directory() + "）");
+        } catch (IOException e) {
+            throw new ZcodeException("python_runtime_missing: 构建需要 CPython "
+                    + PythonRuntimeManager.DEFAULT_VERSION + " 给 node-gyp，但共享运行时安装失败（"
+                    + e.getMessage() + "）。检查网络后重试；也可先把 CPython 放进 "
+                    + settings.pythonRoot(), e);
+        }
+    }
+
     /// Makes sure the build has the toolchain it needs, installing what is
     /// missing into the data directory.
     ///
@@ -636,7 +675,7 @@ public final class ZcodeBuilder {
             step.log("=== 构建工具链：镜像自带的 Node 24（" + image + "），pnpm "
                     + (settings.pnpm().isBlank() ? "pnpm（PATH）" : settings.pnpm()));
             return new Settings(settings.root(), image.toString(), settings.pnpm(),
-                    settings.sourceUrl(), settings.keepSources());
+                    settings.sourceUrl(), settings.keepSources(), settings.pythonRoot());
         }
         DshNodeRuntime runtime = DshNodeRuntime.detectManaged()
                 .filter(candidate -> majorOf(candidate.nodeVersion()) >= MINIMUM_BUILD_NODE_MAJOR)
@@ -662,11 +701,11 @@ public final class ZcodeBuilder {
         }
         String pnpm = settings.pnpm();
         if (pnpm.isBlank() || "pnpm".equals(pnpm)) {
-            pnpm = ensurePnpm(runtime, step);
+            pnpm = ensurePnpm(runtime, settings, step);
         }
         step.log("=== 构建工具链：" + runtime.node() + "（" + runtime.nodeVersion() + "），pnpm " + pnpm);
         return new Settings(settings.root(), runtime.binDirectory().toString(), pnpm,
-                settings.sourceUrl(), settings.keepSources());
+                settings.sourceUrl(), settings.keepSources(), settings.pythonRoot());
     }
 
     /// Tells the operator what the build does and does not have in the way of a
@@ -821,7 +860,7 @@ public final class ZcodeBuilder {
     /// @param step the build step, for progress in the log
     /// @return the pnpm executable's path
     /// @throws ZcodeException when pnpm cannot be installed
-    private static String ensurePnpm(DshNodeRuntime runtime, Step step) throws ZcodeException {
+    private static String ensurePnpm(DshNodeRuntime runtime, Settings settings, Step step) throws ZcodeException {
         Path existing = runtime.pnpm();
         if (existing != null) {
             return existing.toString();
@@ -843,6 +882,7 @@ public final class ZcodeBuilder {
                     "install", "--global", "pnpm@11", "--prefix", prefix.toString(), "--registry=" + registry)));
             pnpmBuilder.redirectErrorStream(true);
             org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(pnpmBuilder);
+            PythonRuntimeManager.applyTo(pnpmBuilder.environment(), settings.pythonRoot());
             Process process = pnpmBuilder.start();
             try (var reader = new java.io.BufferedReader(
                     new java.io.InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
@@ -934,6 +974,10 @@ public final class ZcodeBuilder {
         builder.redirectErrorStream(true);
         builder.environment().put("PATH", searchPath.toString());
         org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(builder);
+        // The build's own Python root, which is the same as the panel's unless a
+        // caller named another. node-gyp reads both names; pnpm's install scripts
+        // (`cpu-features`, when it has to compile) are the only consumer here.
+        PythonRuntimeManager.applyTo(builder.environment(), settings.pythonRoot());
         // Everything a child of the launcher is given: the proxy the settings describe, the npm
         // registry, and the knobs that keep a native build from fetching from the slow half of the
         // internet. The build runs pnpm, node-gyp and git, and all three read these — the proxy

@@ -44,8 +44,10 @@ function fail(message) {
 // elsewhere names it, which is the convention the zcode fixture already uses.
 const argsFile = process.env.HDSL_FAKE_PNPM_ARGS_FILE || join(here, "pnpm.args");
 appendFileSync(argsFile, args.join(" ") + "\n");
-if (process.env.ELECTRON_MIRROR) {
-    appendFileSync(argsFile, "ELECTRON_MIRROR=" + process.env.ELECTRON_MIRROR + "\n");
+for (const name of ["ELECTRON_MIRROR", "PYTHON", "npm_config_python"]) {
+    if (process.env[name]) {
+        appendFileSync(argsFile, name + "=" + process.env[name] + "\n");
+    }
 }
 
 /// One argument, read from the flag that introduces it.

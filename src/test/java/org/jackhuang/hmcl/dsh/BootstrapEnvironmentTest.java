@@ -79,6 +79,52 @@ class BootstrapEnvironmentTest {
     }
 
     @Test
+    void aSharedPythonPrependsItsBinAndNamesTheInterpreter() throws Exception {
+        Path python = temp.resolve("python").resolve("3.12.16");
+        Files.createDirectories(python.resolve("bin"));
+        Path interpreter = python.resolve("bin").resolve("python3");
+        Files.writeString(interpreter, "#!/bin/sh\n");
+
+        Map<String, String> additions = BootstrapEnvironment.additions(null, null, python,
+                Map.of("PATH", "/usr/bin:/bin"), Files::exists);
+
+        assertEquals(python.resolve("bin") + File.pathSeparator + "/usr/bin:/bin",
+                additions.get("PATH"));
+        assertEquals(interpreter.toString(), additions.get("PYTHON"));
+        assertEquals(interpreter.toString(), additions.get("npm_config_python"));
+    }
+
+    @Test
+    void theRuntimeBinStaysAheadOfThePythonBin() throws Exception {
+        Path runtime = temp.resolve("runtime-order");
+        Files.createDirectories(runtime.resolve("bin"));
+        Files.writeString(runtime.resolve("bin").resolve("setpriv"), "#!/bin/sh\n");
+        Path python = temp.resolve("python-order").resolve("3.12.16");
+        Files.createDirectories(python.resolve("bin"));
+        Files.writeString(python.resolve("bin").resolve("python3"), "#!/bin/sh\n");
+
+        Map<String, String> additions = BootstrapEnvironment.additions(runtime, null, python,
+                Map.of("PATH", "/usr/bin"), Files::exists);
+
+        assertEquals(runtime.resolve("bin") + File.pathSeparator + python.resolve("bin")
+                + File.pathSeparator + "/usr/bin", additions.get("PATH"));
+    }
+
+    @Test
+    void anOperatorsPythonVariableIsNotReplaced() throws Exception {
+        Path python = temp.resolve("python-operator").resolve("3.12.16");
+        Files.createDirectories(python.resolve("bin"));
+        Files.writeString(python.resolve("bin").resolve("python3"), "#!/bin/sh\n");
+
+        Map<String, String> additions = BootstrapEnvironment.additions(null, null, python,
+                Map.of("PATH", "/usr/bin", "PYTHON", "/opt/python/bin/python3"), Files::exists);
+
+        assertFalse(additions.containsKey("PYTHON"));
+        assertEquals(python.resolve("bin") + File.pathSeparator + "/usr/bin",
+                additions.get("PATH"));
+    }
+
+    @Test
     void aCaBundleFillsEveryTlsVariable() throws Exception {
         Path ca = temp.resolve("cacert.pem");
         Files.writeString(ca, "cert");
