@@ -883,8 +883,10 @@ public final class TranscodeQueue {
     private void runJob(TranscodeJob job) {
         Path part = null;
         try {
-            if (job.state != TranscodeJob.State.RUNNING) {
-                return;
+            synchronized (lock) {
+                if (job.state != TranscodeJob.State.RUNNING) {
+                    return;
+                }
             }
             FfmpegProbe.FfmpegInfo info = module.runtime().info();
             if (!info.available()) {
@@ -899,7 +901,10 @@ public final class TranscodeQueue {
             }
             part = partPath(output, job.id);
             Files.deleteIfExists(part);
-            job.durationMs = job.tool.isBlank() ? durationMs(input) : -1;
+            long duration = job.tool.isBlank() ? durationMs(input) : -1;
+            synchronized (lock) {
+                job.durationMs = duration;
+            }
             Path chapters = job.preset.chaptersFile == null || job.preset.chaptersFile.isBlank()
                     ? null : module.media().resolve(mediaRoot, job.preset.chaptersFile);
             Path subtitle = job.preset.subtitleFile == null || job.preset.subtitleFile.isBlank()
@@ -912,25 +917,50 @@ public final class TranscodeQueue {
             Files.createDirectories(log.getParent());
             Files.writeString(log, "", StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-            job.steps = new ArrayList<>();
+            synchronized (lock) {
+                job.steps = new ArrayList<>();
+            }
             for (int passIndex = 0; passIndex < passes.size(); passIndex++) {
                 List<String> pass = passes.get(passIndex);
                 List<String> command = new ArrayList<>(pass.size() + 1);
                 command.add(info.ffmpeg().toString());
                 command.addAll(pass);
-                job.command = List.copyOf(command);
                 String passLabel = passes.size() > 1 ? "pass " + (passIndex + 1) + "/" + passes.size() + ": " : "";
                 TranscodeJob.Step step = new TranscodeJob.Step();
                 step.name = stepName(job, passes.size(), passIndex);
                 step.state = "running";
                 step.args = List.copyOf(command);
-                job.steps.add(step);
+                // saveLocked/jobView 在锁内序列化 steps/command：worker 的写必须同锁，
+                // 否则 Gson 迭代中撞 ConcurrentModificationException。
+                synchronized (lock) {
+                    job.command = List.copyOf(command);
+                    job.steps.add(step);
+                }
                 Files.writeString(log, "# " + passLabel + CommandBuilder.display(command) + "\n",
                         StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
                 ProcessBuilder builder = new ProcessBuilder(Privileges.asAgent(command));
                 builder.redirectError(ProcessBuilder.Redirect.appendTo(log.toFile()));
                 Process process = builder.start();
-                job.process = process;
+                // cancel/stopAll 在锁内读 job.process 并 terminate：赋值必须同锁，且
+                // 赋值后复查 state——否则落在 spawn 窗口里的取消只改状态不杀进程，
+                // ffmpeg 会跑完整个编码（2026-11 审计）。
+                Process racedCancel = null;
+                synchronized (lock) {
+                    if (job.state == TranscodeJob.State.CANCELLED) {
+                        racedCancel = process;
+                    } else {
+                        job.process = process;
+                    }
+                }
+                if (racedCancel != null) {
+                    ProcessTree.terminate(racedCancel, 2);
+                    synchronized (lock) {
+                        step.state = "cancelled";
+                    }
+                    Files.deleteIfExists(part);
+                    cleanupPassLog(part);
+                    return;
+                }
                 publishJob(job);
 
                 try (BufferedReader reader = new BufferedReader(
@@ -941,19 +971,29 @@ public final class TranscodeQueue {
                     }
                 }
                 int code = process.waitFor();
-                job.process = null;
-                if (job.state == TranscodeJob.State.CANCELLED) {
-                    step.state = "cancelled";
+                boolean cancelled;
+                synchronized (lock) {
+                    job.process = null;
+                    cancelled = job.state == TranscodeJob.State.CANCELLED;
+                    if (cancelled) {
+                        step.state = "cancelled";
+                    }
+                }
+                if (cancelled) {
                     Files.deleteIfExists(part);
                     cleanupPassLog(part);
                     return;
                 }
                 if (code != 0) {
-                    step.state = "failed";
+                    synchronized (lock) {
+                        step.state = "failed";
+                    }
                     handleFailure(job, "ffmpeg exited with code " + code + tail(log), part);
                     return;
                 }
-                step.state = "done";
+                synchronized (lock) {
+                    step.state = "done";
+                }
             }
             cleanupPassLog(part);
             String invalid = job.tool.isBlank()
@@ -964,21 +1004,23 @@ public final class TranscodeQueue {
                 return;
             }
             move(part, output);
-            job.fraction = 1;
-            job.message = "done";
-            job.state = TranscodeJob.State.DONE;
-            job.endedAt = System.currentTimeMillis();
-            job.sizeBytes = Files.size(output);
+            long sizeBytes = Files.size(output);
+            synchronized (lock) {
+                job.fraction = 1;
+                job.message = "done";
+                job.state = TranscodeJob.State.DONE;
+                job.endedAt = System.currentTimeMillis();
+                job.sizeBytes = sizeBytes;
+                releaseReservation(job);
+            }
             part = null;
-            releaseReservation(job);
             publishJob(job);
         } catch (Exception e) {
-            if (job.state != TranscodeJob.State.CANCELLED) {
-                fail(job, e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage(), part);
-            }
+            // fail() 在锁内复查 CANCELLED：已取消的任务不会被改写成 FAILED。
+            fail(job, e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage(), part);
         } finally {
-            job.process = null;
             synchronized (lock) {
+                job.process = null;
                 saveLocked();
             }
             publishQueue();
@@ -1335,14 +1377,16 @@ public final class TranscodeQueue {
     }
 
     private void fail(TranscodeJob job, String message, @Nullable Path part) {
-        if (job.state == TranscodeJob.State.CANCELLED) {
-            return;
+        synchronized (lock) {
+            if (job.state == TranscodeJob.State.CANCELLED) {
+                return;
+            }
+            job.state = TranscodeJob.State.FAILED;
+            job.error = message;
+            job.message = "failed";
+            job.endedAt = System.currentTimeMillis();
+            releaseReservation(job);
         }
-        job.state = TranscodeJob.State.FAILED;
-        job.error = message;
-        job.message = "failed";
-        job.endedAt = System.currentTimeMillis();
-        releaseReservation(job);
         if (part != null) {
             try {
                 Files.deleteIfExists(part);
@@ -1544,6 +1588,11 @@ public final class TranscodeQueue {
             }
         } catch (IOException e) {
             Logger.LOG.warning("Could not write the transcode queue " + queueFile, e);
+        } catch (RuntimeException e) {
+            // 兜底：序列化撞上并发修改时不让 API 线程 500、也不让 worker 暴毙
+            // （worker 死亡会跳过 dispatch，队列停摆到下次 API 调用）。
+            // 根因已由 worker 的锁纪律修复，这里只防御未知的漏网写。
+            Logger.LOG.warning("Could not serialize the transcode queue " + queueFile, e);
         }
     }
 
