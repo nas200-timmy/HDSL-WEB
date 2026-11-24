@@ -85,6 +85,8 @@ export function McSeedPreview({
     quality: "",
     radius: "",
   });
+  const [expandedSeeds, setExpandedSeeds] = useState<Set<string>>(() => new Set());
+  const [deleting, setDeleting] = useState<string | null>(null);
   const [radius, setRadius] = useState(512);
   const [caps, setCaps] = useState<McSeedPreviewCapabilities | null>(null);
   const [job, setJob] = useState<McSeedPreviewJob | null>(null);
@@ -221,6 +223,11 @@ export function McSeedPreview({
     setVersion(entry.version);
     setRadius(entry.radius);
     setEngine(entry.engine === "server" ? "server" : "java");
+    setExpandedSeeds((previous) => {
+      const next = new Set(previous);
+      next.add(entry.seed);
+      return next;
+    });
     if (entry.quality === "standard" || entry.quality === "high"
         || entry.quality === "ultra" || entry.quality === "extreme") {
       setQuality(entry.quality);
@@ -291,13 +298,81 @@ export function McSeedPreview({
     quality: [...new Set(flatHistory.map((entry) => entry.quality ?? "standard"))].sort(),
     radius: [...new Set(flatHistory.map((entry) => String(entry.radius)))].sort((a, b) => Number(a) - Number(b)),
   }), [flatHistory]);
-  const filteredHistory = useMemo(() => flatHistory.filter((entry) =>
+  const matchesHistoryFilter = (entry: McSeedPreviewHistoryEntry) =>
     (!historyFilter.seed || entry.seed.includes(historyFilter.seed))
     && (!historyFilter.version || entry.version === historyFilter.version)
     && (!historyFilter.engine || (entry.engine ?? "java") === historyFilter.engine)
     && (!historyFilter.quality || (entry.quality ?? "standard") === historyFilter.quality)
-    && (!historyFilter.radius || String(entry.radius) === historyFilter.radius)
-  ), [flatHistory, historyFilter]);
+    && (!historyFilter.radius || String(entry.radius) === historyFilter.radius);
+  const filteredGroups = useMemo(() => {
+    const groups = history
+      .map((group) => ({
+        seed: group.seed,
+        variants: group.variants
+          .filter(matchesHistoryFilter)
+          .sort((left, right) => Date.parse(right.generatedAt) - Date.parse(left.generatedAt)),
+      }))
+      .filter((group) => group.variants.length > 0);
+    groups.sort((left, right) =>
+      Date.parse(right.variants[0].generatedAt) - Date.parse(left.variants[0].generatedAt));
+    return groups;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [history, historyFilter]);
+  const filteredCount = filteredGroups.reduce((total, group) => total + group.variants.length, 0);
+  const filtersActive = Object.values(historyFilter).some((value) => value !== "");
+
+  const toggleSeed = (seed: string) => {
+    setExpandedSeeds((previous) => {
+      const next = new Set(previous);
+      if (next.has(seed)) next.delete(seed);
+      else next.add(seed);
+      return next;
+    });
+  };
+
+  const removeSeedGroup = async (seed: string, variants: McSeedPreviewHistoryEntry[]) => {
+    if (!window.confirm(`删除种子 ${seed} 的全部 ${variants.length} 条预览？`)) return;
+    setDeleting(`seed:${seed}`);
+    try {
+      for (const variant of variants) {
+        await api.mc.previewHistoryDelete(variant.id);
+      }
+      if (view?.source === "history" && variants.some((variant) => variant.id === view.id)) {
+        setView(null);
+        setMeta(null);
+      }
+      setExpandedSeeds((previous) => {
+        const next = new Set(previous);
+        next.delete(seed);
+        return next;
+      });
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setDeleting(null);
+      // Even a partial failure leaves some rows gone; re-read whatever is left.
+      await refreshHistory();
+    }
+  };
+
+  const clearHistory = async () => {
+    if (flatHistory.length === 0) return;
+    if (!window.confirm(`清空全部 ${flatHistory.length} 条种子预览？`)) return;
+    setDeleting("all");
+    try {
+      for (const entry of flatHistory) {
+        await api.mc.previewHistoryDelete(entry.id);
+      }
+      setView(null);
+      setMeta(null);
+      setExpandedSeeds(new Set());
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setDeleting(null);
+      await refreshHistory();
+    }
+  };
 
   const structureRows = meta ? Object.entries(meta.structureCounts).sort((a, b) => b[1] - a[1]) : [];
 
@@ -595,87 +670,173 @@ export function McSeedPreview({
       )}
 
       {flatHistory.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <div className="seed-history">
+          <div className="seed-history-head">
             <h4 style={{ margin: 0, fontSize: 13 }}>试过的种子</h4>
-            <span className="dim" style={{ fontSize: 12 }}>
-              {filteredHistory.length} / {flatHistory.length} 条（按列筛选）
+            <span className="seed-history-count">
+              {filteredGroups.length} / {history.length} 个种子 · {filteredCount} / {flatHistory.length} 条记录
+            </span>
+            <span className="seed-history-actions">
+              <button
+                className="btn btn-text"
+                onClick={() => setExpandedSeeds(new Set(filteredGroups.map((group) => group.seed)))}
+              >
+                全部展开
+              </button>
+              <button className="btn btn-text" onClick={() => setExpandedSeeds(new Set())}>
+                全部收起
+              </button>
+              <button
+                className="btn btn-text"
+                style={{ color: "#b3261e" }}
+                disabled={deleting !== null}
+                onClick={() => void clearHistory()}
+              >
+                {deleting === "all" ? "清空中…" : "清空全部"}
+              </button>
             </span>
           </div>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-            <thead>
-              <tr className="dim" style={{ textAlign: "left" }}>
-                <th>种子</th>
-                <th>版本</th>
-                <th>引擎</th>
-                <th>清晰度</th>
-                <th>范围</th>
-                <th>结构</th>
-                <th>时间</th>
-                <th></th>
-              </tr>
-              <tr>
-                <th style={{ paddingRight: 6 }}>
-                  <input
-                    className="input mono"
-                    value={historyFilter.seed}
-                    placeholder="筛选…"
-                    onChange={(e) => setHistoryFilter((f) => ({ ...f, seed: e.target.value }))}
-                    style={{ width: "100%", padding: "2px 6px", fontSize: 12 }}
-                  />
-                </th>
-                {(["version", "engine", "quality", "radius"] as const).map((key) => (
-                  <th key={key} style={{ paddingRight: 6 }}>
-                    <select
-                      className="input"
-                      value={historyFilter[key]}
-                      onChange={(e) => setHistoryFilter((f) => ({ ...f, [key]: e.target.value }))}
-                      style={{ width: "100%", padding: "2px 4px", fontSize: 12 }}
-                    >
-                      <option value="">全部</option>
-                      {historyChoices[key].map((value) => (
-                        <option key={value} value={value}>
-                          {key === "quality" ? qualityLabel(value)
-                            : key === "engine" ? (value === "java" ? "Java" : "MC")
-                            : key === "radius" ? `${(Number(value) * 2).toLocaleString()} 格`
-                            : value}
-                        </option>
-                      ))}
-                    </select>
-                  </th>
+
+          <div className="seed-filters">
+            <label className="seed-filter">
+              <span>种子</span>
+              <input
+                className="input mono"
+                value={historyFilter.seed}
+                placeholder="筛选…"
+                onChange={(e) => setHistoryFilter((f) => ({ ...f, seed: e.target.value }))}
+              />
+            </label>
+            <label className="seed-filter">
+              <span>版本</span>
+              <select
+                className="input"
+                value={historyFilter.version}
+                onChange={(e) => setHistoryFilter((f) => ({ ...f, version: e.target.value }))}
+              >
+                <option value="">全部</option>
+                {historyChoices.version.map((value) => (
+                  <option key={value} value={value}>{value}</option>
                 ))}
-                <th colSpan={3}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredHistory.map((entry) => {
-                const active = view?.source === "history" && view.id === entry.id;
-                return (
-                  <tr key={entry.id} style={{ background: active ? "rgba(78,111,255,.14)" : undefined }}>
-                    <td className="mono" style={{ padding: "2px 6px 2px 0" }}>{entry.seed}</td>
-                    <td>{entry.version}</td>
-                    <td>{entry.engine === "java" ? "Java" : "MC"}</td>
-                    <td>{qualityLabel(entry.quality)}</td>
-                    <td>{(entry.radius * 2).toLocaleString()} 格</td>
-                    <td className="dim">{entry.structures ?? "—"}</td>
-                    <td className="dim">{new Date(entry.generatedAt).toLocaleString()}</td>
-                    <td style={{ display: "flex", gap: 2 }}>
-                      <button className="btn btn-text" style={{ padding: "0 4px" }} onClick={() => void openHistory(entry)}>
-                        查看
-                      </button>
-                      <button
-                        className="btn btn-text"
-                        style={{ padding: "0 4px", color: "#b3261e" }}
-                        onClick={() => void removeHistory(entry)}
-                      >
-                        删除
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+              </select>
+            </label>
+            <label className="seed-filter">
+              <span>引擎</span>
+              <select
+                className="input"
+                value={historyFilter.engine}
+                onChange={(e) => setHistoryFilter((f) => ({ ...f, engine: e.target.value }))}
+              >
+                <option value="">全部</option>
+                {historyChoices.engine.map((value) => (
+                  <option key={value} value={value}>{value === "java" ? "Java" : "MC"}</option>
+                ))}
+              </select>
+            </label>
+            <label className="seed-filter">
+              <span>清晰度</span>
+              <select
+                className="input"
+                value={historyFilter.quality}
+                onChange={(e) => setHistoryFilter((f) => ({ ...f, quality: e.target.value }))}
+              >
+                <option value="">全部</option>
+                {historyChoices.quality.map((value) => (
+                  <option key={value} value={value}>{qualityLabel(value)}</option>
+                ))}
+              </select>
+            </label>
+            <label className="seed-filter">
+              <span>范围</span>
+              <select
+                className="input"
+                value={historyFilter.radius}
+                onChange={(e) => setHistoryFilter((f) => ({ ...f, radius: e.target.value }))}
+              >
+                <option value="">全部</option>
+                {historyChoices.radius.map((value) => (
+                  <option key={value} value={value}>{(Number(value) * 2).toLocaleString()} 格</option>
+                ))}
+              </select>
+            </label>
+            <button
+              className="btn btn-text"
+              disabled={!filtersActive}
+              onClick={() => setHistoryFilter({ seed: "", version: "", engine: "", quality: "", radius: "" })}
+            >
+              重置
+            </button>
+          </div>
+
+          {filteredGroups.length === 0 ? (
+            <div className="empty-state seed-empty">没有匹配的种子记录。</div>
+          ) : filteredGroups.map((group) => {
+            const expanded = expandedSeeds.has(group.seed);
+            const latest = group.variants[0];
+            const busy = deleting === `seed:${group.seed}`;
+            return (
+              <div className="seed-group" key={group.seed}>
+                <div className="seed-group-row">
+                  <button
+                    className="seed-group-toggle"
+                    aria-expanded={expanded}
+                    onClick={() => toggleSeed(group.seed)}
+                  >
+                    <span className="seed-group-caret">{expanded ? "▾" : "▸"}</span>
+                    <span className="seed-group-seed mono">{group.seed}</span>
+                    <span className="seed-group-meta">
+                      {group.variants.length} 条 · 最近 {new Date(latest.generatedAt).toLocaleString()}
+                    </span>
+                  </button>
+                  <span className="seed-group-actions">
+                    <button className="btn btn-text" onClick={() => void openHistory(latest)}>
+                      查看最新
+                    </button>
+                    <button
+                      className="btn btn-text"
+                      style={{ color: "#b3261e" }}
+                      disabled={deleting !== null}
+                      onClick={() => void removeSeedGroup(group.seed, group.variants)}
+                    >
+                      {busy ? "删除中…" : "删除整组"}
+                    </button>
+                  </span>
+                </div>
+                {expanded && (
+                  <div className="seed-variants">
+                    {group.variants.map((entry) => {
+                      const active = view?.source === "history" && view.id === entry.id;
+                      return (
+                        <div className={`seed-variant${active ? " active" : ""}`} key={entry.id}>
+                          <div className="seed-variant-fields">
+                            <span className="seed-field"><b>版本</b>{entry.version}</span>
+                            <span className="seed-field"><b>引擎</b>{entry.engine === "server" ? "MC" : "Java"}</span>
+                            <span className="seed-field"><b>清晰度</b>{qualityLabel(entry.quality)}</span>
+                            <span className="seed-field"><b>范围</b>{(entry.radius * 2).toLocaleString()} 格</span>
+                            <span className="seed-field"><b>结构</b>{entry.structures ?? "—"}</span>
+                            <span className="seed-field"><b>时间</b>{new Date(entry.generatedAt).toLocaleString()}</span>
+                          </div>
+                          <div className="seed-variant-actions">
+                            <button className="btn btn-text" onClick={() => void openHistory(entry)}>
+                              查看
+                            </button>
+                            <button
+                              className="btn btn-text"
+                              style={{ color: "#b3261e" }}
+                              disabled={deleting !== null}
+                              onClick={() => void removeHistory(entry)}
+                            >
+                              删除
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
