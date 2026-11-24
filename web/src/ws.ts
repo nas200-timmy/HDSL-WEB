@@ -1,6 +1,6 @@
 import type { WsEvent } from "./types";
 import { withBase } from "./base";
-import { ensureChatChannel, decryptChatEnvelope } from "./chatCrypto";
+import { ensureChatChannel, decryptChatEnvelope, resetChatChannel } from "./chatCrypto";
 
 // WebSocket 连接管理：登录后连接、断线 3s 起指数退避重连（上限 30s）、
 // 重连后自动重新订阅全部活跃 topic。握手带 cookie（浏览器默认同源行为）。
@@ -17,6 +17,8 @@ let retryTimer: number | undefined;
 const topics = new Set<string>();
 const handlers = new Set<WsHandler>();
 let chatReady = false;
+// 每条连接允许一次 chat_key_required 重绑（通道在服务端过期/重启后）。
+let chatBindAttempts = 0;
 
 function wantsChat(list: Iterable<string>): boolean {
   for (const topic of list) {
@@ -31,7 +33,9 @@ async function bindChat(sock: WebSocket): Promise<void> {
     const channel = await ensureChatChannel();
     if (sock.readyState !== WebSocket.OPEN) return;
     sock.send(JSON.stringify({ type: "chat-hello", channelId: channel.channelId }));
-    chatReady = true;
+    // chatReady 在收到 chat-hello-ok 时才置位（onmessage）：发了 hello 不等于
+    // 绑定成功，服务端对无效通道回 error(chat_key_required)，未绑定的连接
+    // 收不到任何 chat 帧。失败帧在那里触发一次重握手重绑。
   } catch {
     // The UI surfaces the error when the chat request itself fails; the
     // socket stays usable for non-chat topics.
@@ -69,10 +73,26 @@ function open(): void {
     if (typeof e.data !== "string") return;
     let evt: WsEvent;
     try {
-      const parsed = JSON.parse(e.data) as { type?: string; n?: string; ct?: string };
+      const parsed = JSON.parse(e.data) as { type?: string; n?: string; ct?: string; message?: string };
       if (parsed && parsed.type === "enc") {
         evt = JSON.parse(decryptChatEnvelope(parsed)) as WsEvent;
       } else {
+        // 聊天绑定协议帧不在 WsEvent 联合里，在派发前处理。
+        if (parsed?.type === "chat-hello-ok") {
+          chatReady = true;
+          chatBindAttempts = 0;
+          return;
+        }
+        if (parsed?.type === "error" && parsed.message === "chat_key_required") {
+          // 通道在服务端死了（重启/TTL/驱逐）：重握手重绑一次。不重绑的话
+          // 连接看着正常，服务端却静默丢弃所有 chat 帧（2026-11 审计）。
+          if (chatBindAttempts < 1 && wantsChat(topics)) {
+            chatBindAttempts++;
+            resetChatChannel();
+            void bindChat(sock);
+          }
+          return;
+        }
         evt = parsed as WsEvent;
       }
     } catch {
@@ -86,6 +106,7 @@ function open(): void {
   sock.onclose = () => {
     if (socket === sock) socket = null;
     chatReady = false;
+    chatBindAttempts = 0;
     if (!shouldReconnect) return;
     retryTimer = window.setTimeout(open, retryDelay);
     retryDelay = Math.min(retryDelay * 2, RECONNECT_MAX_MS);
@@ -109,6 +130,10 @@ export const ws = {
   close(): void {
     shouldReconnect = false;
     topics.clear();
+    // 登出/会话失效都走这里：加密通道一并丢弃，别把旧通道留给下一个会话。
+    resetChatChannel();
+    chatReady = false;
+    chatBindAttempts = 0;
     if (retryTimer !== undefined) {
       window.clearTimeout(retryTimer);
       retryTimer = undefined;

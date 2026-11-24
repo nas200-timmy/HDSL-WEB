@@ -81,9 +81,10 @@ import type {
 import { encryptPassword } from "./passwordCrypto";
 import {
   ensureChatChannel,
-  chatChannelId,
+  resetChatChannel,
   encryptChatJson,
   decryptChatJson,
+  type ChatChannel,
 } from "./chatCrypto";
 
 export class ApiError extends Error {
@@ -110,19 +111,20 @@ export function setUnauthorizedHandler(fn: () => void): void {
   unauthorizedHandler = fn;
 }
 
-async function request<T>(path: string, init?: RequestInit, opts?: { skipUnauthorizedRedirect?: boolean; timeoutMs?: number }): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, opts?: { skipUnauthorizedRedirect?: boolean; timeoutMs?: number; chatRetried?: boolean }): Promise<T> {
   const normalizedPath = path.replace(/^\//, "");
   const chat = normalizedPath.startsWith("api/chat/");
   let requestInit = init;
   let encryptedChat = false;
+  // 记住发送时用的通道：并发重试可能在响应回来前换掉模块级通道，
+  // 解密必须用发送时那把钥匙。
+  let chatKey: ChatChannel | null = null;
 
   if (chat && !(init?.body instanceof FormData)) {
     try {
-      await ensureChatChannel();
-      const channelId = chatChannelId();
-      if (!channelId) throw new Error("chat key is not ready");
+      chatKey = await ensureChatChannel();
       const headers = new Headers(init?.headers);
-      headers.set("X-HDSL-Chat", channelId);
+      headers.set("X-HDSL-Chat", chatKey.channelId);
       encryptedChat = true;
       let body = init?.body;
       if (typeof body === "string") {
@@ -168,7 +170,7 @@ async function request<T>(path: string, init?: RequestInit, opts?: { skipUnautho
       if (text) {
         if (encryptedChat) {
           try {
-            body = JSON.parse(decryptChatJson(text));
+            body = JSON.parse(decryptChatJson(text, chatKey));
           } catch {
             body = JSON.parse(text);
           }
@@ -184,15 +186,23 @@ async function request<T>(path: string, init?: RequestInit, opts?: { skipUnautho
   clearTimeout(timer);
 
   if (!res.ok) {
-    if (res.status === 401 && unauthorizedHandler && !opts?.skipUnauthorizedRedirect) {
+    const bodyError =
+      body && typeof body === "object" && typeof (body as { error?: unknown }).error === "string"
+        ? (body as { error: string }).error
+        : null;
+    // 401 chat_key_required 是加密通道过期（服务端内存态：重启即丢、TTL 12h、
+    // 超压驱逐），不是会话失效——重握手重试一次，别把有效会话踢回登录页
+    // （2026-11 审计）。chatRetried 保证只重试一次，防循环。
+    const chatKeyExpired = res.status === 401 && bodyError === "chat_key_required";
+    if (chatKeyExpired && encryptedChat && !opts?.chatRetried) {
+      resetChatChannel();
+      return request<T>(path, init, { ...opts, chatRetried: true });
+    }
+    if (res.status === 401 && unauthorizedHandler && !opts?.skipUnauthorizedRedirect && !chatKeyExpired) {
       // 会话失效：强制回到登录页（登录接口自身的 401 由调用方处理，这里不重复触发）
       unauthorizedHandler();
     }
-    const msg =
-      body && typeof body === "object" && typeof (body as { error?: unknown }).error === "string"
-        ? ((body as { error: string }).error)
-        : `请求失败（HTTP ${res.status}）`;
-    throw new ApiError(res.status, msg);
+    throw new ApiError(res.status, bodyError ?? `请求失败（HTTP ${res.status}）`);
   }
   return body as T;
 }
