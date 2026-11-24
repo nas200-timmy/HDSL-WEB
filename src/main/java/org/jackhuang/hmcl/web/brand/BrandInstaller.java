@@ -915,10 +915,12 @@ public final class BrandInstaller {
     static final String PREVIOUS_SUFFIX = ".previous";
     private static final String CURRENT_LINK = "current";
     private static final String INSTALL_LOG = "install.log";
-    /// The pinned uv release. The digest of the executable it produces lives
-    /// in [UvRuntime]; bumping the version without adding digests there makes
-    /// the install fail rather than run an unverified binary.
-    private static final String UV_VERSION = UvRuntime.VERSION;
+    /// The pinned uv release, from the bootstrap catalogue. The digest of the
+    /// executable it produces lives beside it; a release without a digest is
+    /// refused rather than installed unverified.
+    private static String uvVersion() {
+        return UvRuntime.version();
+    }
 
     /// The HTTP client for GitHub source downloads — its own instance, with a
     /// longer connect timeout than the catalog's (an 11 MB body in the default
@@ -1602,7 +1604,7 @@ public final class BrandInstaller {
         }
         stage(message, 5, total, "安装 Python 依赖（uv sync + 共享 CPython 3.12）", 0.65, 0.30, 300, () -> {
             PythonRuntimeManager.Installed python = ensureSharedPython(message);
-            message.accept("共享 CPython " + PythonRuntimeManager.DEFAULT_VERSION + "："
+            message.accept("共享 CPython " + PythonRuntimeManager.defaultVersion() + "："
                     + python.interpreter() + "（缓存于 " + python.directory() + "）");
             pythonEnv.put("PYTHON", python.interpreter().toString());
             UvWatcher uvProgress = new UvWatcher(message, brandRoot,
@@ -2167,7 +2169,7 @@ public final class BrandInstaller {
         PythonRuntimeManager.Artifact artifact = PythonRuntimeManager.defaultArtifact();
         if (artifact == null) {
             throw new BrandException("python_runtime_missing: this build pins no CPython "
-                    + PythonRuntimeManager.DEFAULT_VERSION + " for "
+                    + PythonRuntimeManager.defaultVersion() + " for "
                     + OperatingSystem.CURRENT_OS + "/" + Architecture.CURRENT_ARCH);
         }
         BrandSources.Effective mirror = BrandSources.python();
@@ -2188,11 +2190,11 @@ public final class BrandInstaller {
             }
         };
         try {
-            return PythonRuntimeManager.ensure(PythonRuntimeManager.DEFAULT_VERSION, artifact,
+            return PythonRuntimeManager.ensure(PythonRuntimeManager.defaultVersion(), artifact,
                     source, (line, fraction) -> message.accept(line));
         } catch (IOException e) {
             throw new BrandException("python_runtime_missing: could not install CPython "
-                    + PythonRuntimeManager.DEFAULT_VERSION + " into the shared cache: "
+                    + PythonRuntimeManager.defaultVersion() + " into the shared cache: "
                     + e.getMessage(), e);
         }
     }
@@ -2350,7 +2352,7 @@ public final class BrandInstaller {
         Path legacy = brandRoot.resolve("toolchain").resolve(UvRuntime.executableName());
         if (Files.isRegularFile(binary)) {
             if (UvRuntime.verified(binary)) {
-                org.jackhuang.hmcl.dsh.BootstrapTrace.reused("uv", UvRuntime.VERSION, binary);
+                org.jackhuang.hmcl.dsh.BootstrapTrace.reused("uv", UvRuntime.version(), binary);
                 return binary;
             }
             message.accept("the shared uv does not match its pinned digest; fetching it again");
@@ -2365,7 +2367,7 @@ public final class BrandInstaller {
                 Files.createDirectories(binary.getParent());
                 Files.move(legacy, binary, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
                 message.accept("adopted the verified uv from " + legacy + " into " + binary);
-                org.jackhuang.hmcl.dsh.BootstrapTrace.reused("uv", UvRuntime.VERSION, binary);
+                org.jackhuang.hmcl.dsh.BootstrapTrace.reused("uv", UvRuntime.version(), binary);
                 return binary;
             } catch (IOException e) {
                 message.accept("could not adopt the old uv (" + e.getMessage()
@@ -2424,7 +2426,7 @@ public final class BrandInstaller {
                     + OperatingSystem.CURRENT_OS + " (the release there is a .zip);"
                     + " PyPI and the configured index are its transports");
         }
-        String url = "https://github.com/astral-sh/uv/releases/download/" + UV_VERSION + "/uv-"
+        String url = "https://github.com/astral-sh/uv/releases/download/" + uvVersion() + "/uv-"
                 + triple + ".tar.gz";
         Path archive = binary.getParent().resolve("uv-" + java.util.UUID.randomUUID() + ".tar.gz");
         try {
@@ -2478,7 +2480,7 @@ public final class BrandInstaller {
     /// release-asset redirect is not.
     private static Path installUvFromPyPI(Path toolchain, Path binary, Consumer<String> message)
             throws BrandException {
-        String jsonUrl = "https://pypi.org/pypi/uv/" + UV_VERSION + "/json";
+        String jsonUrl = "https://pypi.org/pypi/uv/" + uvVersion() + "/json";
         try {
             HttpRequest request = HttpRequest.newBuilder(URI.create(jsonUrl))
                     .timeout(Duration.ofSeconds(30))
@@ -2505,7 +2507,7 @@ public final class BrandInstaller {
                 }
             }
             if (chosen == null) {
-                throw new BrandException("no uv " + UV_VERSION + " wheel for "
+                throw new BrandException("no uv " + uvVersion() + " wheel for "
                         + UvRuntime.platformTag() + " on PyPI");
             }
             message.accept("Downloading uv from PyPI " + chosen
@@ -2527,7 +2529,7 @@ public final class BrandInstaller {
     private static Path installUvFromIndex(String index, Path toolchain, Path binary, Consumer<String> message)
             throws BrandException {
         String pageUrl = index.replaceAll("/$", "") + "/uv/";
-        message.accept("Looking for uv " + UV_VERSION + " on " + pageUrl);
+        message.accept("Looking for uv " + uvVersion() + " on " + pageUrl);
         String html;
         try {
             HttpRequest request = HttpRequest.newBuilder(URI.create(pageUrl))
@@ -2559,7 +2561,7 @@ public final class BrandInstaller {
                     : " (index sha256 " + wheel.sha256().substring(0, 12) + "…)"));
             return extractUvWheel(wheel.url(), wheel.sha256(), toolchain, binary, message);
         }
-        throw new BrandException("no uv " + UV_VERSION + " wheel for " + UvRuntime.platformTag()
+        throw new BrandException("no uv " + uvVersion() + " wheel for " + UvRuntime.platformTag()
                 + " on " + index);
     }
 
@@ -2652,7 +2654,7 @@ public final class BrandInstaller {
                 // Windows: no POSIX mode bits; executability is implicit.
             }
             Files.deleteIfExists(wheel);
-            message.accept("uv " + UV_VERSION + " installed from " + url
+            message.accept("uv " + uvVersion() + " installed from " + url
                     + " (sha256 " + UvRuntime.binarySha256() + ")");
             Privileges.handTreeToAgent(binary.getParent());
             return binary;

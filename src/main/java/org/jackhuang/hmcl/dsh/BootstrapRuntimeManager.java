@@ -224,7 +224,7 @@ public final class BootstrapRuntimeManager {
                 manager = defaultManager;
                 if (manager == null) {
                     manager = new BootstrapRuntimeManager(toolchainsRoot(),
-                            BootstrapCatalog.Catalog.builtin());
+                            BootstrapCatalog.current());
                     defaultManager = manager;
                 }
             }

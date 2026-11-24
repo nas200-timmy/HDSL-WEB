@@ -31,11 +31,11 @@ public class BrandUvIndexTest {
     private static String wheelForThisPlatform() {
         boolean arm = Architecture.CURRENT_ARCH == Architecture.ARM64;
         return switch (OperatingSystem.CURRENT_OS) {
-            case WINDOWS -> "uv-" + UvRuntime.VERSION + "-py3-none-"
+            case WINDOWS -> "uv-" + UvRuntime.version() + "-py3-none-"
                     + (arm ? "win_arm64" : "win_amd64") + ".whl";
-            case MACOS -> "uv-" + UvRuntime.VERSION + "-py3-none-macosx_11_0_"
+            case MACOS -> "uv-" + UvRuntime.version() + "-py3-none-macosx_11_0_"
                     + (arm ? "arm64" : "x86_64") + ".whl";
-            default -> "uv-" + UvRuntime.VERSION + "-py3-none-manylinux_2_17_"
+            default -> "uv-" + UvRuntime.version() + "-py3-none-manylinux_2_17_"
                     + (arm ? "aarch64" : "x86_64") + ".manylinux2014_"
                     + (arm ? "aarch64" : "x86_64") + ".whl";
         };
@@ -66,7 +66,7 @@ public class BrandUvIndexTest {
         assertNull(BrandInstaller.uvWheelLink("https://m/simple/uv/",
                 "uv-0.0.1-py3-none-any.whl#sha256=" + "b".repeat(64)));
         assertNull(BrandInstaller.uvWheelLink("https://m/simple/uv/",
-                "uv-" + UvRuntime.VERSION + "-py3-none-any.whl"));
+                "uv-" + UvRuntime.version() + "-py3-none-any.whl"));
         assertNull(BrandInstaller.uvWheelLink("https://m/simple/uv/",
                 "../../packages/x/y/requests-2.0.0-py3-none-any.whl"));
     }

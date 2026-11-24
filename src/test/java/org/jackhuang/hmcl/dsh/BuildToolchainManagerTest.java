@@ -101,7 +101,7 @@ class BuildToolchainManagerTest {
         assertTrue(toolchain.usable(), toolchain.missingMessage());
         assertTrue(toolchain.portable());
 
-        Path version = root.resolve(BuildToolchainManager.LINUX_VERSION);
+        Path version = root.resolve(BuildToolchainManager.linuxVersion());
         assertTrue(Files.isDirectory(version));
         assertTrue(Files.isRegularFile(version.resolve("bin/make")));
         assertTrue(Files.isRegularFile(version.resolve("bin/nasm")));
@@ -159,7 +159,7 @@ class BuildToolchainManagerTest {
 
         assertTrue(error.getMessage().contains("build_toolchain_checksum_mismatch"),
                 error.getMessage());
-        assertFalse(Files.exists(root.resolve(BuildToolchainManager.LINUX_VERSION)));
+        assertFalse(Files.exists(root.resolve(BuildToolchainManager.linuxVersion())));
         assertFalse(Files.exists(root.resolve("current.json")));
         assertNoStaging(root);
     }

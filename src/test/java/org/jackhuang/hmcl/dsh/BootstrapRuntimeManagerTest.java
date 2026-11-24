@@ -179,7 +179,15 @@ class BootstrapRuntimeManagerTest {
     @Test
     void theBuiltinCatalogIsPinnedAndHonestAboutArm64() {
         BootstrapCatalog.Catalog catalog = BootstrapCatalog.Catalog.builtin();
-        assertEquals(1, catalog.schema());
+        assertEquals(2, catalog.schema());
+        // The newer sections are part of the same promise: nothing in the built-in
+        // catalogue may name a moving target.
+        assertNotNull(catalog.uv());
+        assertEquals(6, catalog.uv().binaries().size());
+        assertNotNull(catalog.python());
+        assertNotNull(catalog.toolchain());
+        assertNotNull(catalog.toolchain().windows());
+        assertEquals(5, catalog.toolchain().linux().artifacts().size());
 
         BootstrapCatalog.Ca ca = catalog.ca();
         assertNotNull(ca);

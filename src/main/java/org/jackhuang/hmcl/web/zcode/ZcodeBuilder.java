@@ -647,11 +647,11 @@ public final class ZcodeBuilder {
         try {
             PythonRuntimeManager.Installed python =
                     new PythonRuntimeManager(settings.pythonRoot()).ensureDefault();
-            step.log("=== 共享 CPython " + PythonRuntimeManager.DEFAULT_VERSION + "：" + python.interpreter()
+            step.log("=== 共享 CPython " + PythonRuntimeManager.defaultVersion() + "：" + python.interpreter()
                     + "（node-gyp 用；缓存于 " + python.directory() + "）");
         } catch (IOException e) {
             throw new ZcodeException("python_runtime_missing: 构建需要 CPython "
-                    + PythonRuntimeManager.DEFAULT_VERSION + " 给 node-gyp，但共享运行时安装失败（"
+                    + PythonRuntimeManager.defaultVersion() + " 给 node-gyp，但共享运行时安装失败（"
                     + e.getMessage() + "）。检查网络后重试；也可先把 CPython 放进 "
                     + settings.pythonRoot(), e);
         }

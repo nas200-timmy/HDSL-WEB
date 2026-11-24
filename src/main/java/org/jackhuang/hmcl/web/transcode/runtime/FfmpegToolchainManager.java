@@ -57,12 +57,18 @@ import java.util.function.BooleanSupplier;
 @NotNullByDefault
 public final class FfmpegToolchainManager {
 
-    public static final String WINDOWS_PORTABLE_VERSION =
-            BuildToolchainManager.WINDOWS_PORTABLE_VERSION;
-    public static final String WINDOWS_PORTABLE_URL =
-            BuildToolchainManager.WINDOWS_PORTABLE_URL;
-    public static final String WINDOWS_PORTABLE_SHA256 =
-            BuildToolchainManager.WINDOWS_PORTABLE_SHA256;
+    /// The pinned w64devkit, as the bootstrap catalogue names it.
+    public static String windowsPortableVersion() {
+        return BuildToolchainManager.windowsPortableVersion();
+    }
+
+    public static String windowsPortableUrl() {
+        return BuildToolchainManager.windowsPortableUrl();
+    }
+
+    public static String windowsPortableSha256() {
+        return BuildToolchainManager.windowsPortableSha256();
+    }
 
     private static final long CACHE_MILLIS = 60_000;
     private static final Duration PROBE_TIMEOUT = Duration.ofSeconds(4);
@@ -180,7 +186,7 @@ public final class FfmpegToolchainManager {
                 return os + "/" + arch + " (system toolchain)";
             }
             String label = OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS
-                    ? "portable MinGW w64devkit " + WINDOWS_PORTABLE_VERSION
+                    ? "portable MinGW w64devkit " + windowsPortableVersion()
                     : "portable Linux build toolchain (Zig + GNU make)";
             return os + "/" + arch + " (" + label + ")";
         }

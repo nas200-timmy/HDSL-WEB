@@ -95,30 +95,41 @@ public final class PythonRuntimeManager {
     /// The pointer naming the active version.
     public static final String POINTER = "current.json";
 
-    /// The stable line ZCode and node-gyp build against.
-    public static final String DEFAULT_VERSION = "3.12.16";
+    /// The stable line ZCode and node-gyp build against, from the catalogue.
+    ///
+    /// The version, the python-build-standalone tag, the release base and the
+    /// per-platform digests all live in `/bootstrap/bootstrap.json`; an
+    /// operator can point at another catalogue with `HDSL_BOOTSTRAP_CATALOG`.
+    public static String defaultVersion() {
+        return python().version();
+    }
 
-    /// The python-build-standalone release the default line is pinned to.
-    static final String BUILD_TAG = "20261123";
+    /// The python-build-standalone release tag the default line is pinned to.
+    static String buildTag() {
+        return python().build();
+    }
 
     /// Where python-build-standalone publishes its releases.
-    public static final String RELEASE_BASE =
-            "https://github.com/astral-sh/python-build-standalone/releases/download";
+    public static String releaseBase() {
+        return python().releaseBase();
+    }
 
-    private static final String LINUX_X64_ASSET =
-            "cpython-3.12.16+20261123-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz";
-    private static final String WINDOWS_X64_ASSET =
-            "cpython-3.12.16+20261123-x86_64-pc-windows-msvc-install_only_stripped.tar.gz";
+    /// The pinned archive for this platform, or `null` when none is pinned.
+    static @Nullable Artifact pinnedArtifact() {
+        BootstrapCatalog.PythonArtifact pinned = python().artifact(platformTag());
+        return pinned == null ? null
+                : new Artifact(python().url(pinned), pinned.sha256(), pinned.size(),
+                pinned.archive());
+    }
 
-    /// The two pinned archives, checked against GitHub's published digest and
-    /// downloaded once from the mirror to confirm the bytes.
-    private static final Map<String, Artifact> DEFAULT_ARTIFACTS = Map.of(
-            "linux-x64", new Artifact(RELEASE_BASE + "/" + BUILD_TAG + "/" + LINUX_X64_ASSET,
-                    "c85811d35971d06612585a057db3b71806378df6ea8476275fb16aa5c9fe56a0",
-                    34741061L, "tar.gz"),
-            "windows-x64", new Artifact(RELEASE_BASE + "/" + BUILD_TAG + "/" + WINDOWS_X64_ASSET,
-                    "75988f49393727d7e53b673d50088e7f809a629dd37cb59da3756479bc6ea5c1",
-                    22388474L, "tar.gz"));
+    private static BootstrapCatalog.Python python() {
+        BootstrapCatalog.Python python = BootstrapCatalog.current().python();
+        if (python == null) {
+            throw new IllegalStateException(
+                    "bootstrap_catalog_incomplete: the catalogue pins no CPython line");
+        }
+        return python;
+    }
 
     /// One pinned archive.
     ///
@@ -231,7 +242,7 @@ public final class PythonRuntimeManager {
         if (isMusl(Files::exists)) {
             return null;
         }
-        Artifact canonical = DEFAULT_ARTIFACTS.get(platformTag());
+        Artifact canonical = pinnedArtifact();
         if (canonical == null) {
             return null;
         }
@@ -263,7 +274,7 @@ public final class PythonRuntimeManager {
             normalized = normalized.substring(0, normalized.length() - 1);
         }
         String asset = assetName(artifact.url());
-        String url = normalized + "/" + BUILD_TAG + "/" + asset;
+        String url = normalized + "/" + python().build() + "/" + asset;
         BootstrapCatalog.validateHttps(url);
         return new Artifact(url, artifact.sha256(), artifact.size(), artifact.archive());
     }
@@ -398,7 +409,7 @@ public final class PythonRuntimeManager {
 
     /// Installs and activates the default 3.12 line when it is absent.
     public Installed ensureDefault() throws IOException {
-        return install(DEFAULT_VERSION);
+        return install(defaultVersion());
     }
 
     /// Installs and activates `version` from the pinned catalogue.
@@ -413,7 +424,7 @@ public final class PythonRuntimeManager {
             return new Installed(existing.version(), existing.directory(),
                     existing.interpreter(), existing.record(), true);
         }
-        Artifact artifact = DEFAULT_VERSION.equals(version) ? defaultArtifact() : null;
+        Artifact artifact = defaultVersion().equals(version) ? defaultArtifact() : null;
         if (artifact == null) {
             String reason;
             if (isMusl(Files::exists)) {

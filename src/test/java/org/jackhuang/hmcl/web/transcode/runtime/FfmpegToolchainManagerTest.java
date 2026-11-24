@@ -44,7 +44,7 @@ class FfmpegToolchainManagerTest {
         Assumptions.assumeFalse(OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS,
                 "the prepared bundle's wrappers are POSIX scripts");
         Path root = temp.resolve("toolchains/build");
-        Path version = root.resolve(BuildToolchainManager.LINUX_VERSION);
+        Path version = root.resolve(BuildToolchainManager.linuxVersion());
         Path bin = version.resolve("bin");
         Files.createDirectories(bin);
         Files.createDirectories(version.resolve("zig"));

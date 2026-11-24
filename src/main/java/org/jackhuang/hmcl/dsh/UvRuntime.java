@@ -25,7 +25,6 @@ import org.jetbrains.annotations.Nullable;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Map;
 
 /// The pinned `uv` release and the digest that makes it trustworthy.
 ///
@@ -42,21 +41,23 @@ import java.util.Map;
 @NotNullByDefault
 public final class UvRuntime {
 
-    /// The `uv` release the panel installs. Changing it requires new digests.
-    public static final String VERSION = "0.7.13";
-
-    /// The SHA-256 of the `uv` executable itself, per platform.
+    /// The `uv` release the panel installs, from the bootstrap catalogue.
     ///
-    /// Obtained from PyPI's declared wheel digests and confirmed against the
-    /// extracted binary (`uv-0.7.13.data/scripts/uv`), cross-checked against
-    /// the same release served by a second index.
-    private static final Map<String, String> BINARY_SHA256 = Map.of(
-            "linux-x64", "04e7399b45054f5ae4239ed60cd579311daafdd8d43e0e6ac01003436f19eaac",
-            "linux-arm64", "da9b140ed024e03d1750b6ec4f9902ee1542bd5e44beb14b7ae336d24610bbf5",
-            "macos-x64", "a07b8eadd2c241b408b935c12ff603765c21da06255e64ff8485bf8720e106de",
-            "macos-arm64", "ab10743159870e1a6e8eb87197eb9a42f086f21bf3cd840b9cfbd73ab23e08b6",
-            "windows-x64", "e004f18282750aebe5c8a1a6dedba544ede1d7adc724e34b97834414222f4ef0",
-            "windows-arm64", "162206ef9b8ceabe17af83e601bff5f1d78e0a58085d173e2365eda3b532ed05");
+    /// The release and every digest live in `/bootstrap/bootstrap.json`; an
+    /// operator can point the panel at another catalogue with
+    /// `HDSL_BOOTSTRAP_CATALOG`, which is how a pin rotates without a release.
+    public static String version() {
+        return uv().version();
+    }
+
+    private static BootstrapCatalog.Uv uv() {
+        BootstrapCatalog.Uv uv = BootstrapCatalog.current().uv();
+        if (uv == null) {
+            throw new IllegalStateException(
+                    "bootstrap_catalog_incomplete: the catalogue pins no uv release");
+        }
+        return uv;
+    }
 
     private UvRuntime() {
     }
@@ -85,7 +86,7 @@ public final class UvRuntime {
 
     /// The pinned digest for a named platform, or `null`.
     static @Nullable String binarySha256(String tag) {
-        return BINARY_SHA256.get(tag);
+        return uv().sha256(tag);
     }
 
     /// `uv.exe` on Windows, `uv` everywhere else.
@@ -100,7 +101,7 @@ public final class UvRuntime {
 
     /// `<toolchains>/uv/<version>/uv`, the verified copy every brand shares.
     public static Path sharedBinary() {
-        return root().resolve(VERSION).resolve(executableName());
+        return root().resolve(version()).resolve(executableName());
     }
 
     /// Whether a wheel file name carries a `uv` build this platform can run.
@@ -110,7 +111,7 @@ public final class UvRuntime {
     /// either loader. A Windows wheel is `win_amd64`, and a macOS one names the
     /// deployment target and the architecture.
     public static boolean matchesWheel(String filename) {
-        if (!filename.startsWith("uv-" + VERSION + "-") || !filename.endsWith(".whl")) {
+        if (!filename.startsWith("uv-" + version() + "-") || !filename.endsWith(".whl")) {
             return false;
         }
         return switch (OperatingSystem.CURRENT_OS) {
@@ -153,8 +154,8 @@ public final class UvRuntime {
             throws IOException {
         if (expected == null) {
             throw new IOException("uv_unpinned_platform: no SHA-256 is pinned for "
-                    + platform + ", so uv " + VERSION
-                    + " would be installed unverified; add its digest to UvRuntime first");
+                    + platform + ", so uv " + version()
+                    + " would be installed unverified; add its digest to the bootstrap catalogue");
         }
         if (!Files.isRegularFile(binary)) {
             throw new IOException("uv_missing: " + binary + " is not a file (source: " + source + ")");
@@ -179,14 +180,14 @@ public final class UvRuntime {
     /// The one-line status the doctor prints.
     public static String summary() {
         if (binarySha256() == null) {
-            return VERSION + " has no digest for " + platformTag()
+            return version() + " has no digest for " + platformTag()
                     + "; uv is refused rather than installed unverified";
         }
         Path binary = sharedBinary();
         if (!Files.isRegularFile(binary)) {
-            return VERSION + " pinned, not installed (" + platformTag() + ")";
+            return version() + " pinned, not installed (" + platformTag() + ")";
         }
-        return VERSION + " " + (verified(binary) ? "[pinned digest ok]" : "[DIGEST MISMATCH]")
+        return version() + " " + (verified(binary) ? "[pinned digest ok]" : "[DIGEST MISMATCH]")
                 + " " + binary;
     }
 }

@@ -77,35 +77,35 @@ public class UvRuntimeTest {
     public void thisPlatformIsPinned() {
         assertNotNull(UvRuntime.binarySha256(), "every supported OS/arch pair has a digest: "
                 + UvRuntime.platformTag());
-        assertFalse(UvRuntime.VERSION.isBlank());
+        assertFalse(UvRuntime.version().isBlank());
     }
 
     @Test
     public void wheelNamesAreMatchedByPlatform() {
         boolean arm = UvRuntime.platformTag().endsWith("arm64");
         String name = switch (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS) {
-            case WINDOWS -> "uv-" + UvRuntime.VERSION + "-py3-none-"
+            case WINDOWS -> "uv-" + UvRuntime.version() + "-py3-none-"
                     + (arm ? "win_arm64" : "win_amd64") + ".whl";
-            case MACOS -> "uv-" + UvRuntime.VERSION + "-py3-none-macosx_11_0_"
+            case MACOS -> "uv-" + UvRuntime.version() + "-py3-none-macosx_11_0_"
                     + (arm ? "arm64" : "x86_64") + ".whl";
-            default -> "uv-" + UvRuntime.VERSION + "-py3-none-manylinux_2_17_"
+            default -> "uv-" + UvRuntime.version() + "-py3-none-manylinux_2_17_"
                     + (arm ? "aarch64" : "x86_64") + ".manylinux2014_"
                     + (arm ? "aarch64" : "x86_64") + ".whl";
         };
         assertTrue(UvRuntime.matchesWheel(name), name);
         assertFalse(UvRuntime.matchesWheel("uv-0.0.1-py3-none-any.whl"));
-        assertFalse(UvRuntime.matchesWheel("uv-" + UvRuntime.VERSION + "-py3-none-any.whl"));
+        assertFalse(UvRuntime.matchesWheel("uv-" + UvRuntime.version() + "-py3-none-any.whl"));
     }
 
     @Test
     public void versionIsExact() {
-        assertEquals("0.7.13", UvRuntime.VERSION);
+        assertEquals("0.7.13", UvRuntime.version());
     }
 
     @Test
     public void theSharedCopyLivesUnderToolchainsAndNamesThePlatformExecutable() {
         java.nio.file.Path binary = UvRuntime.sharedBinary();
-        assertEquals(UvRuntime.root().resolve(UvRuntime.VERSION).resolve(
+        assertEquals(UvRuntime.root().resolve(UvRuntime.version()).resolve(
                 UvRuntime.executableName()), binary);
         assertTrue(binary.toString().contains("toolchains"), binary.toString());
         assertTrue(UvRuntime.root().getFileName().toString().equals("uv"), binary.toString());

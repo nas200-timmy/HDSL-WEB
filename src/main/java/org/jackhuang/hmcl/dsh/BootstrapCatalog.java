@@ -21,6 +21,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import org.jackhuang.hmcl.util.logging.Logger;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -52,13 +53,33 @@ import java.util.Locale;
 /// `snapshot.debian.org`'s content-addressed `/file/<sha1>` URLs, which is why
 /// the URLs cannot start serving different bytes later.
 ///
-/// The built-in catalogue lives in the jar (`/bootstrap/bootstrap.json`).
-/// There is deliberately no operator override: a remote catalogue would be a
-/// second SSRF surface, and an artifact URL is a trust decision.
+/// The catalogue lives in the jar (`/bootstrap/bootstrap.json`). An operator
+/// may point at another copy with `HDSL_BOOTSTRAP_CATALOG` (or the
+/// `hdsl.bootstrap.catalog` system property); a rejected override is logged
+/// and the embedded copy is used, and [Origin] says which one is in force —
+/// a silent switch between the two is the one thing this must not do.
+///
+/// The override exists for air-gapped mirrors and for rotating a pin without a
+/// new release. It is not a trust upgrade: a catalogue fetched from a
+/// different channel than the artifacts is only as trustworthy as that
+/// channel, which is why the embedded copy stays the default and the
+/// override is always named out loud.
 @NotNullByDefault
 public final class BootstrapCatalog {
 
+    private static final Logger LOG = Logger.LOG;
+
     private static final String RESOURCE = "/bootstrap/bootstrap.json";
+
+    /// The environment variable an operator sets to use another catalogue.
+    public static final String ENV_CATALOG = "HDSL_BOOTSTRAP_CATALOG";
+
+    /// The system property with the same meaning, for tests and launchers.
+    public static final String PROPERTY_CATALOG = "hdsl.bootstrap.catalog";
+
+    /// The loaded catalogue, and which one it is.
+    private static volatile @Nullable Catalog current;
+    private static volatile Origin origin = new Origin("embedded", "");
 
     private BootstrapCatalog() {
     }
@@ -162,9 +183,139 @@ public final class BootstrapCatalog {
         }
     }
 
+    /// The pinned `uv` release and the digest of its executable per platform.
+    ///
+    /// The pin is the executable, not the archive: the wheel, the GitHub
+    /// tarball and a mirror's copy of that wheel are three transports for one
+    /// binary.
+    public record Uv(String version, List<UvBinary> binaries) {
+        public Uv {
+            if (version == null || !version.matches("[A-Za-z0-9._-]{1,40}")) {
+                throw new IllegalArgumentException("invalid uv version: " + version);
+            }
+            binaries = binaries == null ? List.of() : List.copyOf(binaries);
+            if (binaries.isEmpty()) {
+                throw new IllegalArgumentException("uv " + version + " pins no platform");
+            }
+        }
+
+        /// The pinned executable digest for a platform, or `null`.
+        public @Nullable String sha256(String platform) {
+            for (UvBinary binary : binaries) {
+                if (binary.platform().equals(platform)) {
+                    return binary.sha256();
+                }
+            }
+            return null;
+        }
+    }
+
+    /// One platform's uv executable digest.
+    public record UvBinary(String platform, String sha256) {
+        public UvBinary {
+            validatePlatform(platform);
+            validateSha256(sha256, "uv " + platform);
+        }
+    }
+
+    /// The pinned CPython line and where its archives live.
+    public record Python(String version, String build, String releaseBase,
+                         List<PythonArtifact> artifacts) {
+        public Python {
+            if (version == null || !version.matches("[A-Za-z0-9._-]{1,40}")) {
+                throw new IllegalArgumentException("invalid Python version: " + version);
+            }
+            if (build == null || !build.matches("\\d{8}")) {
+                throw new IllegalArgumentException("invalid python-build-standalone tag: " + build);
+            }
+            validateHttps(releaseBase);
+            artifacts = artifacts == null ? List.of() : List.copyOf(artifacts);
+        }
+
+        /// The archive for a platform, or `null`.
+        public @Nullable PythonArtifact artifact(String platform) {
+            for (PythonArtifact artifact : artifacts) {
+                if (artifact.platform().equals(platform)) {
+                    return artifact;
+                }
+            }
+            return null;
+        }
+
+        /// The absolute URL of one archive.
+        public String url(PythonArtifact artifact) {
+            return releaseBase + "/" + build + "/" + artifact.asset();
+        }
+    }
+
+    /// One platform's CPython archive.
+    public record PythonArtifact(String platform, String asset, String sha256, long size,
+                                 String archive) {
+        public PythonArtifact {
+            validatePlatform(platform);
+            if (asset == null || asset.isBlank() || asset.contains("/") || asset.contains("..")
+                    || asset.toLowerCase(Locale.ROOT).contains("latest")) {
+                throw new IllegalArgumentException("invalid Python asset name: " + asset);
+            }
+            validateSha256(sha256, "CPython " + platform);
+            if (size < 0) {
+                throw new IllegalArgumentException("CPython " + platform + " has a negative size");
+            }
+            validateArchive(asset, archive);
+        }
+    }
+
+    /// The portable build toolchains: w64devkit on Windows, Zig plus Debian
+    /// utilities on Linux.
+    public record Toolchain(@Nullable Windows windows, @Nullable Linux linux) {
+    }
+
+    /// The portable MinGW build.
+    public record Windows(String version, String url, String sha256) {
+        public Windows {
+            if (version == null || !version.matches("[A-Za-z0-9._-]{1,40}")) {
+                throw new IllegalArgumentException("invalid w64devkit version: " + version);
+            }
+            validateHttps(url);
+            validateSha256(sha256, "w64devkit " + version);
+        }
+    }
+
+    /// The portable Linux combination.
+    public record Linux(String version, List<ToolchainArtifact> artifacts) {
+        public Linux {
+            if (version == null || !version.matches("[A-Za-z0-9._+-]{1,40}")) {
+                throw new IllegalArgumentException("invalid portable toolchain version: " + version);
+            }
+            artifacts = artifacts == null ? List.of() : List.copyOf(artifacts);
+            if (artifacts.isEmpty()) {
+                throw new IllegalArgumentException("the portable Linux toolchain pins no artifact");
+            }
+        }
+    }
+
+    /// One toolchain archive. Unlike [Artifact], `includes` may be empty: Zig is
+    /// unpacked whole rather than having named members pulled out.
+    public record ToolchainArtifact(String name, String archive, String url, String sha256,
+                                    long size, List<Include> includes) {
+        public ToolchainArtifact {
+            if (name == null || name.isBlank()) {
+                throw new IllegalArgumentException("a toolchain artifact needs a name");
+            }
+            validateHttps(url);
+            validateSha256(sha256, name);
+            if (size < 0) {
+                throw new IllegalArgumentException(name + " has a negative size");
+            }
+            validateArchive(name, archive);
+            includes = includes == null ? List.of() : List.copyOf(includes);
+        }
+    }
+
     /// The whole catalogue.
-    public record Catalog(int schema, String updatedAt,
-                          @Nullable Ca ca, List<Runtime> runtimes) {
+    public record Catalog(int schema, String updatedAt, @Nullable Ca ca,
+                          List<Runtime> runtimes, @Nullable Uv uv, @Nullable Python python,
+                          @Nullable Toolchain toolchain) {
         public Catalog {
             updatedAt = updatedAt == null ? "" : updatedAt;
             runtimes = runtimes == null ? List.of() : List.copyOf(runtimes);
@@ -228,7 +379,7 @@ public final class BootstrapCatalog {
             }
             JsonObject object = parsed.getAsJsonObject();
             int schema = object.has("schema") ? object.get("schema").getAsInt() : 0;
-            if (schema != 1) {
+            if (schema != 1 && schema != 2) {
                 throw new IllegalArgumentException(
                         "Unsupported bootstrap catalogue schema " + schema + " in " + source);
             }
@@ -250,7 +401,79 @@ public final class BootstrapCatalog {
                     runtimes.add(parseRuntime(element.getAsJsonObject()));
                 }
             }
-            return new Catalog(schema, updatedAt, ca, runtimes);
+            Uv uv = null;
+            if (object.has("uv") && object.get("uv").isJsonObject()) {
+                uv = parseUv(object.getAsJsonObject("uv"));
+            }
+            Python python = null;
+            if (object.has("python") && object.get("python").isJsonObject()) {
+                python = parsePython(object.getAsJsonObject("python"));
+            }
+            Toolchain toolchain = null;
+            if (object.has("toolchain") && object.get("toolchain").isJsonObject()) {
+                toolchain = parseToolchain(object.getAsJsonObject("toolchain"));
+            }
+            return new Catalog(schema, updatedAt, ca, runtimes, uv, python, toolchain);
+        }
+
+        private static Uv parseUv(JsonObject object) {
+            List<UvBinary> binaries = new ArrayList<>();
+            if (object.has("binaries") && object.get("binaries").isJsonArray()) {
+                for (JsonElement element : object.getAsJsonArray("binaries")) {
+                    JsonObject binary = element.getAsJsonObject();
+                    binaries.add(new UvBinary(string(binary, "platform"), string(binary, "sha256")));
+                }
+            }
+            return new Uv(string(object, "version"), binaries);
+        }
+
+        private static Python parsePython(JsonObject object) {
+            List<PythonArtifact> artifacts = new ArrayList<>();
+            if (object.has("artifacts") && object.get("artifacts").isJsonArray()) {
+                for (JsonElement element : object.getAsJsonArray("artifacts")) {
+                    JsonObject artifact = element.getAsJsonObject();
+                    artifacts.add(new PythonArtifact(string(artifact, "platform"),
+                            string(artifact, "asset"), string(artifact, "sha256"),
+                            artifact.has("size") ? artifact.get("size").getAsLong() : 0,
+                            string(artifact, "archive")));
+                }
+            }
+            return new Python(string(object, "version"), string(object, "build"),
+                    string(object, "releaseBase"), artifacts);
+        }
+
+        private static Toolchain parseToolchain(JsonObject object) {
+            Windows windows = null;
+            if (object.has("windows") && object.get("windows").isJsonObject()) {
+                JsonObject value = object.getAsJsonObject("windows");
+                windows = new Windows(string(value, "version"), string(value, "url"),
+                        string(value, "sha256"));
+            }
+            Linux linux = null;
+            if (object.has("linux") && object.get("linux").isJsonObject()) {
+                JsonObject value = object.getAsJsonObject("linux");
+                List<ToolchainArtifact> artifacts = new ArrayList<>();
+                if (value.has("artifacts") && value.get("artifacts").isJsonArray()) {
+                    for (JsonElement element : value.getAsJsonArray("artifacts")) {
+                        JsonObject artifact = element.getAsJsonObject();
+                        List<Include> includes = new ArrayList<>();
+                        if (artifact.has("includes") && artifact.get("includes").isJsonArray()) {
+                            for (JsonElement item : artifact.getAsJsonArray("includes")) {
+                                JsonObject include = item.getAsJsonObject();
+                                includes.add(new Include(string(include, "prefix"),
+                                        string(include, "destination")));
+                            }
+                        }
+                        artifacts.add(new ToolchainArtifact(string(artifact, "name"),
+                                string(artifact, "archive"), string(artifact, "url"),
+                                string(artifact, "sha256"),
+                                artifact.has("size") ? artifact.get("size").getAsLong() : 0,
+                                includes));
+                    }
+                }
+                linux = new Linux(string(value, "version"), artifacts);
+            }
+            return new Toolchain(windows, linux);
         }
 
         private static Runtime parseRuntime(JsonObject object) {
@@ -284,6 +507,105 @@ public final class BootstrapCatalog {
         }
     }
 
+    /// The catalogue in force: the embedded copy, or the operator's override.
+    ///
+    /// Read once. The override is named in [Origin] so the doctor and the logs
+    /// can say which one produced a pin — an operator who pointed at a stale
+    /// file should be able to see that without reading source.
+    public static Catalog current() {
+        Catalog value = current;
+        if (value != null) {
+            return value;
+        }
+        synchronized (BootstrapCatalog.class) {
+            if (current != null) {
+                return current;
+            }
+            Path override = overrideFile();
+            if (override != null) {
+                try {
+                    Catalog parsed = Catalog.read(override);
+                    requireComplete(parsed, override.toString());
+                    origin = new Origin("operator", override.toString());
+                    LOG.info("bootstrap: catalog=operator path=" + override);
+                    current = parsed;
+                    return parsed;
+                } catch (IOException | RuntimeException e) {
+                    origin = new Origin("embedded", "the operator catalogue at " + override
+                            + " was rejected: " + e.getMessage());
+                    LOG.warning("bootstrap: catalog=operator path=" + override + " rejected ("
+                            + e.getMessage() + "); using the embedded catalogue");
+                }
+            } else {
+                origin = new Origin("embedded", "");
+            }
+            current = Catalog.builtin();
+            return current;
+        }
+    }
+
+    /// An operator catalogue must pin every bundle the panel uses.
+    ///
+    /// A half-filled catalogue is the worst of both: the panel would keep
+    /// working until the one missing section was needed, then fail deep inside
+    /// an install. An operator who wants to override one pin copies the
+    /// embedded file and edits that field.
+    ///
+    /// @param catalog the parsed override
+    /// @param source  where it came from, for the message
+    /// @throws IllegalArgumentException when a section is missing
+    static void requireComplete(Catalog catalog, String source) {
+        List<String> missing = new ArrayList<>();
+        if (catalog.uv() == null) {
+            missing.add("uv");
+        }
+        if (catalog.python() == null) {
+            missing.add("python");
+        }
+        if (catalog.toolchain() == null) {
+            missing.add("toolchain");
+        }
+        if (!missing.isEmpty()) {
+            throw new IllegalArgumentException("the catalogue at " + source
+                    + " pins no " + String.join(", ", missing)
+                    + "; copy the embedded catalogue and edit the field you need");
+        }
+    }
+
+    /// Which catalogue is in force and why.
+    public static Origin origin() {
+        current();
+        return origin;
+    }
+
+    /// Where the override comes from, or `null`.
+    static @Nullable Path overrideFile() {
+        String env = System.getenv(ENV_CATALOG);
+        if (env != null && !env.isBlank()) {
+            return Path.of(env.trim());
+        }
+        String property = System.getProperty(PROPERTY_CATALOG);
+        return property == null || property.isBlank() ? null : Path.of(property.trim());
+    }
+
+    /// Forgets the loaded catalogue, so a test can point at another file.
+    static void reset() {
+        synchronized (BootstrapCatalog.class) {
+            current = null;
+            origin = new Origin("embedded", "");
+        }
+    }
+
+    /// Which catalogue answered: `embedded`, or `operator` with its path.
+    ///
+    /// @param kind   `embedded` or `operator`
+    /// @param detail the path, or why an override was not used
+    public record Origin(String kind, String detail) {
+        public String describe() {
+            return detail.isEmpty() ? kind : kind + " " + detail;
+        }
+    }
+
     /// Rejects anything but an https URL with a host.
     ///
     /// The catalogue is the only source of artifact URLs, so this is a guard
@@ -313,6 +635,30 @@ public final class BootstrapCatalog {
         }
         if (url.toLowerCase(Locale.ROOT).contains("latest")) {
             throw new IllegalArgumentException("artifact URLs must be pinned, not moving: " + url);
+        }
+    }
+
+    /// A `linux-x64` style platform key.
+    static void validatePlatform(@Nullable String platform) {
+        if (platform == null || !platform.matches("[a-z0-9]+-[a-z0-9]+")) {
+            throw new IllegalArgumentException("invalid platform key: " + platform);
+        }
+    }
+
+    /// A lowercase SHA-256.
+    static void validateSha256(@Nullable String sha256, String what) {
+        if (sha256 == null || !sha256.matches("[0-9a-f]{64}")) {
+            throw new IllegalArgumentException(what + " has no pinned lowercase SHA-256");
+        }
+    }
+
+    /// An archive kind the extractors understand.
+    static void validateArchive(String what, @Nullable String archive) {
+        String value = archive == null ? "" : archive.trim().toLowerCase(Locale.ROOT);
+        if (!value.equals("deb") && !value.equals("zip") && !value.equals("tar")
+                && !value.equals("tar.gz") && !value.equals("tgz")
+                && !value.equals("tar.xz") && !value.equals("txz")) {
+            throw new IllegalArgumentException("unsupported archive for " + what + ": " + archive);
         }
     }
 

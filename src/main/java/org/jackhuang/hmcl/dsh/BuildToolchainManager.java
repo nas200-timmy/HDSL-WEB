@@ -110,52 +110,62 @@ public final class BuildToolchainManager {
 
     private static final Logger LOG = Logger.LOG;
 
-    /// The portable MinGW build. It is a version, never `latest`.
-    public static final String WINDOWS_PORTABLE_VERSION = "2.11.0";
-    public static final String WINDOWS_VERSION = "w64devkit-" + WINDOWS_PORTABLE_VERSION;
-    public static final String WINDOWS_PORTABLE_URL =
-            "https://github.com/skeeto/w64devkit/releases/download/v2.11.0/w64devkit-x64-2.11.0.7z.exe";
-    public static final String WINDOWS_PORTABLE_SHA256 =
-            "54c2bb9962e8a30c8270e34c5efc3d5fee579f53087fa7d435b95fbba2af7b2b";
+    /// The portable MinGW build, from the catalogue. A version, never `latest`.
+    public static String windowsPortableVersion() {
+        return windowsCatalog().version();
+    }
 
-    /// The portable Linux combination: Zig provides the compiler drivers, the
-    /// Debian packages provide the rest. The version string is the directory
-    /// name and names every artifact in [Toolchain#describe].
-    public static final String ZIG_VERSION = "0.14.1";
-    public static final String LINUX_VERSION = "zig-" + ZIG_VERSION + "+debian11";
+    /// The directory a w64devkit tree is published under.
+    public static String windowsVersion() {
+        return "w64devkit-" + windowsPortableVersion();
+    }
 
-    /// Zig's official release archive. The digest is the one published in
-    /// `https://ziglang.org/download/index.json` for 0.14.1.
-    static final String ZIG_URL =
-            "https://ziglang.org/download/0.14.1/zig-x86_64-linux-0.14.1.tar.xz";
-    static final String ZIG_SHA256 =
-            "24aeeec8af16c381934a6cd7d95c807a8cb2cf7df9fa40d359aa884195c4716c";
-    static final long ZIG_SIZE = 49_086_504L;
+    /// Where the pinned w64devkit self-extractor lives.
+    public static String windowsPortableUrl() {
+        return windowsCatalog().url();
+    }
 
-    /// Debian 11 (bullseye) packages, fetched by content hash from
-    /// `snapshot.debian.org`: the same immutable address [BootstrapCatalog]
-    /// uses for the runtime closure. `make` 4.3-4 needs glibc 2.27, `pkgconf`
-    /// 1.7.4 and `nasm` 2.15.05 need less, and libpkgconf3 is the `pkgconf`
-    /// binary's only non-libc dependency.
-    static final String MAKE_URL = "https://snapshot.debian.org/file/8ac97afe952bebb6aef2960a68ded4b26435e310";
-    static final String MAKE_SHA256 =
-            "54d832703f916d887d9f1693f1e7849995b7cfb86ccd3939e667c98b2dd52cee";
-    static final long MAKE_SIZE = 395_960L;
+    /// The digest of that archive.
+    public static String windowsPortableSha256() {
+        return windowsCatalog().sha256();
+    }
 
-    static final String PKGCONF_URL = "https://snapshot.debian.org/file/7053b5ffd4d5a717807c26834eab70bf3714769c";
-    static final String PKGCONF_SHA256 =
-            "aaa47aa5db42c7b7b52246b3dc9456cc865faa8f726cbb58b94f81a1d3691075";
-    static final long PKGCONF_SIZE = 41_888L;
+    /// Zig's version, which also names the portable Linux directory.
+    public static String zigVersion() {
+        return linuxCatalog().version();
+    }
 
-    static final String LIBPKGCONF_URL = "https://snapshot.debian.org/file/e2672ff5d6218a94ae90aa27148f9e0d9cc8e265";
-    static final String LIBPKGCONF_SHA256 =
-            "ec3eaa7729399618482c11064f0c15d5d6d41186d0d4fa43fa04ace12e9be015";
-    static final long LIBPKGCONF_SIZE = 35_220L;
+    /// The directory the portable Linux combination is published under.
+    public static String linuxVersion() {
+        return "zig-" + zigVersion() + "+debian11";
+    }
 
-    static final String NASM_URL = "https://snapshot.debian.org/file/bf9bdfc6ad4db6ba30be61a6f94ebb56b18117c0";
-    static final String NASM_SHA256 =
-            "c860caec653b865d5b83359452d97b11f1b3ba5b18b07cac554cf72550b3bfc9";
-    static final long NASM_SIZE = 420_828L;
+    private static BootstrapCatalog.Toolchain toolchainCatalog() {
+        BootstrapCatalog.Toolchain toolchain = BootstrapCatalog.current().toolchain();
+        if (toolchain == null) {
+            throw new IllegalStateException(
+                    "bootstrap_catalog_incomplete: the catalogue pins no build toolchain");
+        }
+        return toolchain;
+    }
+
+    private static BootstrapCatalog.Windows windowsCatalog() {
+        BootstrapCatalog.Windows windows = toolchainCatalog().windows();
+        if (windows == null) {
+            throw new IllegalStateException(
+                    "bootstrap_catalog_incomplete: the catalogue pins no Windows toolchain");
+        }
+        return windows;
+    }
+
+    private static BootstrapCatalog.Linux linuxCatalog() {
+        BootstrapCatalog.Linux linux = toolchainCatalog().linux();
+        if (linux == null) {
+            throw new IllegalStateException(
+                    "bootstrap_catalog_incomplete: the catalogue pins no Linux toolchain");
+        }
+        return linux;
+    }
 
     private static final String RECORD = "toolchain.json";
     private static final String POINTER = "current.json";
@@ -275,8 +285,8 @@ public final class BuildToolchainManager {
                 return os + "/" + arch + " (system toolchain)";
             }
             String label = "windows".equals(os)
-                    ? "portable w64devkit " + WINDOWS_PORTABLE_VERSION
-                    : "portable zig " + ZIG_VERSION + " + GNU make 4.3 + pkgconf 1.7.4"
+                    ? "portable w64devkit " + windowsPortableVersion()
+                    : "portable zig " + zigVersion() + " + GNU make 4.3 + pkgconf 1.7.4"
                     + (has("nasm") ? " + nasm 2.15.05" : "");
             return os + "/" + arch + " (" + label + " at " + directory + ")";
         }
@@ -503,7 +513,7 @@ public final class BuildToolchainManager {
             }
             return new Toolchain(system.os(), system.arch(), null, null, false, false,
                     system.tools(), system.missing(), system.environment(),
-                    "A portable w64devkit " + WINDOWS_PORTABLE_VERSION
+                    "A portable w64devkit " + windowsPortableVersion()
                             + " can be installed when a source build starts.");
         }
         if (OperatingSystem.CURRENT_OS == OperatingSystem.LINUX) {
@@ -606,7 +616,7 @@ public final class BuildToolchainManager {
     Toolchain windowsToolchain(@Nullable Path bin) {
         List<Tool> tools = new ArrayList<>();
         if (bin != null) {
-            String version = "w64devkit " + WINDOWS_PORTABLE_VERSION;
+            String version = "w64devkit " + windowsPortableVersion();
             tools.add(toolAt("gcc", bin.resolve("gcc.exe"), Map.of(), version));
             tools.add(toolAt("g++", bin.resolve("g++.exe"), Map.of(), version));
             tools.add(toolAt("make", firstExisting(bin.resolve("mingw32-make.exe"),
@@ -652,22 +662,22 @@ public final class BuildToolchainManager {
         putIf(environment, "PKG_CONFIG", pathOf(tools, "pkg-config"));
         PythonRuntimeManager.applyTo(environment);
         String detail = bin != null
-                ? "Portable w64devkit " + WINDOWS_PORTABLE_VERSION + " is installed under "
+                ? "Portable w64devkit " + windowsPortableVersion() + " is installed under "
                 + bin.getParent() + "; external codec libraries are usually absent, so a"
                 + " Windows source build is a minimal build."
                 : "No MinGW toolchain was found on PATH; the pinned portable w64devkit"
-                + " " + WINDOWS_PORTABLE_VERSION + " can be installed on demand.";
+                + " " + windowsPortableVersion() + " can be installed on demand.";
         return new Toolchain(hostOs(), hostArch(), bin == null ? null : bin.getParent(), bin,
                 usable, bin != null, tools, missing, environment, detail);
     }
 
     private @Nullable Toolchain installedWindows() {
-        Path bin = windowsBin(root.resolve(WINDOWS_VERSION));
+        Path bin = windowsBin(root.resolve(windowsVersion()));
         if (bin == null) {
             // The ffmpeg builder's pre-priority-4 location; adopting it means an
             // installation that already works is not downloaded twice.
             Path legacy = root.getParent() == null ? null
-                    : root.getParent().resolve("mingw").resolve(WINDOWS_PORTABLE_VERSION);
+                    : root.getParent().resolve("mingw").resolve(windowsPortableVersion());
             if (legacy != null) {
                 bin = windowsBin(legacy);
             }
@@ -680,7 +690,7 @@ public final class BuildToolchainManager {
     }
 
     private @Nullable Toolchain installedLinux() {
-        Path version = root.resolve(LINUX_VERSION);
+        Path version = root.resolve(linuxVersion());
         Path bin = version.resolve("bin");
         if (!Files.isRegularFile(version.resolve("zig/zig"))
                 || !Files.isRegularFile(bin.resolve("cc"))
@@ -689,12 +699,12 @@ public final class BuildToolchainManager {
             return null;
         }
         List<Tool> tools = new ArrayList<>();
-        tools.add(toolAt("cc", bin.resolve("cc"), Map.of(), "zig " + ZIG_VERSION));
-        tools.add(toolAt("c++", bin.resolve("c++"), Map.of(), "zig " + ZIG_VERSION));
+        tools.add(toolAt("cc", bin.resolve("cc"), Map.of(), "zig " + zigVersion()));
+        tools.add(toolAt("c++", bin.resolve("c++"), Map.of(), "zig " + zigVersion()));
         tools.add(toolAt("make", bin.resolve("make"), Map.of(), "GNU make 4.3"));
-        tools.add(toolAt("ar", bin.resolve("ar"), Map.of(), "zig " + ZIG_VERSION));
-        tools.add(toolAt("ranlib", bin.resolve("ranlib"), Map.of(), "zig " + ZIG_VERSION));
-        tools.add(toolAt("ld", bin.resolve("ld"), Map.of(), "zig " + ZIG_VERSION));
+        tools.add(toolAt("ar", bin.resolve("ar"), Map.of(), "zig " + zigVersion()));
+        tools.add(toolAt("ranlib", bin.resolve("ranlib"), Map.of(), "zig " + zigVersion()));
+        tools.add(toolAt("ld", bin.resolve("ld"), Map.of(), "zig " + zigVersion()));
         tools.add(toolAt("pkg-config", firstExisting(bin.resolve("pkg-config"), bin.resolve("pkgconf")),
                 Map.of(), "pkgconf 1.7.4"));
         tools.add(toolAt("nasm", bin.resolve("nasm"), Map.of(), "nasm 2.15.05"));
@@ -707,21 +717,21 @@ public final class BuildToolchainManager {
                                      BooleanSupplier cancelled) throws IOException {
         Toolchain existing = installedWindows();
         if (existing != null) {
-            BootstrapTrace.reused("toolchain", WINDOWS_VERSION, existing.directory());
+            BootstrapTrace.reused("toolchain", windowsVersion(), existing.directory());
             return existing;
         }
         Files.createDirectories(root);
         Privileges.prepareAgentDirectory(root, Privileges.AGENT_SHARED_DIRECTORY);
 
-        Path target = root.resolve(WINDOWS_VERSION);
+        Path target = root.resolve(windowsVersion());
         Path download = root.resolve(".w64devkit-" + UUID.randomUUID() + ".7z.exe");
         Path extract = root.resolve(".w64devkit-extract-" + UUID.randomUUID());
         boolean installed = false;
         try {
             Files.createDirectories(extract);
             Privileges.prepareAgentDirectory(extract, Privileges.AGENT_SHARED_DIRECTORY);
-            progress.stage("downloading portable w64devkit " + WINDOWS_PORTABLE_VERSION, 0.05);
-            fetch(WINDOWS_PORTABLE_URL, download, WINDOWS_PORTABLE_SHA256, 0, cancelled);
+            progress.stage("downloading portable w64devkit " + windowsPortableVersion(), 0.05);
+            fetch(windowsPortableUrl(), download, windowsPortableSha256(), 0, cancelled);
             progress.stage("extracting portable w64devkit", 0.6);
             RunResult result = run(List.of(download.toString(), "-y", "-o" + extract),
                     Map.of(), EXTRACT_TIMEOUT, cancelled);
@@ -735,8 +745,8 @@ public final class BuildToolchainManager {
                         + " contains no gcc.exe");
             }
             Path tree = bin.getParent();
-            publish(tree, target, WINDOWS_VERSION, List.of(
-                    artifactRecord("w64devkit", WINDOWS_PORTABLE_URL, WINDOWS_PORTABLE_SHA256,
+            publish(tree, target, windowsVersion(), List.of(
+                    artifactRecord("w64devkit", windowsPortableUrl(), windowsPortableSha256(),
                             0, "7z.exe")));
             Toolchain toolchain = installedWindows();
             if (toolchain == null) {
@@ -758,14 +768,14 @@ public final class BuildToolchainManager {
                                    BooleanSupplier cancelled) throws IOException {
         Toolchain existing = installedLinux();
         if (existing != null) {
-            BootstrapTrace.reused("toolchain", LINUX_VERSION, existing.directory());
+            BootstrapTrace.reused("toolchain", linuxVersion(), existing.directory());
             return existing;
         }
         Files.createDirectories(root);
         Privileges.prepareAgentDirectory(root, Privileges.AGENT_SHARED_DIRECTORY);
 
-        Path target = root.resolve(LINUX_VERSION);
-        Path staging = root.resolve("." + LINUX_VERSION + ".installing-" + UUID.randomUUID());
+        Path target = root.resolve(linuxVersion());
+        Path staging = root.resolve("." + linuxVersion() + ".installing-" + UUID.randomUUID());
         Path downloads = staging.resolve(".downloads");
         boolean installed = false;
         try {
@@ -797,7 +807,7 @@ public final class BuildToolchainManager {
             BootstrapRuntimeManager.deleteTree(downloads);
             writeLinuxWrappers(staging);
             progress.stage("publishing the portable build toolchain", 0.95);
-            publish(staging, target, LINUX_VERSION, records);
+            publish(staging, target, linuxVersion(), records);
             Toolchain toolchain = installedLinux();
             if (toolchain == null) {
                 throw new IOException("build_toolchain_missing: the portable Linux toolchain was"
@@ -813,20 +823,14 @@ public final class BuildToolchainManager {
         }
     }
 
-    /// The pinned Linux artifacts, in install order.
+    /// The pinned Linux artifacts, in install order, from the catalogue.
     static List<Artifact> linuxArtifacts() {
-        return List.of(
-                new Artifact("zig", ZIG_URL, ZIG_SHA256, ZIG_SIZE, "tar.xz", List.of()),
-                new Artifact("make", MAKE_URL, MAKE_SHA256, MAKE_SIZE, "deb",
-                        List.of(new BootstrapCatalog.Include("usr/bin/make", "bin"))),
-                new Artifact("pkgconf", PKGCONF_URL, PKGCONF_SHA256, PKGCONF_SIZE, "deb",
-                        List.of(new BootstrapCatalog.Include("usr/bin/pkgconf", "bin"))),
-                new Artifact("libpkgconf3", LIBPKGCONF_URL, LIBPKGCONF_SHA256,
-                        LIBPKGCONF_SIZE, "deb",
-                        List.of(new BootstrapCatalog.Include(
-                                "usr/lib/x86_64-linux-gnu/libpkgconf.so.3", "lib"))),
-                new Artifact("nasm", NASM_URL, NASM_SHA256, NASM_SIZE, "deb",
-                        List.of(new BootstrapCatalog.Include("usr/bin/nasm", "bin"))));
+        List<Artifact> artifacts = new ArrayList<>();
+        for (BootstrapCatalog.ToolchainArtifact pinned : linuxCatalog().artifacts()) {
+            artifacts.add(new Artifact(pinned.name(), pinned.url(), pinned.sha256(),
+                    pinned.size(), pinned.archive(), pinned.includes()));
+        }
+        return artifacts;
     }
 
     /// The `cc`/`c++`/`ar`/`ranlib`/`ld` files that make Zig look like a

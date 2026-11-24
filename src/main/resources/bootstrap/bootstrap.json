@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "updatedAt": "2026-11-24",
   "ca": {
     "version": "2026-11-05",
@@ -92,5 +92,127 @@
       "notes": "not pinned: no arm64 packages were downloaded and hashed, so the panel does not pretend to supply a closure for this architecture. Install libstdc++6, libgcc-s1 and libatomic1 from the distribution instead.",
       "artifacts": []
     }
-  ]
+  ],
+  "uv": {
+    "version": "0.7.13",
+    "binaries": [
+      {
+        "platform": "linux-x64",
+        "sha256": "04e7399b45054f5ae4239ed60cd579311daafdd8d43e0e6ac01003436f19eaac"
+      },
+      {
+        "platform": "linux-arm64",
+        "sha256": "da9b140ed024e03d1750b6ec4f9902ee1542bd5e44beb14b7ae336d24610bbf5"
+      },
+      {
+        "platform": "macos-x64",
+        "sha256": "a07b8eadd2c241b408b935c12ff603765c21da06255e64ff8485bf8720e106de"
+      },
+      {
+        "platform": "macos-arm64",
+        "sha256": "ab10743159870e1a6e8eb87197eb9a42f086f21bf3cd840b9cfbd73ab23e08b6"
+      },
+      {
+        "platform": "windows-x64",
+        "sha256": "e004f18282750aebe5c8a1a6dedba544ede1d7adc724e34b97834414222f4ef0"
+      },
+      {
+        "platform": "windows-arm64",
+        "sha256": "162206ef9b8ceabe17af83e601bff5f1d78e0a58085d173e2365eda3b532ed05"
+      }
+    ]
+  },
+  "python": {
+    "version": "3.12.16",
+    "build": "20261123",
+    "releaseBase": "https://github.com/astral-sh/python-build-standalone/releases/download",
+    "artifacts": [
+      {
+        "platform": "linux-x64",
+        "asset": "cpython-3.12.16+20261123-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+        "sha256": "c85811d35971d06612585a057db3b71806378df6ea8476275fb16aa5c9fe56a0",
+        "size": 34741061,
+        "archive": "tar.gz"
+      },
+      {
+        "platform": "windows-x64",
+        "asset": "cpython-3.12.16+20261123-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+        "sha256": "75988f49393727d7e53b673d50088e7f809a629dd37cb59da3756479bc6ea5c1",
+        "size": 22388474,
+        "archive": "tar.gz"
+      }
+    ]
+  },
+  "toolchain": {
+    "windows": {
+      "version": "2.11.0",
+      "url": "https://github.com/skeeto/w64devkit/releases/download/v2.11.0/w64devkit-x64-2.11.0.7z.exe",
+      "sha256": "54c2bb9962e8a30c8270e34c5efc3d5fee579f53087fa7d435b95fbba2af7b2b"
+    },
+    "linux": {
+      "version": "0.14.1",
+      "artifacts": [
+        {
+          "name": "zig",
+          "archive": "tar.xz",
+          "url": "https://ziglang.org/download/0.14.1/zig-x86_64-linux-0.14.1.tar.xz",
+          "sha256": "24aeeec8af16c381934a6cd7d95c807a8cb2cf7df9fa40d359aa884195c4716c",
+          "size": 49086504,
+          "includes": []
+        },
+        {
+          "name": "make",
+          "archive": "deb",
+          "url": "https://snapshot.debian.org/file/8ac97afe952bebb6aef2960a68ded4b26435e310",
+          "sha256": "54d832703f916d887d9f1693f1e7849995b7cfb86ccd3939e667c98b2dd52cee",
+          "size": 395960,
+          "includes": [
+            {
+              "prefix": "usr/bin/make",
+              "destination": "bin"
+            }
+          ]
+        },
+        {
+          "name": "pkgconf",
+          "archive": "deb",
+          "url": "https://snapshot.debian.org/file/7053b5ffd4d5a717807c26834eab70bf3714769c",
+          "sha256": "aaa47aa5db42c7b7b52246b3dc9456cc865faa8f726cbb58b94f81a1d3691075",
+          "size": 41888,
+          "includes": [
+            {
+              "prefix": "usr/bin/pkgconf",
+              "destination": "bin"
+            }
+          ]
+        },
+        {
+          "name": "libpkgconf3",
+          "archive": "deb",
+          "url": "https://snapshot.debian.org/file/e2672ff5d6218a94ae90aa27148f9e0d9cc8e265",
+          "sha256": "ec3eaa7729399618482c11064f0c15d5d6d41186d0d4fa43fa04ace12e9be015",
+          "size": 35220,
+          "includes": [
+            {
+              "prefix": "usr/lib/x86_64-linux-gnu/libpkgconf.so.3",
+              "destination": "lib"
+            }
+          ]
+        },
+        {
+          "name": "nasm",
+          "archive": "deb",
+          "url": "https://snapshot.debian.org/file/bf9bdfc6ad4db6ba30be61a6f94ebb56b18117c0",
+          "sha256": "c860caec653b865d5b83359452d97b11f1b3ba5b18b07cac554cf72550b3bfc9",
+          "size": 420828,
+          "includes": [
+            {
+              "prefix": "usr/bin/nasm",
+              "destination": "bin"
+            }
+          ]
+        }
+      ]
+    }
+  }
 }

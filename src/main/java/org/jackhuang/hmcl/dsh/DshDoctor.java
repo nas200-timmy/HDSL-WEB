@@ -159,6 +159,7 @@ public final class DshDoctor {
         out.println();
 
         out.println("Bootstrap");
+        out.println("  catalog:         " + BootstrapCatalog.origin().describe());
         BootstrapRuntimeManager.Installed closure = BootstrapRuntimeManager.currentRuntimeClosure();
         java.util.List<String> missingLibraries = BootstrapRuntimeManager.missingNodeLibraries();
         out.println("  runtime closure: " + formatClosure(closure, missingLibraries));
@@ -166,8 +167,12 @@ public final class DshDoctor {
         out.println("  ca bundle:       " + (ca == null
                 ? "not installed (child processes fall back to the JVM's trust store)"
                 : "installed " + ca.version() + " " + ca.file()));
-        out.println("  build toolchain: " + formatToolchain(BuildToolchainManager.currentInstalled()));
-        out.println("  uv:              " + UvRuntime.summary());
+        // A partial operator catalogue is a real possibility, and the doctor is
+        // the one place that has to survive it: a missing section is reported,
+        // not thrown.
+        out.println("  build toolchain: " + safe(() ->
+                formatToolchain(BuildToolchainManager.currentInstalled())));
+        out.println("  uv:              " + safe(UvRuntime::summary));
         out.println();
 
         out.println("File watchers");
@@ -221,6 +226,15 @@ public final class DshDoctor {
         out.println(runtimeOk ? "Result: ready to install DeepSeek Harness versions."
                 : "Result: the JavaScript toolchain is incomplete.");
         return runtimeOk ? 0 : 1;
+    }
+
+    /// Runs a row that may depend on a catalogue section an operator left out.
+    static String safe(java.util.function.Supplier<String> row) {
+        try {
+            return row.get();
+        } catch (RuntimeException e) {
+            return "unavailable: " + e.getMessage();
+        }
     }
 
     /// The Python row: version, path, origin and the two capabilities that decide

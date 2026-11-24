@@ -184,7 +184,7 @@ class PythonRuntimeManagerTest {
     @Test
     void relocatingAMirrorKeepsTheDigest() {
         PythonRuntimeManager.Artifact canonical = new PythonRuntimeManager.Artifact(
-                PythonRuntimeManager.RELEASE_BASE + "/" + PythonRuntimeManager.BUILD_TAG
+                PythonRuntimeManager.releaseBase() + "/" + PythonRuntimeManager.buildTag()
                         + "/cpython-3.12.16+x.tar.gz",
                 "c".repeat(64), 123, "tar.gz");
 
@@ -192,7 +192,7 @@ class PythonRuntimeManagerTest {
                 "https://mirror.example.com/python-build-standalone/");
 
         assertTrue(mirrored.url().startsWith("https://mirror.example.com/python-build-standalone/"
-                        + PythonRuntimeManager.BUILD_TAG + "/cpython-3.12.16+x.tar.gz"),
+                        + PythonRuntimeManager.buildTag() + "/cpython-3.12.16+x.tar.gz"),
                 mirrored.url());
         assertEquals(canonical.sha256(), mirrored.sha256());
         assertEquals(canonical.size(), mirrored.size());
