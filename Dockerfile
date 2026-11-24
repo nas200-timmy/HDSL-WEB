@@ -249,9 +249,15 @@ LABEL org.opencontainers.image.licenses="GPL-3.0-only"
 ARG NODE_VERSION=22.23.1
 ARG PNPM_VERSION=11.28.2
 # Node 官方 dist 的下载基址。国内网络直连 nodejs.org 会 TLS 握手失败（curl exit 35），
-# 可用 --build-arg NODE_DIST_MIRROR=https://mirrors.cloud.tencent.com/nodejs-release 换镜像；
-# 镜像与官方逐字节一致（SHASUMS256 校验不变，仍以官方清单为准）。
+# 可用 --build-arg NODE_DIST_MIRROR=https://mirrors.cloud.tencent.com/nodejs-release 换镜像
+# （docker-install.sh 与 compose 都只传这个 ARG）；镜像与官方逐字节一致——
+# sha256 钉在下方 ARG（源自官方清单），不随下载源走。
 ARG NODE_DIST_MIRROR=https://nodejs.org/dist
+# 官方 sha256（2026-11-24 取自 nodejs.org/dist 的 SHASUMS256.txt，并与腾讯镜像核对一致）。
+# 校验清单绝不能与 tarball 同源下载：镜像被投毒时可同时替换包与清单，校验形同虚设。
+# bump NODE_VERSION 时必须同步更新这两个值；忘更新会构建失败（fail-closed），不会静默通过。
+ARG NODE_SHA256_X64=9749e988f437343b7fa832c69ded82a312e41a03116d766797ac14f6f9eee578
+ARG NODE_SHA256_ARM64=0294e8b915ab75f92c7513d2fcb830ae06e10684e6c603e99a87dbf8835389c1
 
 # 两个 apt 缓存挂载：索引和 .deb 都不进镜像层，只在构建器里留着。这一条是「改一行
 # Dockerfile 就等五分钟」的解药——包清单没变时 `apt-get update` 直接命中本地索引，
@@ -380,22 +386,22 @@ RUN set -eux; \
 # Node 22 LTS from the official nodejs.org tarball. The architecture is read
 # from `uname -m` rather than a package manager's answer, so the same Dockerfile
 # builds on amd64 and arm64 over any of the supported bases; the archive is
-# checked against the release's own SHASUMS256.txt before it is unpacked.
+# checked against the official sha256 pinned in ARGs before it is unpacked —
+# never against a checksum file fetched from the same mirror as the tarball.
 RUN set -eux; \
     arch="$(uname -m)"; \
     case "${arch}" in \
-      x86_64|amd64) node_arch=x64 ;; \
-      aarch64|arm64) node_arch=arm64 ;; \
+      x86_64|amd64) node_arch=x64; sha256="${NODE_SHA256_X64}" ;; \
+      aarch64|arm64) node_arch=arm64; sha256="${NODE_SHA256_ARM64}" ;; \
       *) echo "HDSL-web: unsupported architecture ${arch}" >&2; exit 1 ;; \
     esac; \
     tarball="node-v${NODE_VERSION}-linux-${node_arch}.tar.xz"; \
     curl -fsSLo "/tmp/${tarball}" "${NODE_DIST_MIRROR}/v${NODE_VERSION}/${tarball}"; \
-    curl -fsSLo /tmp/SHASUMS256.txt "${NODE_DIST_MIRROR}/v${NODE_VERSION}/SHASUMS256.txt"; \
-    grep " ${tarball}\$" /tmp/SHASUMS256.txt > /tmp/node.tar.sha256; \
+    echo "${sha256}  ${tarball}" > /tmp/node.tar.sha256; \
     (cd /tmp && sha256sum -c node.tar.sha256); \
     mkdir -p /opt/node; \
     tar -xJf "/tmp/${tarball}" -C /opt/node --strip-components=1 --no-same-owner; \
-    rm -f "/tmp/${tarball}" /tmp/SHASUMS256.txt /tmp/node.tar.sha256; \
+    rm -f "/tmp/${tarball}" /tmp/node.tar.sha256; \
     /opt/node/bin/node --version
 
 # Node 24 alongside Node 22, for the experimental ZCode category only. Its
@@ -405,21 +411,23 @@ RUN set -eux; \
 # shims are written next to it so `PATH=/opt/node24/bin:$PATH pnpm …` picks the
 # right pnpm without disturbing the panel's own.
 ARG NODE24_VERSION=24.14.0
+# 同 NODE_SHA256_*：官方清单钉扎，bump NODE24_VERSION 时同步更新。
+ARG NODE24_SHA256_X64=41cd79bb7877c81605a9e68ec4c91547774f46a40c67a17e34d7179ef11729df
+ARG NODE24_SHA256_ARM64=e7adfca03d9173276114a6f2219df1a7d25e1bfd6bbd771d3f839118a2053094
 RUN set -eux; \
     arch="$(uname -m)"; \
     case "${arch}" in \
-      x86_64|amd64) node_arch=x64 ;; \
-      aarch64|arm64) node_arch=arm64 ;; \
+      x86_64|amd64) node_arch=x64; sha256="${NODE24_SHA256_X64}" ;; \
+      aarch64|arm64) node_arch=arm64; sha256="${NODE24_SHA256_ARM64}" ;; \
       *) echo "HDSL-web: unsupported architecture ${arch}" >&2; exit 1 ;; \
     esac; \
     tarball="node-v${NODE24_VERSION}-linux-${node_arch}.tar.xz"; \
     curl -fsSLo "/tmp/${tarball}" "${NODE_DIST_MIRROR}/v${NODE24_VERSION}/${tarball}"; \
-    curl -fsSLo /tmp/SHASUMS24.txt "${NODE_DIST_MIRROR}/v${NODE24_VERSION}/SHASUMS256.txt"; \
-    grep " ${tarball}\$" /tmp/SHASUMS24.txt > /tmp/node24.tar.sha256; \
+    echo "${sha256}  ${tarball}" > /tmp/node24.tar.sha256; \
     (cd /tmp && sha256sum -c node24.tar.sha256); \
     mkdir -p /opt/node24; \
     tar -xJf "/tmp/${tarball}" -C /opt/node24 --strip-components=1 --no-same-owner; \
-    rm -f "/tmp/${tarball}" /tmp/SHASUMS24.txt /tmp/node24.tar.sha256; \
+    rm -f "/tmp/${tarball}" /tmp/node24.tar.sha256; \
     PATH="/opt/node24/bin:${PATH}" corepack enable --install-directory /opt/node24/bin; \
     /opt/node24/bin/node --version
 

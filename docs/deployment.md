@@ -532,8 +532,8 @@ docker run --rm -u 0:0 -v hdsl-data-restore:/data --entrypoint chown hdsl-web:la
 
 ## 4. 多架构构建（buildx）
 
-Dockerfile 对 `amd64` 与 `arm64` 都是自适应的：Node 版本按 `uname -m` 选官方 tarball，
-校验 `SHASUMS256.txt`；三段里前两段钉在构建机架构（`node:22-bookworm-slim`、`eclipse-temurin:21-jdk`），
+Dockerfile 对 `amd64` 与 `arm64` 都是自适应的：Node 按 `uname -m` 选 tarball（下载源可换镜像），
+校验钉在 ARG 里的官方 sha256（`NODE*_SHA256_*`，不随下载源走）；三段里前两段钉在构建机架构（`node:22-bookworm-slim`、`eclipse-temurin:21-jdk`），
 第三段的底座由 `HDSL_BASE` 决定（默认 `debian:trixie-slim`，也可换 Fedora / openSUSE，见 §4.1）。CI（`.github/workflows/docker.yml`）发布的就是
 `linux/amd64` + `linux/arm64` 双架构 manifest；构建阶段钉在 `$BUILDPLATFORM`，
 只有 runtime 阶段在目标架构下执行。下面的命令用于本地复现：
