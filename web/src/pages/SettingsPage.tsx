@@ -61,6 +61,7 @@ import type {
   DeveloperStatus,
   DoctorCheck,
   DoctorReport,
+  BootstrapReport,
   EmergencyStopPreview,
   PanelInfo,
   PlatformCompatibility,
@@ -196,7 +197,7 @@ export function SettingsPage() {
             items: [
               {
                 key: "doctor",
-                title: "环境体检",
+                title: "运行环境",
                 icon: <CheckCircleIcon size={20} />,
               },
               {
@@ -222,7 +223,7 @@ export function SettingsPage() {
         {tab === "brands" && <BrandManagementPanel />}
         {tab === "tls" && <TlsTab />}
         {tab === "developer" && <DeveloperTab />}
-        {tab === "doctor" && <DoctorTab />}
+        {tab === "doctor" && <RuntimeTab />}
         {tab === "about" && <AboutTab />}
       </div>
     </div>
@@ -4645,7 +4646,184 @@ function DoctorRow({ check }: { check: DoctorCheck }) {
   );
 }
 
-function DoctorTab() {
+/** 自举：面板能自己补的组件，缺什么、从哪来、放哪儿。
+ *
+ * 平常是一行；一个可用组件都没有时默认展开——那种机器上用户不看见就走不下去。
+ * 安装永远是显式点击，进页面只读不写。 */
+function BootstrapCard() {
+  const [data, setData] = useState<BootstrapReport | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [autoExpanded, setAutoExpanded] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [taskMsg, setTaskMsg] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const load = async () => {
+    try {
+      setData(await api.bootstrap());
+      setError(null);
+    } catch (e) {
+      setError(isNotImplemented(e) ? "后端尚未支持自举接口" : errMsg(e));
+    }
+  };
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!data || autoExpanded) return;
+    const usable = data.bundles.filter((b) => b.state !== "missing").length;
+    if (usable === 0) {
+      setExpanded(true);
+      setAutoExpanded(true);
+    }
+  }, [data, autoExpanded]);
+
+  useEffect(() => {
+    if (!busy) return;
+    const timer = setInterval(async () => {
+      try {
+        const list = await api.tasks();
+        const t = list.find((x) => x.id === busy);
+        if (!t) return;
+        setTaskMsg(t.message ?? "");
+        if (t.state === "done" || t.state === "failed") {
+          setBusy(null);
+          setTaskMsg("");
+          toast(t.state === "done" ? "success" : "error", t.message ?? t.state);
+          void load();
+        }
+      } catch {
+        // 任务列表拉不到就下一轮再试，不打断安装。
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy]);
+
+  const install = async (bundle: string) => {
+    setBusy(bundle);
+    setTaskMsg("正在提交…");
+    try {
+      const r = await api.bootstrapInstall(bundle);
+      setBusy(r.taskId);
+    } catch (e) {
+      setBusy(null);
+      toast("error", `启动安装失败：${errMsg(e)}`);
+    }
+  };
+
+  const bundles = data?.bundles ?? [];
+  const missing = bundles.filter((b) => b.state === "missing");
+  const summary = data == null
+    ? "读取中…"
+    : missing.length === 0
+      ? "无需干预 · 宿主已提供所需组件，未下载任何文件"
+      : `缺 ${missing.length} 项：${missing.map((b) => b.label).join("、")}`;
+  const dotColor = (state: string) =>
+    state === "ready"
+      ? "#2e7d32"
+      : state === "missing"
+        ? "#ed6c02"
+        : "var(--monet-on-surface-variant)";
+  const stateLabel = (state: string) =>
+    state === "ready" ? "就绪" : state === "missing" ? "缺失" : "不适用";
+
+  return (
+    <>
+      <div className="section-caption">
+        <DownloadIcon size={16} />
+        自举
+        <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          {data && (
+            <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+              目录：{data.catalog}
+            </span>
+          )}
+          <button className="btn btn-outline ripple-host" onClick={() => void load()}>
+            <RefreshIcon size={15} />
+            刷新
+          </button>
+        </span>
+      </div>
+      <div className="card" style={{ padding: 0 }}>
+        {error && !data ? (
+          <div className="empty-state">
+            <span style={{ fontSize: 20 }}>无法读取自举状态</span>
+            <span className="empty-sub">{error}</span>
+          </div>
+        ) : (
+          <>
+            <div
+              onClick={() => setExpanded((v) => !v)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "12px 16px",
+                cursor: "pointer",
+              }}
+            >
+              <span style={{ width: 8, height: 8, borderRadius: 4, background: dotColor(missing.length ? "missing" : "ready") }} />
+              <b>{summary}</b>
+              <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                {expanded ? "收起 ▾" : "展开 ▸"}
+              </span>
+            </div>
+            {expanded &&
+              bundles.map((b) => (
+                <div
+                  key={b.id}
+                  style={{
+                    display: "flex",
+                    gap: 12,
+                    padding: "12px 16px",
+                    alignItems: "flex-start",
+                    borderTop: "1px solid var(--monet-outline-variant)",
+                  }}
+                >
+                  <span style={{ width: 8, height: 8, borderRadius: 4, marginTop: 7, background: dotColor(b.state) }} />
+                  <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
+                    <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <b>{b.label}</b>
+                      <span className="tlli-subtitle">{stateLabel(b.state)}</span>
+                      {b.canInstall && (
+                        <button
+                          className="btn btn-outline ripple-host"
+                          style={{ marginLeft: "auto" }}
+                          disabled={busy != null}
+                          onClick={() => void install(b.id)}
+                        >
+                          <DownloadIcon size={14} />
+                          安装
+                        </button>
+                      )}
+                    </span>
+                    <span className="tlli-subtitle">{b.detail}</span>
+                    <span className="tlli-subtitle">为什么：{b.why}</span>
+                    {b.source && <span className="tlli-subtitle">来源：{b.source}</span>}
+                    {b.sha256 && <span className="tlli-subtitle">SHA-256：{b.sha256}</span>}
+                    {b.destination && <span className="tlli-subtitle">位置：{b.destination}</span>}
+                  </span>
+                </div>
+              ))}
+            {busy && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px", borderTop: "1px solid var(--monet-outline-variant)" }}>
+                <span className="spinner" />
+                <span className="tlli-subtitle">{taskMsg || "正在安装…"}</span>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+      <div style={{ height: 16 }} />
+    </>
+  );
+}
+
+function RuntimeTab() {
   const [report, setReport] = useState<DoctorReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -4674,9 +4852,10 @@ function DoctorTab() {
 
   return (
     <>
+      <BootstrapCard />
       <div className="section-caption">
         <CheckCircleIcon size={16} />
-        环境体检
+        环境检查
         <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
           {report && (
             <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>

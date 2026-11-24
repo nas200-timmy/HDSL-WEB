@@ -12,6 +12,7 @@ import type {
   DeveloperGuardScope,
   DeveloperStatus,
   DoctorReport,
+  BootstrapReport,
   EmergencyStopPreview,
   ExportChoices,
   ExportRecord,
@@ -692,6 +693,9 @@ export const api = {
   // ---------- Phase 4：体检 ----------
 
   doctor: () => request<DoctorReport>("/api/doctor"),
+  bootstrap: () => request<BootstrapReport>("/api/bootstrap"),
+  bootstrapInstall: (bundle: string) =>
+    request<{ taskId: string }>("/api/bootstrap/install", jsonInit("POST", { bundle })),
 
   // ---------- 实验性：ZCode 品类（见 docs/zcode-experimental.md） ----------
 

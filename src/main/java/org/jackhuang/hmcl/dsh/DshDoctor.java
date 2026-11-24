@@ -176,8 +176,11 @@ public final class DshDoctor {
         // A partial operator catalogue is a real possibility, and the doctor is
         // the one place that has to survive it: a missing section is reported,
         // not thrown.
+        // `detect()` merges the host's own compilers with the portable bundle;
+        // `currentInstalled()` only knows the managed one, which made this row
+        // say "none" over a machine with gcc on PATH.
         out.println("  build toolchain: " + safe(() ->
-                formatToolchain(BuildToolchainManager.currentInstalled())));
+                formatToolchain(BuildToolchainManager.defaultManager().detect())));
         out.println("  uv:              " + safe(UvRuntime::summary));
         out.println();
 

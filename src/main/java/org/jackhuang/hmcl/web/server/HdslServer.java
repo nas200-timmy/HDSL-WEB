@@ -50,6 +50,7 @@ import org.jackhuang.hmcl.web.event.EventBus;
 import org.jackhuang.hmcl.web.http.AccountsApiServlet;
 import org.jackhuang.hmcl.web.http.ApiGuardFilter;
 import org.jackhuang.hmcl.web.http.ApiServlet;
+import org.jackhuang.hmcl.web.http.BootstrapApiServlet;
 import org.jackhuang.hmcl.web.http.DoctorApiServlet;
 import org.jackhuang.hmcl.web.http.DshApiServlet;
 import org.jackhuang.hmcl.web.http.ExportsApiServlet;
@@ -420,6 +421,7 @@ public final class HdslServer {
         context.addServlet(packsHolder, "/api/packs/*");
         context.addServlet(new ServletHolder(new ExportsApiServlet(config)), "/api/exports/*");
         context.addServlet(new ServletHolder(new DoctorApiServlet()), "/api/doctor");
+        context.addServlet(new ServletHolder(new BootstrapApiServlet(taskService)), "/api/bootstrap/*");
         context.addServlet(new ServletHolder(new AccountsApiServlet(eventBus)), "/api/accounts/*");
         // Panel chat: REST commands/history/upload; token deltas ride /ws.
         // No chat module, no servlet: `/api/chat/*` then falls through to the

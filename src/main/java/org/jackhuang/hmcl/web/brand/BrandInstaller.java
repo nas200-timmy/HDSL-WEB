@@ -1585,7 +1585,7 @@ public final class BrandInstaller {
         BrandSources.Effective pythonMirror = BrandSources.python();
         Path[] uvHolder = new Path[1];
         stage(message, 4, total, "准备 uv", 0.57, 0.08, 30, () ->
-                uvHolder[0] = ensureUv(brandRoot, log, message));
+                uvHolder[0] = ensureUv(brandRoot, message));
         Path uv = uvHolder[0];
         message.accept("下载源：PyPI=" + pypi.url() + " (" + pypi.source() + ") · CPython="
                 + pythonMirror.url() + " (" + pythonMirror.source() + ")");
@@ -2326,6 +2326,18 @@ public final class BrandInstaller {
         }
     }
 
+    /// Installs the shared, pinned uv without a brand install.
+    ///
+    /// The runtime page provisions the same copy a source build would use; it
+    /// verifies before publishing, so a second call is a cache hit.
+    ///
+    /// @param message progress sink
+    /// @return the verified executable
+    /// @throws BrandException when the platform is unpinned or the download fails
+    public static Path ensureSharedUv(Consumer<String> message) throws BrandException {
+        return ensureUv(null, message);
+    }
+
     /// Stops uv from fetching an interpreter of its own.
     ///
     /// uv's default is `automatic`: asked for a version the host does not have,
@@ -2347,9 +2359,13 @@ public final class BrandInstaller {
     /// `<brandRoot>/toolchain/uv` is adopted after the same digest check rather
     /// than downloaded again, and a cache entry that fails its digest is
     /// deleted rather than quietly used.
-    private static Path ensureUv(Path brandRoot, Path log, Consumer<String> message) throws BrandException {
+    private static Path ensureUv(@Nullable Path brandRoot, Consumer<String> message)
+            throws BrandException {
         Path binary = UvRuntime.sharedBinary();
-        Path legacy = brandRoot.resolve("toolchain").resolve(UvRuntime.executableName());
+        // A brand's own copy is only adopted when a brand asked: the runtime page
+        // provisions the shared one and has no directory of its own to look in.
+        Path legacy = brandRoot == null ? null
+                : brandRoot.resolve("toolchain").resolve(UvRuntime.executableName());
         if (Files.isRegularFile(binary)) {
             if (UvRuntime.verified(binary)) {
                 org.jackhuang.hmcl.dsh.BootstrapTrace.reused("uv", UvRuntime.version(), binary);
@@ -2362,7 +2378,7 @@ public final class BrandInstaller {
                 throw new BrandException("could not replace the shared uv: " + e.getMessage(), e);
             }
         }
-        if (Files.isRegularFile(legacy) && UvRuntime.verified(legacy)) {
+        if (legacy != null && Files.isRegularFile(legacy) && UvRuntime.verified(legacy)) {
             try {
                 Files.createDirectories(binary.getParent());
                 Files.move(legacy, binary, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
