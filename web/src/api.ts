@@ -135,17 +135,27 @@ async function request<T>(path: string, init?: RequestInit, opts?: { skipUnautho
   }
 
   let res: Response;
+  // AbortSignal.timeout 要 Safari 16+，而 browserslist 底线是 15.6：旧 Safari 上
+  // 它是 undefined，同步 TypeError 会被下面 catch 成「无法连接服务器」，所有 API
+  // 永远失败。AbortController + setTimeout 是底线上可用的等价物（2026-11 审计）。
+  const timeout = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    timeout.abort();
+  }, opts?.timeoutMs ?? 30000);
   try {
     // 相对路径：由后端注入的 <base href> 解析——根挂载解析到 /api/…，
     // 子路径挂载解析到 <base>/api/…。两种挂载共用一个构建产物。
     res = await fetch(path.replace(/^\//, ""), {
       credentials: "same-origin",
       cache: "no-store",
-      signal: AbortSignal.timeout(opts?.timeoutMs ?? 30000),
+      signal: timeout.signal,
       ...requestInit,
     });
-  } catch (e) {
-    if (e instanceof DOMException && e.name === "TimeoutError") {
+  } catch {
+    clearTimeout(timer);
+    if (timedOut) {
       throw new ApiError(0, "请求超时，请检查服务器状态");
     }
     throw new ApiError(0, "无法连接服务器");
@@ -170,6 +180,8 @@ async function request<T>(path: string, init?: RequestInit, opts?: { skipUnautho
       body = null;
     }
   }
+  // 计时覆盖到正文读完为止，与 AbortSignal.timeout 的原语义一致。
+  clearTimeout(timer);
 
   if (!res.ok) {
     if (res.status === 401 && unauthorizedHandler && !opts?.skipUnauthorizedRedirect) {
@@ -274,7 +286,9 @@ export const api = {
     const query = new URLSearchParams();
     if (resume) query.set("resume", resume);
     if (kernel) query.set("kernel", kernel);
-    const suffix = query.size > 0 ? `?${query.toString()}` : "";
+    // URLSearchParams.size 要 Chrome 113+/Safari 17+，底线（109/15.6）上是
+    // undefined，`undefined > 0` 恒 false 会静默丢掉 resume/kernel 参数。
+    const suffix = query.toString().length > 0 ? `?${query.toString()}` : "";
     return request<TerminalOpen>(
       `/api/brands/${brand}/instances/${encodeURIComponent(id)}/terminal${suffix}`,
       jsonInit("POST", {}),
