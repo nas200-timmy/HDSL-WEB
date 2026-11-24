@@ -101,4 +101,24 @@ public class UvRuntimeTest {
     public void versionIsExact() {
         assertEquals("0.7.13", UvRuntime.VERSION);
     }
+
+    @Test
+    public void theSharedCopyLivesUnderToolchainsAndNamesThePlatformExecutable() {
+        java.nio.file.Path binary = UvRuntime.sharedBinary();
+        assertEquals(UvRuntime.root().resolve(UvRuntime.VERSION).resolve(
+                UvRuntime.executableName()), binary);
+        assertTrue(binary.toString().contains("toolchains"), binary.toString());
+        assertTrue(UvRuntime.root().getFileName().toString().equals("uv"), binary.toString());
+    }
+
+    @Test
+    public void anUnverifiedCacheEntryIsNotTrusted(@TempDir java.nio.file.Path dir)
+            throws Exception {
+        java.nio.file.Path fake = dir.resolve("uv");
+        java.nio.file.Files.writeString(fake, "not the pinned bytes");
+        assertFalse(UvRuntime.verified(fake));
+        assertTrue(UvRuntime.summary().contains("DIGEST MISMATCH")
+                || UvRuntime.summary().contains("not installed"),
+                UvRuntime.summary());
+    }
 }

@@ -928,8 +928,11 @@ public final class ZcodeBuilder {
             ProcessBuilder pnpmBuilder = new ProcessBuilder(Executables.startable(List.of(npm.toString(),
                     "install", "--global", "pnpm@11", "--prefix", prefix.toString(), "--registry=" + registry)));
             pnpmBuilder.redirectErrorStream(true);
-            org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(pnpmBuilder);
+            // The build's own Python root goes first: the resolver and the build
+            // toolchain only fill a blank name, so applying it first is what makes
+            // node-gyp receive this build's interpreter rather than the host's.
             PythonRuntimeManager.applyTo(pnpmBuilder.environment(), settings.pythonRoot());
+            org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(pnpmBuilder);
             Process process = pnpmBuilder.start();
             try (var reader = new java.io.BufferedReader(
                     new java.io.InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
@@ -1021,16 +1024,18 @@ public final class ZcodeBuilder {
         builder.directory(workingDirectory.toFile());
         builder.redirectErrorStream(true);
         builder.environment().put("PATH", searchPath.toString());
+        // The build's own Python root, which is the same as the panel's unless a
+        // caller named another. node-gyp reads both names; pnpm's install scripts
+        // (`cpu-features`, when it has to compile) are the only consumer here.
+        // It is applied before the resolver and the toolchain because both only
+        // fill a blank name — this build's choice has to win over the host's.
+        PythonRuntimeManager.applyTo(builder.environment(), settings.pythonRoot());
         org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(builder);
         // The toolchain the build resolved before the download. `applyTo` prefixes
         // this build's `bin` ahead of the shims and leaves an operator's CC/CXX
         // alone; the portable Linux pkgconf also needs its `lib/` on
         // LD_LIBRARY_PATH, which is part of the same map.
         toolchain.applyTo(builder.environment());
-        // The build's own Python root, which is the same as the panel's unless a
-        // caller named another. node-gyp reads both names; pnpm's install scripts
-        // (`cpu-features`, when it has to compile) are the only consumer here.
-        PythonRuntimeManager.applyTo(builder.environment(), settings.pythonRoot());
         // Everything a child of the launcher is given: the proxy the settings describe, the npm
         // registry, and the knobs that keep a native build from fetching from the slow half of the
         // internet. The build runs pnpm, node-gyp and git, and all three read these — the proxy

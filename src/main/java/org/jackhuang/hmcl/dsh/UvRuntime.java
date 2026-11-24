@@ -178,6 +178,10 @@ public final class UvRuntime {
 
     /// The one-line status the doctor prints.
     public static String summary() {
+        if (binarySha256() == null) {
+            return VERSION + " has no digest for " + platformTag()
+                    + "; uv is refused rather than installed unverified";
+        }
         Path binary = sharedBinary();
         if (!Files.isRegularFile(binary)) {
             return VERSION + " pinned, not installed (" + platformTag() + ")";

@@ -2338,21 +2338,38 @@ public final class BrandInstaller {
         }
     }
 
-    /// Finds a usable `uv`: PATH first, then a per-brand copy downloaded from
-    /// the official release tarball. The copy lives under the persisted brand
-    /// directory, so a later reinstall does not fetch it again.
+    /// Finds a usable `uv`: a verified shared copy first, then one on `PATH`,
+    /// then a download into `<toolchains>/uv/<version>`.
+    ///
+    /// One copy serves every brand. The per-brand copy older builds left under
+    /// `<brandRoot>/toolchain/uv` is adopted after the same digest check rather
+    /// than downloaded again, and a cache entry that fails its digest is
+    /// deleted rather than quietly used.
     private static Path ensureUv(Path brandRoot, Path log, Consumer<String> message) throws BrandException {
-        Path toolchain = brandRoot.resolve("toolchain");
-        Path binary = toolchain.resolve(UvRuntime.executableName());
+        Path binary = UvRuntime.sharedBinary();
+        Path legacy = brandRoot.resolve("toolchain").resolve(UvRuntime.executableName());
         if (Files.isRegularFile(binary)) {
             if (UvRuntime.verified(binary)) {
+                org.jackhuang.hmcl.dsh.BootstrapTrace.reused("uv", UvRuntime.VERSION, binary);
                 return binary;
             }
-            message.accept("cached uv does not match its pinned digest; fetching it again");
+            message.accept("the shared uv does not match its pinned digest; fetching it again");
             try {
                 Files.deleteIfExists(binary);
             } catch (IOException e) {
-                throw new BrandException("could not replace the cached uv: " + e.getMessage(), e);
+                throw new BrandException("could not replace the shared uv: " + e.getMessage(), e);
+            }
+        }
+        if (Files.isRegularFile(legacy) && UvRuntime.verified(legacy)) {
+            try {
+                Files.createDirectories(binary.getParent());
+                Files.move(legacy, binary, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                message.accept("adopted the verified uv from " + legacy + " into " + binary);
+                org.jackhuang.hmcl.dsh.BootstrapTrace.reused("uv", UvRuntime.VERSION, binary);
+                return binary;
+            } catch (IOException e) {
+                message.accept("could not adopt the old uv (" + e.getMessage()
+                        + "); downloading it instead");
             }
         }
         try {
@@ -2361,6 +2378,7 @@ public final class BrandInstaller {
             org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(probeBuilder);
             Process probe = probeBuilder.start();
             if (probe.waitFor(10, java.util.concurrent.TimeUnit.SECONDS) && probe.exitValue() == 0) {
+                message.accept("using the uv already on PATH (not the pinned copy)");
                 return Path.of("uv");
             }
             probe.destroyForcibly();
@@ -2369,11 +2387,19 @@ public final class BrandInstaller {
                 Thread.currentThread().interrupt();
             }
         }
+        try {
+            Files.createDirectories(binary.getParent());
+            Privileges.prepareAgentDirectory(binary.getParent(),
+                    Privileges.AGENT_SHARED_DIRECTORY);
+        } catch (IOException e) {
+            throw new BrandException("could not create " + binary.getParent() + ": "
+                    + e.getMessage(), e);
+        }
         // The configured index first: a mirror serves the same wheel, and on the deployment this was
         // written for the official CDN answers at about 40 KB/s while domestic mirrors do ~6.6 MB/s.
         BrandSources.Effective index = BrandSources.pypi();
         try {
-            return installUvFromIndex(index.url(), toolchain, binary, message);
+            return installUvFromIndex(index.url(), binary.getParent(), binary, message);
         } catch (BrandException e) {
             message.accept("uv from " + index.url() + " unavailable (" + e.getMessage() + ")");
         }
@@ -2381,7 +2407,7 @@ public final class BrandInstaller {
             // PyPI's JSON API is not mirrored by most mirrors, so trying it after a failed
             // mirror is only worth it when the index was not pypi.org itself.
             try {
-                return installUvFromPyPI(toolchain, binary, message);
+                return installUvFromPyPI(binary.getParent(), binary, message);
             } catch (BrandException e) {
                 message.accept("PyPI uv unavailable (" + e.getMessage() + "); trying GitHub");
             }
@@ -2394,27 +2420,32 @@ public final class BrandInstaller {
         // a `.zip` there rather than a tarball, and reaches uv through PyPI.
         String triple = UvRuntime.githubTriple();
         if (triple == null) {
-            throw new BrandException("uv has no GitHub release for " + OperatingSystem.CURRENT_OS);
+            throw new BrandException("uv's GitHub fallback is not used on "
+                    + OperatingSystem.CURRENT_OS + " (the release there is a .zip);"
+                    + " PyPI and the configured index are its transports");
         }
         String url = "https://github.com/astral-sh/uv/releases/download/" + UV_VERSION + "/uv-"
                 + triple + ".tar.gz";
-        Path archive = toolchain.resolve("uv.tar.gz");
+        Path archive = binary.getParent().resolve("uv-" + java.util.UUID.randomUUID() + ".tar.gz");
         try {
-            Files.createDirectories(toolchain);
             message.accept("Downloading uv " + url);
             try (InputStream in = download(url)) {
                 Files.copy(in, archive, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             }
-            Path extracted = unpackUv(archive, toolchain, triple);
+            Path extracted = unpackUv(archive, binary.getParent(), triple);
             // The digest is checked before the binary is allowed to take the
             // name `uv`, so a mismatched download can never be executed later.
             UvRuntime.verify(extracted, url);
             Files.move(extracted, binary, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             org.jackhuang.hmcl.dsh.BootstrapTrace.installed("uv", "brand-build", url,
                     "pinned-sha256:" + UvRuntime.binarySha256(), binary);
-            Files.setPosixFilePermissions(binary,
-                    java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"));
+            try {
+                Files.setPosixFilePermissions(binary, PosixFilePermissions.fromString("rwxr-xr-x"));
+            } catch (UnsupportedOperationException ignored) {
+                // Windows: no POSIX mode bits.
+            }
             Files.deleteIfExists(archive);
+            Privileges.handTreeToAgent(binary.getParent());
             return binary;
         } catch (IOException e) {
             throw new BrandException("Could not install uv: " + e.getMessage(), e);
@@ -2583,7 +2614,7 @@ public final class BrandInstaller {
     private static Path extractUvWheel(String url, @Nullable String declaredSha,
                                        Path toolchain, Path binary, Consumer<String> message)
             throws BrandException {
-        Path wheel = toolchain.resolve("uv.whl");
+        Path wheel = toolchain.resolve("uv-" + java.util.UUID.randomUUID() + ".whl");
         Path staged = toolchain.resolve("uv.extract-" + java.util.UUID.randomUUID());
         try {
             Files.createDirectories(toolchain);
@@ -2623,6 +2654,7 @@ public final class BrandInstaller {
             Files.deleteIfExists(wheel);
             message.accept("uv " + UV_VERSION + " installed from " + url
                     + " (sha256 " + UvRuntime.binarySha256() + ")");
+            Privileges.handTreeToAgent(binary.getParent());
             return binary;
         } catch (IOException e) {
             throw new BrandException("Could not unpack uv from " + url + ": " + e.getMessage(), e);
