@@ -223,12 +223,29 @@ public final class PythonRuntimeManager {
     }
 
     /// The pinned default line, or `null` on a platform this build does not pin.
+    ///
+    /// A musl system (Alpine and its relatives) is reported as unpinned rather
+    /// than handed a glibc archive: the binary would install and then fail at
+    /// exec with a loader error that reads like a corrupt download.
     public static @Nullable Artifact defaultArtifact() {
+        if (isMusl(Files::exists)) {
+            return null;
+        }
         Artifact canonical = DEFAULT_ARTIFACTS.get(platformTag());
         if (canonical == null) {
             return null;
         }
         return MIRROR_BASE == null ? canonical : relocated(canonical, MIRROR_BASE);
+    }
+
+    /// Whether this is a musl Linux, where the pinned glibc archive cannot run.
+    static boolean isMusl(java.util.function.Predicate<Path> exists) {
+        if (OperatingSystem.CURRENT_OS != OperatingSystem.LINUX) {
+            return false;
+        }
+        return exists.test(Path.of("/etc/alpine-release"))
+                || exists.test(Path.of("/lib/ld-musl-x86_64.so.1"))
+                || exists.test(Path.of("/lib/ld-musl-aarch64.so.1"));
     }
 
     /// The same archive served from another base, e.g. the NJU GitHub mirror.
@@ -397,11 +414,18 @@ public final class PythonRuntimeManager {
         }
         Artifact artifact = DEFAULT_VERSION.equals(version) ? defaultArtifact() : null;
         if (artifact == null) {
+            String reason;
+            if (isMusl(Files::exists)) {
+                reason = " (this is a musl system and only the glibc build is pinned;"
+                        + " install python3 from the distribution instead)";
+            } else if (OperatingSystem.CURRENT_OS == OperatingSystem.LINUX
+                    || OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS) {
+                reason = "";
+            } else {
+                reason = " (only Linux x64 and Windows x64 are pinned)";
+            }
             throw new IOException("python_runtime_unavailable: no pinned CPython " + version
-                    + " archive for " + platformTag()
-                    + (OperatingSystem.CURRENT_OS == OperatingSystem.LINUX
-                    || OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS
-                    ? "" : " (only Linux x64 and Windows x64 are pinned)"));
+                    + " archive for " + platformTag() + reason);
         }
         return install(version, artifact, new HttpSource(), (message, fraction) -> {
         });
@@ -492,17 +516,14 @@ public final class PythonRuntimeManager {
         }
     }
 
-    /// Puts the active interpreter into a child environment.
+    /// Puts the resolved interpreter into a child environment.
     ///
-    /// `PATH` gets the interpreter's directory (the closure's own prepend, if
-    /// any, stays in front), `PYTHON` and `npm_config_python` name the
-    /// interpreter for uv and node-gyp. A value an operator already set to
-    /// something non-empty is left alone.
+    /// The choice belongs to [PythonResolver]: an operator's value wins, a
+    /// usable system interpreter is used as-is, and the shared one below this
+    /// class is only reached when neither exists. That is also the only case
+    /// where `PATH` is touched, so a host's `python3` is not shadowed.
     public static void applyTo(Map<String, String> environment) {
-        Installed installed = currentShared();
-        if (installed != null) {
-            applyTo(environment, installed);
-        }
+        PythonResolver.applyTo(environment);
     }
 
     /// The same, with the root named — ZCode builds may keep their shared

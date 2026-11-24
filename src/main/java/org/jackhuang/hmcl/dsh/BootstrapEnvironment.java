@@ -40,9 +40,10 @@ import java.util.function.Predicate;
 ///   127 before it prints a version;
 /// - `SSL_CERT_FILE` and its siblings point npm, git, Python requests and the
 ///   agents' own TLS stacks at the panel's `cacert.pem`;
-/// - a shared CPython, when [PythonRuntimeManager] has installed one, puts its
-///   `bin` on `PATH` and names it in `PYTHON` and `npm_config_python`, which is
-///   what node-gyp reads;
+/// - the interpreter [PythonResolver] chose is named in `PYTHON`,
+///   `npm_config_python` and `UV_PYTHON`; only a panel-managed interpreter also
+///   goes on `PATH`, and only when no usable system Python exists, so the host's
+///   `python3` is never shadowed;
 /// - an installed [BuildToolchainManager] bundle puts its `bin` first and names
 ///   `CC`, `CXX`, `MAKE`, `AR`, `LD` and `PKG_CONFIG`, so a terminal, a brand
 ///   install and a ZCode build all see the same compiler. A variable the
@@ -68,11 +69,11 @@ public final class BootstrapEnvironment {
     public static Map<String, String> additions() {
         Installed runtime = BootstrapRuntimeManager.currentRuntimeClosure();
         BootstrapRuntimeManager.CaInstalled ca = BootstrapRuntimeManager.currentCaBundle();
-        PythonRuntimeManager.Installed python = PythonRuntimeManager.currentShared();
+        PythonResolver.Interpreter python = PythonResolver.resolve();
         BuildToolchainManager.Toolchain build = BuildToolchainManager.currentInstalled();
         return additions(runtime == null ? null : runtime.directory(),
                 ca == null ? null : ca.file(),
-                python == null ? null : python.directory(),
+                python,
                 build == null ? null : build.binDir(),
                 build == null || build.directory() == null ? null : build.directory().resolve("lib"),
                 build == null ? Map.of() : build.environment(),
@@ -88,11 +89,11 @@ public final class BootstrapEnvironment {
     public static void apply(Map<String, String> environment) {
         Installed runtime = BootstrapRuntimeManager.currentRuntimeClosure();
         BootstrapRuntimeManager.CaInstalled ca = BootstrapRuntimeManager.currentCaBundle();
-        PythonRuntimeManager.Installed python = PythonRuntimeManager.currentShared();
+        PythonResolver.Interpreter python = PythonResolver.resolve();
         BuildToolchainManager.Toolchain build = BuildToolchainManager.currentInstalled();
         environment.putAll(additions(runtime == null ? null : runtime.directory(),
                 ca == null ? null : ca.file(),
-                python == null ? null : python.directory(),
+                python,
                 build == null ? null : build.binDir(),
                 build == null || build.directory() == null ? null : build.directory().resolve("lib"),
                 build == null ? Map.of() : build.environment(),
@@ -125,14 +126,14 @@ public final class BootstrapEnvironment {
     /// @param runtimeDirectory the active runtime closure's version directory,
     ///                         or `null`
     /// @param caFile           the active `cacert.pem`, or `null`
-    /// @param pythonDirectory  the active CPython version directory, or `null`
+    /// @param python           the resolved interpreter, or `null`
     /// @param base             the environment the additions are computed against
     /// @param exists           how to ask whether a path exists
     /// @return the variables to add or replace
     static Map<String, String> additions(@Nullable Path runtimeDirectory, @Nullable Path caFile,
-                                         @Nullable Path pythonDirectory,
+                                         @Nullable PythonResolver.Interpreter python,
                                          Map<String, String> base, Predicate<Path> exists) {
-        return additions(runtimeDirectory, caFile, pythonDirectory, null, null, Map.of(),
+        return additions(runtimeDirectory, caFile, python, null, null, Map.of(),
                 base, exists);
     }
 
@@ -142,7 +143,7 @@ public final class BootstrapEnvironment {
     /// @param runtimeDirectory the active runtime closure's version directory,
     ///                         or `null`
     /// @param caFile           the active `cacert.pem`, or `null`
-    /// @param pythonDirectory  the active CPython version directory, or `null`
+    /// @param python           the resolved interpreter, or `null`
     /// @param buildBin         the build toolchain's `bin/`, or `null`
     /// @param buildLib         the build toolchain's `lib/`, or `null`
     /// @param buildVariables   the build toolchain's `CC`/`CXX`/`MAKE`/… map
@@ -150,8 +151,8 @@ public final class BootstrapEnvironment {
     /// @param exists           how to ask whether a path exists
     /// @return the variables to add or replace
     static Map<String, String> additions(@Nullable Path runtimeDirectory, @Nullable Path caFile,
-                                         @Nullable Path pythonDirectory, @Nullable Path buildBin,
-                                         @Nullable Path buildLib,
+                                         @Nullable PythonResolver.Interpreter python,
+                                         @Nullable Path buildBin, @Nullable Path buildLib,
                                          Map<String, String> buildVariables,
                                          Map<String, String> base, Predicate<Path> exists) {
         Map<String, String> additions = new LinkedHashMap<>();
@@ -179,21 +180,18 @@ public final class BootstrapEnvironment {
                         existing != null ? existing : base.get("LD_LIBRARY_PATH")));
             }
         }
-        if (pythonDirectory != null) {
-            Path interpreter = null;
-            for (String relative : List.of("bin/python3", "bin/python", "python.exe",
-                    "python/bin/python3", "python/bin/python", "python/python.exe")) {
-                Path candidate = pythonDirectory.resolve(relative);
-                if (exists.test(candidate)) {
-                    interpreter = candidate;
-                    break;
-                }
-            }
-            if (interpreter != null) {
+        if (python != null && python.usable()
+                && python.origin() != PythonResolver.Origin.OPERATOR) {
+            Path interpreter = python.executable();
+            if (python.origin() == PythonResolver.Origin.MANAGED) {
+                // Reaching MANAGED means no usable system interpreter exists, so
+                // putting it on PATH shadows nothing. A SYSTEM choice never does:
+                // a build script that says `python3` keeps finding the host's.
                 pathPrefixes.add(interpreter.getParent());
-                putIfUnusable(additions, base, "PYTHON", interpreter.toString());
-                putIfUnusable(additions, base, "npm_config_python", interpreter.toString());
             }
+            putIfUnusable(additions, base, "PYTHON", interpreter.toString());
+            putIfUnusable(additions, base, "npm_config_python", interpreter.toString());
+            putIfUnusable(additions, base, "UV_PYTHON", interpreter.toString());
         }
         if (!pathPrefixes.isEmpty()) {
             String path = base.get("PATH");

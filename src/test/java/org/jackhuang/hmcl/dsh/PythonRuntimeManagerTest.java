@@ -310,4 +310,12 @@ class PythonRuntimeManagerTest {
             assertTrue(leftovers.isEmpty(), "staging directories were left behind: " + leftovers);
         }
     }
+
+    @Test
+    void muslIsRecognisedAndRefusedRatherThanServedAGlibcArchive() {
+        assertTrue(PythonRuntimeManager.isMusl(path -> path.toString().equals("/etc/alpine-release")));
+        assertTrue(PythonRuntimeManager.isMusl(
+                path -> path.toString().equals("/lib/ld-musl-x86_64.so.1")));
+        assertFalse(PythonRuntimeManager.isMusl(path -> false));
+    }
 }

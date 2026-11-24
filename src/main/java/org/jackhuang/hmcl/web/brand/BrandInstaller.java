@@ -1592,6 +1592,7 @@ public final class BrandInstaller {
         pythonEnv.put("UV_LINK_MODE", "copy");
         pythonEnv.put("PYTHONDONTWRITEBYTECODE", "1");
         toolchain.applyTo(pythonEnv);
+        pinUvPythonDownloads(pythonEnv);
         // uv reads both names; the deprecated one is kept for older toolchains and for the
         // build scripts some dependencies run themselves.
         pythonEnv.put("UV_DEFAULT_INDEX", pypi.url());
@@ -2001,6 +2002,7 @@ public final class BrandInstaller {
         pythonEnv.put("UV_NO_PROGRESS", "1");
         pythonEnv.put("PIP_INDEX_URL", BrandSources.pypi().url());
         toolchain.applyTo(pythonEnv);
+        pinUvPythonDownloads(pythonEnv);
         stage(message, 4, total, "安装 Python 依赖（uv sync --extra all）", 0.27, 0.49, 300, () ->
                 runChecked(List.of(uvHolder[0].toString(), "sync", "--frozen", "--no-dev",
                                 "--python", pythonHolder[0].toString(), "--extra", "all"),
@@ -2319,6 +2321,20 @@ public final class BrandInstaller {
                     Files.copy(path, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
                 }
             }
+        }
+    }
+
+    /// Stops uv from fetching an interpreter of its own.
+    ///
+    /// uv's default is `automatic`: asked for a version the host does not have,
+    /// it downloads one into its own directory — outside the panel's pin, its
+    /// logs and its disk accounting. A source build that needs a specific
+    /// version already ensured one, so `automatic` adds only a second,
+    /// unverified copy. An operator who set the variable keeps their value.
+    static void pinUvPythonDownloads(Map<String, String> environment) {
+        String existing = System.getenv("UV_PYTHON_DOWNLOADS");
+        if (existing == null || existing.isBlank()) {
+            environment.putIfAbsent("UV_PYTHON_DOWNLOADS", "manual");
         }
     }
 

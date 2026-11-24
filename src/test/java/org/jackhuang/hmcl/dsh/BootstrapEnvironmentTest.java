@@ -85,13 +85,14 @@ class BootstrapEnvironmentTest {
         Path interpreter = python.resolve("bin").resolve("python3");
         Files.writeString(interpreter, "#!/bin/sh\n");
 
-        Map<String, String> additions = BootstrapEnvironment.additions(null, null, python,
-                Map.of("PATH", "/usr/bin:/bin"), Files::exists);
+        Map<String, String> additions = BootstrapEnvironment.additions(null, null,
+                managed(interpreter), Map.of("PATH", "/usr/bin:/bin"), Files::exists);
 
         assertEquals(python.resolve("bin") + File.pathSeparator + "/usr/bin:/bin",
                 additions.get("PATH"));
         assertEquals(interpreter.toString(), additions.get("PYTHON"));
         assertEquals(interpreter.toString(), additions.get("npm_config_python"));
+        assertEquals(interpreter.toString(), additions.get("UV_PYTHON"));
     }
 
     @Test
@@ -103,7 +104,8 @@ class BootstrapEnvironmentTest {
         Files.createDirectories(python.resolve("bin"));
         Files.writeString(python.resolve("bin").resolve("python3"), "#!/bin/sh\n");
 
-        Map<String, String> additions = BootstrapEnvironment.additions(runtime, null, python,
+        Map<String, String> additions = BootstrapEnvironment.additions(runtime, null,
+                managed(python.resolve("bin").resolve("python3")),
                 Map.of("PATH", "/usr/bin"), Files::exists);
 
         assertEquals(runtime.resolve("bin") + File.pathSeparator + python.resolve("bin")
@@ -116,7 +118,8 @@ class BootstrapEnvironmentTest {
         Files.createDirectories(python.resolve("bin"));
         Files.writeString(python.resolve("bin").resolve("python3"), "#!/bin/sh\n");
 
-        Map<String, String> additions = BootstrapEnvironment.additions(null, null, python,
+        Map<String, String> additions = BootstrapEnvironment.additions(null, null,
+                managed(python.resolve("bin").resolve("python3")),
                 Map.of("PATH", "/usr/bin", "PYTHON", "/opt/python/bin/python3"), Files::exists);
 
         assertFalse(additions.containsKey("PYTHON"));
@@ -142,7 +145,8 @@ class BootstrapEnvironmentTest {
                 "MAKE", build.resolve("bin").resolve("make").toString(),
                 "PKG_CONFIG", build.resolve("bin").resolve("pkg-config").toString());
 
-        Map<String, String> additions = BootstrapEnvironment.additions(null, null, python,
+        Map<String, String> additions = BootstrapEnvironment.additions(null, null,
+                managed(python.resolve("bin").resolve("python3")),
                 build.resolve("bin"), build.resolve("lib"), variables,
                 Map.of("PATH", "/usr/bin:/bin"), Files::exists);
 
@@ -287,5 +291,54 @@ class BootstrapEnvironmentTest {
         // does not throw and leaves the builder usable.
         BootstrapEnvironment.apply(builder);
         assertTrue(builder.environment().containsKey("PATH"));
+    }
+
+    @Test
+    void aSystemInterpreterIsNamedButNeverPutOnPath() throws Exception {
+        Path system = temp.resolve("usr-bin").resolve("python3");
+        Files.createDirectories(system.getParent());
+        Files.writeString(system, "#!/bin/sh\n");
+        PythonResolver.Interpreter chosen = new PythonResolver.Interpreter(
+                PythonResolver.Origin.SYSTEM, system, "3.11.2", true, false, "");
+
+        Map<String, String> additions = BootstrapEnvironment.additions(null, null, chosen,
+                Map.of("PATH", "/usr/bin:/bin"), Files::exists);
+
+        assertEquals(system.toString(), additions.get("PYTHON"));
+        assertEquals(system.toString(), additions.get("UV_PYTHON"));
+        assertFalse(additions.containsKey("PATH"), "a system interpreter must not shadow PATH");
+    }
+
+    @Test
+    void anOperatorInterpreterIsLeftAloneEntirely() throws Exception {
+        Path system = temp.resolve("operator-own").resolve("python3");
+        Files.createDirectories(system.getParent());
+        Files.writeString(system, "#!/bin/sh\n");
+        PythonResolver.Interpreter chosen = new PythonResolver.Interpreter(
+                PythonResolver.Origin.OPERATOR, system, "3.12.1", true, false, "");
+
+        Map<String, String> additions = BootstrapEnvironment.additions(null, null, chosen,
+                Map.of("PATH", "/usr/bin", "PYTHON", system.toString()), Files::exists);
+
+        assertFalse(additions.containsKey("PYTHON"), additions.toString());
+        assertFalse(additions.containsKey("UV_PYTHON"), additions.toString());
+        assertFalse(additions.containsKey("PATH"), additions.toString());
+    }
+
+    @Test
+    void anUnusableInterpreterAddsNothing() {
+        Map<String, String> additions = BootstrapEnvironment.additions(null, null,
+                new PythonResolver.Interpreter(PythonResolver.Origin.NONE, null, "",
+                        false, false, "nothing found"),
+                Map.of("PATH", "/usr/bin"), Files::exists);
+
+        assertFalse(additions.containsKey("PYTHON"), additions.toString());
+        assertFalse(additions.containsKey("npm_config_python"), additions.toString());
+        assertFalse(additions.containsKey("PATH"), additions.toString());
+    }
+
+    private static PythonResolver.Interpreter managed(Path interpreter) {
+        return new PythonResolver.Interpreter(PythonResolver.Origin.MANAGED, interpreter,
+                "3.12.16", true, false, "");
     }
 }
