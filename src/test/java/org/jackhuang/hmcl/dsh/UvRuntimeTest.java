@@ -1,0 +1,104 @@
+/*
+ * HDSL
+ * Copyright (C) 2026  HDSL contributors
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+package org.jackhuang.hmcl.dsh;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+public class UvRuntimeTest {
+
+    @Test
+    public void everyPlatformHasAPinnedDigest() throws Exception {
+        for (String tag : List.of("linux-x64", "linux-arm64", "macos-x64", "macos-arm64",
+                "windows-x64", "windows-arm64")) {
+            Path fake = Files.createTempFile("uv-" + tag, ".bin");
+            try {
+                Files.writeString(fake, "not uv");
+                IOException e = assertThrows(IOException.class,
+                        () -> UvRuntime.verify(fake, "test", UvRuntime.binarySha256(tag), tag));
+                assertTrue(e.getMessage().startsWith("uv_sha256_mismatch"), e.getMessage());
+                assertTrue(e.getMessage().contains("expected="), e.getMessage());
+            } finally {
+                Files.deleteIfExists(fake);
+            }
+        }
+    }
+
+    @Test
+    public void unpinnedPlatformIsRefusedRatherThanDownloaded() {
+        IOException e = assertThrows(IOException.class,
+                () -> UvRuntime.verify(Path.of("uv"), "test", null, "linux-riscv64"));
+        assertTrue(e.getMessage().startsWith("uv_unpinned_platform"), e.getMessage());
+        assertTrue(e.getMessage().contains("linux-riscv64"), e.getMessage());
+    }
+
+    @Test
+    public void matchingDigestPasses(@TempDir Path dir) throws Exception {
+        Path binary = dir.resolve("uv");
+        Files.writeString(binary, "a uv stand-in");
+        String actual = BootstrapRuntimeManager.sha256(binary);
+        UvRuntime.verify(binary, "test", actual, "test-tag");
+    }
+
+    @Test
+    public void missingFileIsNamed() {
+        IOException e = assertThrows(IOException.class,
+                () -> UvRuntime.verify(Path.of("/nonexistent/uv"), "test", "0".repeat(64), "tag"));
+        assertTrue(e.getMessage().startsWith("uv_missing"), e.getMessage());
+    }
+
+    @Test
+    public void thisPlatformIsPinned() {
+        assertNotNull(UvRuntime.binarySha256(), "every supported OS/arch pair has a digest: "
+                + UvRuntime.platformTag());
+        assertFalse(UvRuntime.VERSION.isBlank());
+    }
+
+    @Test
+    public void wheelNamesAreMatchedByPlatform() {
+        boolean arm = UvRuntime.platformTag().endsWith("arm64");
+        String name = switch (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS) {
+            case WINDOWS -> "uv-" + UvRuntime.VERSION + "-py3-none-"
+                    + (arm ? "win_arm64" : "win_amd64") + ".whl";
+            case MACOS -> "uv-" + UvRuntime.VERSION + "-py3-none-macosx_11_0_"
+                    + (arm ? "arm64" : "x86_64") + ".whl";
+            default -> "uv-" + UvRuntime.VERSION + "-py3-none-manylinux_2_17_"
+                    + (arm ? "aarch64" : "x86_64") + ".manylinux2014_"
+                    + (arm ? "aarch64" : "x86_64") + ".whl";
+        };
+        assertTrue(UvRuntime.matchesWheel(name), name);
+        assertFalse(UvRuntime.matchesWheel("uv-0.0.1-py3-none-any.whl"));
+        assertFalse(UvRuntime.matchesWheel("uv-" + UvRuntime.VERSION + "-py3-none-any.whl"));
+    }
+
+    @Test
+    public void versionIsExact() {
+        assertEquals("0.7.13", UvRuntime.VERSION);
+    }
+}

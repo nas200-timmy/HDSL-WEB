@@ -25,6 +25,7 @@ import org.jackhuang.hmcl.dsh.NodeRuntimeManager;
 import org.jackhuang.hmcl.dsh.NodeSemver;
 import org.jackhuang.hmcl.dsh.NpmRegistry;
 import org.jackhuang.hmcl.dsh.PythonRuntimeManager;
+import org.jackhuang.hmcl.dsh.UvRuntime;
 import org.jackhuang.hmcl.util.io.FileUtils;
 import org.jackhuang.hmcl.util.io.Links;
 import org.jackhuang.hmcl.util.platform.Architecture;
@@ -914,10 +915,10 @@ public final class BrandInstaller {
     static final String PREVIOUS_SUFFIX = ".previous";
     private static final String CURRENT_LINK = "current";
     private static final String INSTALL_LOG = "install.log";
-    /// Pinned uv release for the source fallback. `latest/download` redirects
-    /// through a host that times out on this network; a pinned tag serves the
-    /// asset directly.
-    private static final String UV_VERSION = "0.7.13";
+    /// The pinned uv release. The digest of the executable it produces lives
+    /// in [UvRuntime]; bumping the version without adding digests there makes
+    /// the install fail rather than run an unverified binary.
+    private static final String UV_VERSION = UvRuntime.VERSION;
 
     /// The HTTP client for GitHub source downloads — its own instance, with a
     /// longer connect timeout than the catalog's (an 11 MB body in the default
@@ -2326,9 +2327,17 @@ public final class BrandInstaller {
     /// directory, so a later reinstall does not fetch it again.
     private static Path ensureUv(Path brandRoot, Path log, Consumer<String> message) throws BrandException {
         Path toolchain = brandRoot.resolve("toolchain");
-        Path binary = toolchain.resolve("uv");
+        Path binary = toolchain.resolve(UvRuntime.executableName());
         if (Files.isRegularFile(binary)) {
-            return binary;
+            if (UvRuntime.verified(binary)) {
+                return binary;
+            }
+            message.accept("cached uv does not match its pinned digest; fetching it again");
+            try {
+                Files.deleteIfExists(binary);
+            } catch (IOException e) {
+                throw new BrandException("could not replace the cached uv: " + e.getMessage(), e);
+            }
         }
         try {
             ProcessBuilder probeBuilder = new ProcessBuilder("uv", "--version");
@@ -2363,20 +2372,14 @@ public final class BrandInstaller {
         } else {
             message.accept("PyPI uv unavailable; trying GitHub");
         }
-        String arch = switch (Architecture.CURRENT_ARCH) {
-            case X86_64 -> "x86_64";
-            case ARM64 -> "aarch64";
-            default -> throw new BrandException("no uv release for " + Architecture.CURRENT_ARCH);
-        };
         // The GitHub fallback has to name the right triple: the old hardcoded
         // `unknown-linux-gnu` downloaded a Linux binary on macOS and then failed
-        // with an exec error instead of saying what was wrong.
-        String triple = switch (OperatingSystem.CURRENT_OS) {
-            case LINUX -> arch + "-unknown-linux-gnu";
-            case MACOS -> arch + "-apple-darwin";
-            default -> throw new BrandException(
-                    "uv has no GitHub release for " + OperatingSystem.CURRENT_OS);
-        };
+        // with an exec error instead of saying what was wrong. Windows publishes
+        // a `.zip` there rather than a tarball, and reaches uv through PyPI.
+        String triple = UvRuntime.githubTriple();
+        if (triple == null) {
+            throw new BrandException("uv has no GitHub release for " + OperatingSystem.CURRENT_OS);
+        }
         String url = "https://github.com/astral-sh/uv/releases/download/" + UV_VERSION + "/uv-"
                 + triple + ".tar.gz";
         Path archive = toolchain.resolve("uv.tar.gz");
@@ -2387,6 +2390,9 @@ public final class BrandInstaller {
                 Files.copy(in, archive, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             }
             Path extracted = unpackUv(archive, toolchain, triple);
+            // The digest is checked before the binary is allowed to take the
+            // name `uv`, so a mismatched download can never be executed later.
+            UvRuntime.verify(extracted, url);
             Files.move(extracted, binary, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             Files.setPosixFilePermissions(binary,
                     java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"));
@@ -2423,11 +2429,6 @@ public final class BrandInstaller {
     /// release-asset redirect is not.
     private static Path installUvFromPyPI(Path toolchain, Path binary, Consumer<String> message)
             throws BrandException {
-        String arch = switch (Architecture.CURRENT_ARCH) {
-            case X86_64 -> "x86_64";
-            case ARM64 -> "aarch64";
-            default -> throw new BrandException("no uv wheel for " + Architecture.CURRENT_ARCH);
-        };
         String jsonUrl = "https://pypi.org/pypi/uv/" + UV_VERSION + "/json";
         try {
             HttpRequest request = HttpRequest.newBuilder(URI.create(jsonUrl))
@@ -2442,20 +2443,25 @@ public final class BrandInstaller {
             JsonObject document = JsonParser.parseString(response.body()).getAsJsonObject();
             JsonArray urls = document.getAsJsonArray("urls");
             String chosen = null;
+            String declared = null;
             for (com.google.gson.JsonElement element : urls) {
                 JsonObject file = element.getAsJsonObject();
                 String filename = file.get("filename").getAsString();
-                if (filename.endsWith(".whl") && filename.contains("manylinux")
-                        && filename.contains(arch)) {
+                if (UvRuntime.matchesWheel(filename)) {
                     chosen = file.get("url").getAsString();
+                    if (file.has("digests") && file.getAsJsonObject("digests").has("sha256")) {
+                        declared = file.getAsJsonObject("digests").get("sha256").getAsString();
+                    }
                     break;
                 }
             }
             if (chosen == null) {
-                throw new BrandException("no manylinux " + arch + " uv wheel on PyPI");
+                throw new BrandException("no uv " + UV_VERSION + " wheel for "
+                        + UvRuntime.platformTag() + " on PyPI");
             }
-            message.accept("Downloading uv from PyPI " + chosen);
-            return extractUvWheel(chosen, toolchain, binary, message);
+            message.accept("Downloading uv from PyPI " + chosen
+                    + (declared == null ? "" : " (index sha256 " + declared.substring(0, 12) + "…)"));
+            return extractUvWheel(chosen, declared, toolchain, binary, message);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new BrandException("uv download was interrupted", e);
@@ -2471,11 +2477,6 @@ public final class BrandInstaller {
     /// itself has to come from the mirror's own index.
     private static Path installUvFromIndex(String index, Path toolchain, Path binary, Consumer<String> message)
             throws BrandException {
-        String arch = switch (Architecture.CURRENT_ARCH) {
-            case X86_64 -> "x86_64";
-            case ARM64 -> "aarch64";
-            default -> throw new BrandException("no uv wheel for " + Architecture.CURRENT_ARCH);
-        };
         String pageUrl = index.replaceAll("/$", "") + "/uv/";
         message.accept("Looking for uv " + UV_VERSION + " on " + pageUrl);
         String html;
@@ -2497,56 +2498,119 @@ public final class BrandInstaller {
             throw new BrandException("could not read " + pageUrl + ": " + e.getMessage(), e);
         }
 
-        String prefix = "uv-" + UV_VERSION + "-";
         java.util.regex.Matcher link = java.util.regex.Pattern.compile("href=\"([^\"]+)\"").matcher(html);
         while (link.find()) {
-            String href = link.group(1);
-            // Simple pages may carry the hash in a fragment; mirrors may hand out relative links
-            // (`../../packages/…`), which have to be resolved against the page they came from.
-            String file = href.contains("#") ? href.substring(0, href.indexOf('#')) : href;
-            String name = file.substring(file.lastIndexOf('/') + 1);
-            if (!name.startsWith(prefix) || !name.endsWith(".whl")
-                    || !name.contains("manylinux") || !name.contains(arch)) {
+            UvWheelLink wheel = uvWheelLink(pageUrl, link.group(1));
+            if (wheel == null) {
                 continue;
             }
-            String url = URI.create(pageUrl).resolve(file).toString();
-            message.accept("Downloading uv from " + url);
-            return extractUvWheel(url, toolchain, binary, message);
+            message.accept("Downloading uv from " + wheel.url()
+                    + (wheel.sha256() == null
+                    ? " (no index digest: relying on the pinned binary digest)"
+                    : " (index sha256 " + wheel.sha256().substring(0, 12) + "…)"));
+            return extractUvWheel(wheel.url(), wheel.sha256(), toolchain, binary, message);
         }
-        throw new BrandException("no manylinux " + arch + " uv " + UV_VERSION + " wheel on " + index);
+        throw new BrandException("no uv " + UV_VERSION + " wheel for " + UvRuntime.platformTag()
+                + " on " + index);
     }
 
-    /// Downloads one uv wheel and extracts `uv` from `uv-<version>.data/scripts/uv`.
+    /// One uv wheel link taken from a simple index page.
     ///
-    /// The wheel is the same static binary as GitHub's tarball, but it comes from whichever index
-    /// answered — which is the whole point of pointing this at a mirror.
-    private static Path extractUvWheel(String url, Path toolchain, Path binary, Consumer<String> message)
+    /// A simple page carries each wheel's digest in the URL fragment
+    /// (`…whl#sha256=…`); mirrors may hand out relative links
+    /// (`../../packages/…`), resolved against the page they came from. Both
+    /// facts are the point: the fragment is the only integrity information a
+    /// PEP 503 page offers, and losing it is how a mirror download stops being
+    /// verifiable.
+    ///
+    /// @param pageUrl the page the href was found on
+    /// @param href    the raw href
+    /// @return the resolved URL and the declared digest, or `null` when the link
+    ///         is not this platform's uv wheel
+    static @Nullable UvWheelLink uvWheelLink(String pageUrl, String href) {
+        String declared = null;
+        int marker = href.indexOf("#sha256=");
+        if (marker >= 0) {
+            declared = href.substring(marker + 8);
+            href = href.substring(0, marker);
+        } else if (href.contains("#")) {
+            href = href.substring(0, href.indexOf('#'));
+        }
+        String name = href.substring(href.lastIndexOf('/') + 1);
+        if (!UvRuntime.matchesWheel(name)) {
+            return null;
+        }
+        return new UvWheelLink(URI.create(pageUrl).resolve(href).toString(), declared);
+    }
+
+    /// A wheel link resolved against its index page.
+    ///
+    /// @param url         the absolute wheel URL
+    /// @param sha256      the digest the index declared, or `null`
+    record UvWheelLink(String url, @Nullable String sha256) {
+    }
+
+    /// Downloads one uv wheel and extracts `uv` (or `uv.exe`) from it.
+    ///
+    /// Three things hold before the file is allowed to take the name `uv`: the
+    /// archive matches the digest the index declared (when it declared one), the
+    /// executable matches the panel's pin, and only then is it moved into place.
+    /// A wheel served by a mirror is trusted exactly as far as its bytes.
+    ///
+    /// @param url         where the wheel comes from
+    /// @param declaredSha the index's SHA-256 for the archive, or `null`
+    /// @param toolchain   the directory to download into
+    /// @param binary      the final executable path
+    /// @param message     progress sink
+    private static Path extractUvWheel(String url, @Nullable String declaredSha,
+                                       Path toolchain, Path binary, Consumer<String> message)
             throws BrandException {
+        Path wheel = toolchain.resolve("uv.whl");
+        Path staged = toolchain.resolve("uv.extract-" + java.util.UUID.randomUUID());
         try {
             Files.createDirectories(toolchain);
-            Path wheel = toolchain.resolve("uv.whl");
-            try (InputStream in = download(url)) {
-                Files.copy(in, wheel, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            if (declaredSha == null) {
+                message.accept("uv: the index declared no digest; the pinned binary digest decides");
+                try (InputStream in = download(url)) {
+                    Files.copy(in, wheel, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                }
+            } else {
+                copyVerified(download(url), wheel, declaredSha);
             }
+            String executable = UvRuntime.executableName();
             try (ZipInputStream zip = new ZipInputStream(Files.newInputStream(wheel))) {
                 ZipEntry entry;
                 boolean found = false;
                 while ((entry = zip.getNextEntry()) != null) {
-                    if (!entry.isDirectory() && entry.getName().endsWith("/uv")) {
-                        Files.copy(zip, binary, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    if (!entry.isDirectory() && entry.getName().endsWith("/" + executable)) {
+                        Files.copy(zip, staged, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
                         found = true;
                         break;
                     }
                 }
                 if (!found) {
-                    throw new BrandException("uv wheel did not contain scripts/uv");
+                    throw new BrandException("uv wheel did not contain scripts/" + executable);
                 }
             }
-            Files.setPosixFilePermissions(binary, PosixFilePermissions.fromString("rwxr-xr-x"));
+            UvRuntime.verify(staged, url);
+            Files.move(staged, binary, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            try {
+                Files.setPosixFilePermissions(binary, PosixFilePermissions.fromString("rwxr-xr-x"));
+            } catch (UnsupportedOperationException ignored) {
+                // Windows: no POSIX mode bits; executability is implicit.
+            }
             Files.deleteIfExists(wheel);
+            message.accept("uv " + UV_VERSION + " installed from " + url
+                    + " (sha256 " + UvRuntime.binarySha256() + ")");
             return binary;
         } catch (IOException e) {
             throw new BrandException("Could not unpack uv from " + url + ": " + e.getMessage(), e);
+        } finally {
+            try {
+                Files.deleteIfExists(staged);
+            } catch (IOException ignored) {
+                // A leftover staging file is not a uv; the next attempt replaces it.
+            }
         }
     }
 
