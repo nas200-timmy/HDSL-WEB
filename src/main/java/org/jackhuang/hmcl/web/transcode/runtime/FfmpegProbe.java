@@ -134,11 +134,17 @@ public final class FfmpegProbe {
         return result;
     }
 
+    /// Parses `-filters`.
+    ///
+    /// The flag column is two characters on a filter row (` .. libvmaf`) while
+    /// the legend above it uses three (`  T.. = Timeline support`); matching a
+    /// fixed three skipped every filter on ffmpeg 9.x, which made filter-only
+    /// features (libvmaf) look absent.
     static Set<String> parseFilters(String output) {
         Set<String> result = new LinkedHashSet<>();
         for (String line : output.split("\\R")) {
             java.util.regex.Matcher matcher = java.util.regex.Pattern
-                    .compile("^\\s*[TSC.]{3}\\s+(\\S+)")
+                    .compile("^\\s*[TSC.|]{2,3}\\s+(\\S+)")
                     .matcher(line);
             if (matcher.find()) {
                 String name = matcher.group(1);

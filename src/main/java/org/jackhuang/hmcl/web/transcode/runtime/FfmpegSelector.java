@@ -76,7 +76,7 @@ public final class FfmpegSelector {
         String requested = normalizeMajor(preferredMajor);
         if (!AUTO.equals(requested) && !requested.matches("\\d+\\.\\d+")) {
             throw new IOException("ffmpeg_no_candidate: unsupported major '" + preferredMajor
-                    + "' (expected auto, 7.1 or 8.1)");
+                    + "' (expected auto or one of " + catalog.majors() + ")");
         }
 
         List<Candidate> platformCandidates = new ArrayList<>();
@@ -185,7 +185,7 @@ public final class FfmpegSelector {
         String requested = normalizeMajor(preferredMajor);
         if (!AUTO.equals(requested) && !requested.matches("\\d+\\.\\d+")) {
             throw new IOException("ffmpeg_no_candidate: unsupported major '" + preferredMajor
-                    + "' (expected auto, 7.1 or 8.1)");
+                    + "' (expected auto or one of " + catalog.majors() + ")");
         }
 
         List<FfmpegCatalog.Entry> candidates = new ArrayList<>();

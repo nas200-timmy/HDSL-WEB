@@ -239,4 +239,21 @@ class FfmpegSelectorTest {
                 """.formatted(id, version, minGlibc, featureJson, "a".repeat(64));
         return FfmpegCatalog.parse(json, "test").entries().get(0);
     }
+
+    @Test
+    public void windowsAutoPicksTheNewestVendorBuild() throws Exception {
+        FfmpegCatalog.Catalog builtin = FfmpegCatalog.load(null);
+        FfmpegSelector.Recommendation picked = FfmpegSelector.select(builtin,
+                new FfmpegCapabilities.Host("windows", "x64", "none", ""), Set.of("libx264"), "auto");
+        assertEquals("windows-x64-gpl-gyan-9.1-essentials", picked.entry().id());
+    }
+
+    @Test
+    public void aSourceBuildCanPickTheNineOneLine() throws Exception {
+        FfmpegCatalog.Catalog builtin = FfmpegCatalog.load(null);
+        FfmpegSelector.Recommendation picked = FfmpegSelector.selectSource(builtin,
+                new FfmpegCapabilities.Host("linux", "x64", "glibc", "2.36"),
+                Set.of("libx264"), "9.1");
+        assertEquals("ffmpeg-source-9.1-gpl-static-v1", picked.entry().id());
+    }
 }

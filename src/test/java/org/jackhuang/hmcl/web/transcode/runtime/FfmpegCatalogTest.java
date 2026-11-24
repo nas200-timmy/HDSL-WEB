@@ -74,9 +74,9 @@ class FfmpegCatalogTest {
         FfmpegCatalog.Catalog catalog = FfmpegCatalog.load(null);
         assertFalse(catalog.entries().isEmpty());
         assertNotNull(catalog.find("linux-x64-glibc-gpl-btbn-8.1.3-2026-10"));
-        assertEquals(List.of("7.1", "8.1"), catalog.majors());
-        assertEquals(8, catalog.entries().size());
-        assertEquals(2, catalog.entries().stream().filter(FfmpegCatalog.Entry::isSource).count());
+        assertEquals(List.of("7.1", "8.1", "9.1"), catalog.majors());
+        assertEquals(10, catalog.entries().size());
+        assertEquals(3, catalog.entries().stream().filter(FfmpegCatalog.Entry::isSource).count());
     }
 
     @Test
@@ -128,10 +128,16 @@ class FfmpegCatalogTest {
                 eight.sha256());
         assertEquals(11050340, seven.size());
         assertEquals(11732036, eight.size());
-        assertTrue(seven.mirrors().contains(
-                "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n7.1.5.tar.gz"));
-        assertTrue(eight.mirrors().contains(
-                "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n8.1.3.tar.gz"));
+        // `mirrors` are candidates the downloader tries, so they must serve the
+        // same bytes. The GitHub archive is a different archive and stays a
+        // manual comparison in the notes instead.
+        assertTrue(seven.mirrors().isEmpty(), seven.mirrors().toString());
+        assertTrue(eight.mirrors().isEmpty(), eight.mirrors().toString());
+        FfmpegCatalog.Entry nine = catalog.find("ffmpeg-source-9.1-gpl-static-v1");
+        assertNotNull(nine);
+        assertEquals("9.1", nine.major());
+        assertEquals("https://ffmpeg.org/releases/ffmpeg-9.1.tar.xz", nine.url());
+        assertEquals(12557532, nine.size());
         assertTrue(seven.matches("linux", "x64", "glibc"));
         assertTrue(seven.matches("windows", "x64", "none"));
         assertTrue(seven.matches("macos", "arm64", "none"));
@@ -279,5 +285,21 @@ class FfmpegCatalogTest {
         FfmpegCatalog.Catalog empty = new FfmpegCatalog.Catalog(1, "", List.of());
         assertThrows(java.io.IOException.class, () -> FfmpegSelector.select(
                 empty, new FfmpegCapabilities.Host("linux", "x64", "glibc"), Set.of()));
+    }
+
+    @Test
+    public void theGyanWindowsBuildIsAPinnedZip() {
+        FfmpegCatalog.Entry entry = FfmpegCatalog.load(null)
+                .find("windows-x64-gpl-gyan-9.1-essentials");
+        assertNotNull(entry);
+        assertEquals("windows", entry.os());
+        assertEquals("x64", entry.arch());
+        assertEquals("9.1", entry.major());
+        assertEquals("zip", entry.archive());
+        assertEquals(119467219, entry.size());
+        assertTrue(entry.url().startsWith("https://www.gyan.dev/ffmpeg/builds/packages/"),
+                entry.url());
+        assertTrue(entry.sha256().matches("[0-9a-f]{64}"), entry.sha256());
+        assertTrue(entry.features().contains("libx264"), entry.features().toString());
     }
 }

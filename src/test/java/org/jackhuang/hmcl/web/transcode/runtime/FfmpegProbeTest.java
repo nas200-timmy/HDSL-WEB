@@ -86,4 +86,21 @@ class FfmpegProbeTest {
         assertEquals("missing", info.error());
         assertTrue(info.encoders().isEmpty());
     }
+
+    @Test
+    public void filtersAreParsedWithTwoFlagColumns() {
+        String output = String.join("\n",
+                "Filters:",
+                "  T.. = Timeline support",
+                "  .S. = Slice threading",
+                "  A = Audio input/output",
+                "  ------",
+                " .. libvmaf           VV->V      Calculate the VMAF between two video streams.",
+                " T.. scale            V->V       Scale the input video size.",
+                "");
+        java.util.Set<String> filters = FfmpegProbe.parseFilters(output);
+        assertTrue(filters.contains("libvmaf"), filters.toString());
+        assertTrue(filters.contains("scale"), filters.toString());
+        assertFalse(filters.contains("="), filters.toString());
+    }
 }
