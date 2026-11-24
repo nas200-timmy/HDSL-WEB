@@ -102,7 +102,8 @@ class PlainLegacyTest {
             assertTrue(unlocked.body().contains("name=\"text\""), unlocked.body());
             // Text browsers ignore the stylesheet: the nav must break lines by
             // markup alone, and submits must be inputs w3m/lynx know how to post.
-            assertTrue(unlocked.body().contains("会话列表</a><br>"), unlocked.body());
+            assertTrue(unlocked.body().contains("<div class=\"nav-item"), unlocked.body());
+            assertTrue(unlocked.body().contains("会话列表</a>"), unlocked.body());
             assertTrue(unlocked.body().contains("type=\"submit\" value=\"退出\""), unlocked.body());
             // The legacy surface can also fork and export without the SPA.
             assertTrue(unlocked.body().contains("导出</a>"), unlocked.body());
@@ -325,6 +326,63 @@ class PlainLegacyTest {
     }
 
     // ---------------------------------------------------------------- helpers --
+
+    @Test
+    void aMultipartSendStoresAndShowsTheAttachment(@TempDir Path dataDir) throws Exception {
+        HttpServer provider = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        provider.createContext("/v1/chat/completions", PlainLegacyTest::stream);
+        provider.start();
+        DshAccount account = new DshAccount(
+                DshAccount.AccountKind.THIRD_PARTY, "legacy-files", "test-key",
+                "http://127.0.0.1:" + provider.getAddress().getPort() + "/v1",
+                null, "fake-model", null);
+        SettingsManager.settings().getAccounts().add(account);
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir, Map.of(),
+                config -> {
+                    config.auth.disabled = true;
+                    config.bindHost = "127.0.0.1";
+                })) {
+            HttpClient client = TestSupport.client();
+            String base = running.baseUrl();
+            HttpResponse<String> created = postForm(client, base + "/plain/new", "assistantId=default", null);
+            assertEquals(303, created.statusCode(), created.body());
+            String sessionId = created.headers().firstValue("Location").orElseThrow()
+                    .substring("/plain/s/".length()).replace("#bottom", "");
+            HttpRequest patch = HttpRequest.newBuilder(URI.create(base + "/api/chat/sessions/" + sessionId))
+                    .timeout(Duration.ofSeconds(10))
+                    .header("Content-Type", "application/json")
+                    .method("PATCH", HttpRequest.BodyPublishers.ofString(
+                            "{\"account\":\"legacy-files\",\"model\":\"fake-model\"}",
+                            StandardCharsets.UTF_8))
+                    .build();
+            assertEquals(200, client.send(patch, HttpResponse.BodyHandlers.ofString()).statusCode());
+
+            String boundary = "----hdsl" + System.nanoTime();
+            String body = "--" + boundary + "\r\n"
+                    + "Content-Disposition: form-data; name=\"text\"\r\n\r\n"
+                    + "hello with a file\r\n"
+                    + "--" + boundary + "\r\n"
+                    + "Content-Disposition: form-data; name=\"file\"; filename=\"note.txt\"\r\n"
+                    + "Content-Type: text/plain\r\n\r\n"
+                    + "attachment body\r\n"
+                    + "--" + boundary + "--\r\n";
+            HttpRequest upload = HttpRequest.newBuilder(URI.create(
+                            base + "/plain/s/" + sessionId + "/send"))
+                    .timeout(Duration.ofSeconds(30))
+                    .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                    .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
+                    .build();
+            HttpResponse<String> sent = client.send(upload, HttpResponse.BodyHandlers.ofString());
+            assertEquals(303, sent.statusCode(), sent.body());
+
+            String page = waitFor(client, base, sessionId, "note.txt", Duration.ofSeconds(15));
+            assertTrue(page.contains("note.txt"), page);
+            assertTrue(page.contains("hello with a file"), page);
+        } finally {
+            SettingsManager.settings().getAccounts().remove(account);
+            provider.stop(0);
+        }
+    }
 
     private static TestSupport.RunningServer start(Path dataDir) throws Exception {
         return TestSupport.start(dataDir, Map.of(UserStore.ENV_ADMIN_PASSWORD, PANEL),

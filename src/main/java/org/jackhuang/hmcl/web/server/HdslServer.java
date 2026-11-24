@@ -432,14 +432,19 @@ public final class HdslServer {
             context.addServlet(chatHolder, "/api/chat/*");
         }
         // The no-JavaScript surface (docs/plain-surface.md). Registered even when
-        // chat is unavailable: /plain/old is the landing page for browsers that
-        // cannot run the SPA, and it must answer on a degraded install too.
+        // chat is unavailable: /plain/old explains a browser that cannot run the
+        // SPA, and it must answer on a degraded install too.
         MarkdownSsr plainSsr = new MarkdownSsr(config.dataDir,
                 config.dataDir.resolve("plain-md"), config.plain.ssrWorkers);
-        context.addServlet(new ServletHolder(new PlainChatServlet(
+        ServletHolder plainHolder = new ServletHolder(new PlainChatServlet(
                 chat == null ? null : chat.service(), authService, authFilter,
                 config.auth.disabled, config.basePath, developerAuth, developerElevation,
-                tlsActive, config, plainSsr)), "/plain/*");
+                tlsActive, config, plainSsr));
+        // Attachments on the no-JS surface arrive as a multipart form; the
+        // per-file limits are enforced by ChatAttachments, this is only the
+        // container-side request cap.
+        plainHolder.getRegistration().setMultipartConfig(packMultipart);
+        context.addServlet(plainHolder, "/plain/*");
         // Render the transcript while the turn is still fresh instead of making
         // the first reader wait for one Node process per message.
         if (chat != null) {

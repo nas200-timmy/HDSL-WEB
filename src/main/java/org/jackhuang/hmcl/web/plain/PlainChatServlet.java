@@ -20,6 +20,8 @@ package org.jackhuang.hmcl.web.plain;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import jakarta.servlet.http.Part;
+import jakarta.servlet.ServletException;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
@@ -28,6 +30,7 @@ import org.jackhuang.hmcl.web.auth.AuthFilter;
 import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.auth.LoginThrottle;
 import org.jackhuang.hmcl.web.audit.AuditLog;
+import org.jackhuang.hmcl.web.chat.ChatAttachments;
 import org.jackhuang.hmcl.web.chat.ChatException;
 import org.jackhuang.hmcl.web.chat.ChatService;
 import org.jackhuang.hmcl.web.config.ServerConfig;
@@ -44,7 +47,9 @@ import java.net.URI;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 import static org.jackhuang.hmcl.util.logging.Logger.LOG;
@@ -312,6 +317,118 @@ public final class PlainChatServlet extends HttpServlet {
                 sessionPage(request, response, sessionId);
                 return;
             }
+            if ("/stop".equals(action)) {
+                if (!post) {
+                    methodNotAllowed(response, "POST");
+                    return;
+                }
+                if (!sameOrigin(request)) {
+                    error(response, 403, "跨站表单被拒绝");
+                    return;
+                }
+                // Stopping spends nothing: it stays reachable even after the
+                // elevation window closed, otherwise a long reply could not be
+                // stopped from the surface that started it.
+                String turnId = requireChat().turns().activeTurn(sessionId);
+                if (turnId != null) {
+                    requireChat().turns().cancel(turnId);
+                }
+                redirect(response, url("/plain/s/" + sessionId + "?auto=1#bottom"));
+                return;
+            }
+            if ("/regenerate".equals(action)) {
+                if (!post) {
+                    methodNotAllowed(response, "POST");
+                    return;
+                }
+                if (!sameOrigin(request)) {
+                    error(response, 403, "跨站表单被拒绝");
+                    return;
+                }
+                if (!chatGate(request, response, url("/plain/s/" + sessionId))) {
+                    return;
+                }
+                String nodeId = lastAssistantNodeId(requireChat().sessionJson(sessionId));
+                if (nodeId == null) {
+                    redirect(response, url("/plain/s/" + sessionId + "?error=no_reply#bottom"));
+                    return;
+                }
+                try {
+                    requireChat().turns().regenerate(sessionId, nodeId, "in_place", null, null, null);
+                } catch (ChatException e) {
+                    if ("chat_busy".equals(e.code())) {
+                        redirect(response, url("/plain/s/" + sessionId + "?error=busy#bottom"));
+                        return;
+                    }
+                    throw e;
+                }
+                redirect(response, url("/plain/s/" + sessionId + "?auto=1#bottom"));
+                return;
+            }
+            if ("/rename".equals(action)) {
+                if (!post) {
+                    methodNotAllowed(response, "POST");
+                    return;
+                }
+                if (!sameOrigin(request)) {
+                    error(response, 403, "跨站表单被拒绝");
+                    return;
+                }
+                String title = trimToNull(request.getParameter("title"));
+                if (title == null) {
+                    redirect(response, url("/plain/s/" + sessionId + "?error=empty_title#bottom"));
+                    return;
+                }
+                JsonObject patch = new JsonObject();
+                patch.addProperty("title", title.length() > 120 ? title.substring(0, 120) : title);
+                requireChat().updateSession(sessionId, patch);
+                redirect(response, url("/plain/s/" + sessionId + "#bottom"));
+                return;
+            }
+            if ("/delete".equals(action)) {
+                if (!post) {
+                    methodNotAllowed(response, "POST");
+                    return;
+                }
+                if (!sameOrigin(request)) {
+                    error(response, 403, "跨站表单被拒绝");
+                    return;
+                }
+                if (!"yes".equals(request.getParameter("confirm"))) {
+                    redirect(response, url("/plain/s/" + sessionId + "?error=confirm#bottom"));
+                    return;
+                }
+                if (!chatGate(request, response, url("/plain/s/" + sessionId))) {
+                    return;
+                }
+                try {
+                    requireChat().deleteSession(sessionId);
+                } catch (ChatException e) {
+                    if ("chat_busy".equals(e.code())) {
+                        redirect(response, url("/plain/s/" + sessionId + "?error=busy#bottom"));
+                        return;
+                    }
+                    throw e;
+                }
+                redirect(response, url("/plain"));
+                return;
+            }
+            if ("/reasoning".equals(action)) {
+                if (!post) {
+                    methodNotAllowed(response, "POST");
+                    return;
+                }
+                if (!sameOrigin(request)) {
+                    error(response, 403, "跨站表单被拒绝");
+                    return;
+                }
+                String level = request.getParameter("reasoningLevel");
+                JsonObject patch = new JsonObject();
+                patch.addProperty("reasoningLevel", level == null ? "" : level.trim());
+                requireChat().updateSession(sessionId, patch);
+                redirect(response, url("/plain/s/" + sessionId + "#bottom"));
+                return;
+            }
             if ("/model".equals(action)) {
                 if (!post) {
                     methodNotAllowed(response, "POST");
@@ -373,25 +490,31 @@ public final class PlainChatServlet extends HttpServlet {
 
     private void loginPage(HttpServletResponse response, @Nullable String message) throws IOException {
         StringBuilder body = new StringBuilder();
-        body.append("<h1>HDSL 面板 · 纯文本版</h1>\n");
-        body.append("<p class=\"muted\">不需要 JavaScript，w3m / lynx 或旧浏览器都能用。</p>\n");
+        body.append("<div class=\"brand-hero\"><span class=\"legacy-logo lg\">H</span>")
+                .append("<div><strong>HDSL 面板</strong><div class=\"muted\">纯文本兼容版 · 不需要 JavaScript</div></div></div>\n");
+        body.append("<h1>登录</h1>\n");
         if (message != null) {
             body.append("<p class=\"error\">").append(PlainHtml.escape(message)).append("</p>\n");
         }
         body.append("<form method=\"post\" action=\"").append(url("/plain/login")).append("\">\n")
-                .append("<div class=\"row\"><label>用户名<br>")
-                .append("<input type=\"text\" name=\"username\" autocomplete=\"username\" size=\"32\"></label></div>\n")
-                .append("<div class=\"row\"><label>密码<br>")
-                .append("<input type=\"password\" name=\"password\" autocomplete=\"current-password\"></label></div>\n")
-                .append("<div class=\"row\"><input type=\"submit\" value=\"登录\"></div>\n")
+                .append("<div class=\"field\"><label for=\"username\">用户名</label>")
+                .append("<input id=\"username\" type=\"text\" name=\"username\" autocomplete=\"username\" size=\"32\"></div>\n")
+                .append("<div class=\"field\"><label for=\"password\">密码</label>")
+                .append("<input id=\"password\" type=\"password\" name=\"password\" autocomplete=\"current-password\"></div>\n")
+                .append("<div class=\"field\"><input type=\"submit\" value=\"登录\"></div>\n")
                 .append("</form>\n")
-                .append("<p class=\"muted\"><a href=\"").append(url("/")).append("\">用现代浏览器打开面板</a></p>\n");
+                .append("<p class=\"muted\"><a href=\"").append(url("/")).append("\">用现代浏览器打开完整面板</a></p>\n");
         page(response, 200, "登录 · HDSL 纯文本版", null, shell(null, body.toString()), false);
     }
 
     private void home(HttpServletRequest request, HttpServletResponse response, AuthService.Session user)
             throws IOException, SQLException {
         StringBuilder content = new StringBuilder();
+        String ua = request.getHeader("User-Agent");
+        if (ua != null && ua.toLowerCase(Locale.ROOT).contains("trident/")) {
+            content.append("<p class=\"notice\">IE11 兼容模式：聊天、附件、停止生成都可用，"
+                    + "页面通过表单与轮询更新，不加载现代前端。</p>\n");
+        }
         content.append("<p class=\"muted\">登录为 ").append(PlainHtml.escape(user.username()))
                 .append("；回答生成时可用手动刷新或开启自动刷新。</p>\n");
 
@@ -421,46 +544,57 @@ public final class PlainChatServlet extends HttpServlet {
     /// The session list plus the new-session form: the region the poller swaps.
     private String sessionsRegion(HttpServletRequest request) throws SQLException {
         StringBuilder body = new StringBuilder();
-        body.append("<h1>会话</h1>\n");
+        body.append("<div class=\"page-head\"><div><h1>会话</h1>")
+                .append("<p class=\"muted\">选一个继续，或在下面新建。</p></div>")
+                .append("<a class=\"tool\" href=\"").append(url("/plain")).append("\">刷新</a></div>\n");
         JsonArray sessions = chat.sessions(null);
         if (sessions.isEmpty()) {
-            body.append("<p class=\"muted\">还没有会话。先在下面新建一个。</p>\n");
+            body.append("<div class=\"empty-state\"><strong>还没有会话</strong><br>")
+                    .append("先在下面新建一个，发第一条消息。</div>\n");
         } else {
-            body.append("<table width=\"100%\"><tr><th width=\"60%\">标题</th><th width=\"25%\">更新时间</th><th width=\"15%\">消息</th></tr>\n");
+            body.append("<table class=\"data session-list\" width=\"100%\">\n")
+                    .append("<tr><th width=\"52%\">标题</th><th width=\"20%\">更新时间</th>")
+                    .append("<th width=\"12%\">消息</th><th width=\"16%\">状态</th></tr>\n");
             for (JsonElement element : sessions) {
                 JsonObject session = element.getAsJsonObject();
                 String id = string(session, "id");
                 String title = string(session, "title");
-                body.append("<tr><td><a href=\"").append(url("/plain/s/" + id + "#bottom")).append("\">")
+                boolean streaming = chat.turns().busy(id);
+                body.append("<tr><td class=\"session-title\"><a href=\"")
+                        .append(url("/plain/s/" + id + "#bottom")).append("\">")
                         .append(PlainHtml.escape(title.isBlank() ? "新会话" : title)).append("</a></td>")
-                        .append("<td>").append(PlainHtml.time(longOf(session, "updatedAt"))).append("</td>")
-                        .append("<td>").append(longOf(session, "messageCount")).append("</td></tr>\n");
+                        .append("<td class=\"muted\">").append(PlainHtml.time(longOf(session, "updatedAt"))).append("</td>")
+                        .append("<td>").append(longOf(session, "messageCount")).append("</td>")
+                        .append("<td>").append(streaming
+                                ? "<span class=\"tag live\">生成中</span>"
+                                : "<span class=\"tag\">空闲</span>").append("</td></tr>\n");
             }
             body.append("</table>\n");
         }
 
-        body.append("<h2>新建会话</h2>\n");
+        body.append("<div class=\"form-card\"><h2>新建会话</h2>\n");
         if (!chatAllowed(request)) {
             body.append("<p class=\"muted\">新建会话需要先<a href=\"").append(url("/plain/elevate"))
-                    .append("\">开发者提权</a>。</p>\n");
+                    .append("\">开发者提权</a>。</p>\n</div>\n");
             return body.toString();
         }
         JsonArray assistants = chat.assistants();
         if (assistants.isEmpty()) {
-            body.append("<p class=\"muted\">没有可用的助手。</p>\n");
+            body.append("<p class=\"muted\">没有可用的助手。</p>\n</div>\n");
             return body.toString();
         }
         body.append("<form method=\"post\" action=\"").append(url("/plain/new")).append("\">\n")
-                .append("<div class=\"row\"><label>助手 <select name=\"assistantId\">\n");
+                .append("<div class=\"field\"><label for=\"assistantId\">助手</label>")
+                .append("<select id=\"assistantId\" name=\"assistantId\">\n");
         for (JsonElement element : assistants) {
             JsonObject assistant = element.getAsJsonObject();
             body.append("<option value=\"").append(PlainHtml.escape(string(assistant, "id")))
                     .append("\">").append(PlainHtml.escape(string(assistant, "name")))
                     .append("</option>\n");
         }
-        body.append("</select></label></div>\n")
-                .append("<div class=\"row\"><input type=\"submit\" value=\"创建并打开\"></div>\n")
-                .append("</form>\n");
+        body.append("</select></div>\n")
+                .append("<div class=\"field\"><input type=\"submit\" value=\"创建并打开\"></div>\n")
+                .append("</form></div>\n");
         return body.toString();
     }
 
@@ -476,27 +610,41 @@ public final class PlainChatServlet extends HttpServlet {
         StringBuilder content = new StringBuilder();
         String assistant = assistantName(string(session, "assistantId"));
         String model = string(session, "model");
+        String title = string(session, "title");
         content.append("<div class=\"chat-head\"><div class=\"chat-heading\">")
                 .append("<span class=\"chat-heading-avatar\">AI</span><div class=\"chat-heading-text\">")
-                .append("<h1>").append(PlainHtml.escape(string(session, "title"))).append("</h1>\n")
+                .append("<h1>").append(PlainHtml.escape(title.isBlank() ? "新会话" : title)).append("</h1>\n")
                 .append("<p class=\"muted\">")
                 .append(PlainHtml.escape(assistant))
                 .append(" · ").append(PlainHtml.escape(model.isBlank() ? "默认模型" : model))
-                .append(streaming ? " · <strong>正在生成回答…</strong>" : "")
+                .append(streaming ? " · <strong class=\"live-text\">正在生成回答…</strong>" : "")
                 .append("</p></div></div>\n");
-        content.append("<div class=\"toolbar chat-toolbar\"><a href=\"").append(url("/plain")).append("\">← 会话列表</a>")
-                .append("<a href=\"").append(url("/plain/s/" + sessionId)).append("\">刷新</a>")
+        content.append("<div class=\"toolbar chat-toolbar\">")
+                .append("<a class=\"tool\" href=\"").append(url("/plain")).append("\">← 会话列表</a>")
+                .append("<a class=\"tool\" href=\"").append(url("/plain/s/" + sessionId)).append("\">刷新</a>")
                 .append(auto
-                        ? "<a href=\"" + url("/plain/s/" + sessionId) + "\">关闭自动刷新</a>"
-                        : "<a href=\"" + url("/plain/s/" + sessionId) + "?auto=1\">自动刷新（"
+                        ? "<a class=\"tool\" href=\"" + url("/plain/s/" + sessionId) + "\">关闭自动刷新</a>"
+                        : "<a class=\"tool\" href=\"" + url("/plain/s/" + sessionId) + "?auto=1\">自动刷新（"
                         + AUTO_REFRESH_SECONDS + " 秒）</a>")
-                .append("<a href=\"").append(url("/api/chat/sessions/" + sessionId + "/export"))
+                .append("<a class=\"tool\" href=\"").append(url("/api/chat/sessions/" + sessionId + "/export"))
                 .append("\">导出</a>")
-                .append("<form method=\"post\" action=\"").append(url("/plain/s/" + sessionId + "/fork"))
+                .append("<form class=\"inline-form\" method=\"post\" action=\"")
+                .append(url("/plain/s/" + sessionId + "/fork"))
                 .append("\"><input type=\"submit\" value=\"分叉\"></form>")
-                .append("<a href=\"#bottom\">跳到末尾 ↓</a>")
+                .append("<a class=\"tool\" href=\"#bottom\">跳到末尾 ↓</a>")
                 .append("</div>\n");
-        content.append("<div class=\"chat-modelbar\">").append(modelForm(session)).append("</div>\n");
+        content.append("<div class=\"chat-manage\">")
+                .append("<form class=\"inline-form\" method=\"post\" action=\"")
+                .append(url("/plain/s/" + sessionId + "/rename")).append("\">")
+                .append("<label>标题 <input type=\"text\" name=\"title\" value=\"")
+                .append(PlainHtml.escape(title)).append("\" size=\"24\" maxlength=\"120\"></label> ")
+                .append("<input type=\"submit\" value=\"重命名\"></form>")
+                .append("<form class=\"inline-form danger-zone\" method=\"post\" action=\"")
+                .append(url("/plain/s/" + sessionId + "/delete")).append("\">")
+                .append("<label class=\"check\"><input type=\"checkbox\" name=\"confirm\" value=\"yes\"> 确认删除</label> ")
+                .append("<input class=\"danger\" type=\"submit\" value=\"删除会话\"></form>")
+                .append("</div>\n");
+        content.append("<div class=\"chat-modelbar\">").append(modelForm(session)).append(reasoningForm(session)).append("</div>\n");
 
         if (error != null && !error.isBlank()) {
             content.append("<p class=\"error\">").append(PlainHtml.escape(errorText(error))).append("</p>\n");
@@ -520,7 +668,7 @@ public final class PlainChatServlet extends HttpServlet {
         String head = streaming && auto
                 ? "<noscript><meta http-equiv=\"refresh\" content=\"" + AUTO_REFRESH_SECONDS + "\"></noscript>"
                 : null;
-        page(response, 200, string(session, "title") + " · HDSL 纯文本版",
+        page(response, 200, (title.isBlank() ? "新会话" : title) + " · HDSL 纯文本版",
                 head, shell(nav(request), content.toString()), true);
     }
 
@@ -528,6 +676,8 @@ public final class PlainChatServlet extends HttpServlet {
     /// same table-with-avatar shape as the SPA's message rows; a user row simply
     /// puts the cells in the opposite order, so no flexbox is involved.
     private String transcript(JsonObject session) {
+        String sessionId = string(session, "id");
+        boolean streaming = session.has("streaming") && session.get("streaming").getAsBoolean();
         StringBuilder body = new StringBuilder("<div class=\"chat-thread\">\n");
         JsonArray nodes = session.has("nodes") && session.getAsJsonArray("nodes") != null
                 ? session.getAsJsonArray("nodes") : new JsonArray();
@@ -556,7 +706,7 @@ public final class PlainChatServlet extends HttpServlet {
             }
             if (bubble.length() == 0) {
                 if (content.isBlank() && "streaming".equals(status)) {
-                    bubble.append("<pre class=\"msg\">（正在生成…）</pre>\n");
+                    bubble.append("<pre class=\"msg thinking\">（正在生成…）</pre>\n");
                 } else {
                     bubble.append("<pre class=\"msg\">").append(PlainHtml.escape(content)).append("</pre>\n");
                 }
@@ -587,7 +737,7 @@ public final class PlainChatServlet extends HttpServlet {
                     + statusText(status, assistant) + "</span></div>\n";
             String messageCell = "<td class=\"chat-message-cell\">" + meta
                     + "<div class=\"chat-bubble\">" + bubble + "</div></td>";
-            String avatarCell = "<td class=\"chat-avatar-cell\" width=\"40\"><span class=\"chat-avatar\">"
+            String avatarCell = "<td class=\"chat-avatar-cell\" width=\"44\"><span class=\"chat-avatar\">"
                     + (assistant ? "AI" : "我") + "</span></td>";
             body.append("<table class=\"chat-line ").append(role).append("\"")
                     .append(assistant ? " width=\"100%\"" : " align=\"right\"")
@@ -598,6 +748,16 @@ public final class PlainChatServlet extends HttpServlet {
         if (first) {
             body.append("<div class=\"chat-empty\"><strong>开始一段新对话</strong><br>")
                     .append("在下方输入第一条消息，发送后这里会出现你和助手的聊天气泡。</div>\n");
+        } else if (streaming) {
+            body.append("<div class=\"chat-actions-row\">")
+                    .append("<form method=\"post\" action=\"").append(url("/plain/s/" + sessionId + "/stop"))
+                    .append("\"><input type=\"submit\" value=\"停止生成\"></form>")
+                    .append("<span class=\"muted\">回答会随轮询自动更新。</span></div>\n");
+        } else if (lastAssistantNodeId(session) != null) {
+            body.append("<div class=\"chat-actions-row\">")
+                    .append("<form method=\"post\" action=\"").append(url("/plain/s/" + sessionId + "/regenerate"))
+                    .append("\"><input type=\"submit\" value=\"重新生成上一条\"></form>")
+                    .append("</div>\n");
         }
         return body.append("</div>\n").toString();
     }
@@ -646,6 +806,33 @@ public final class PlainChatServlet extends HttpServlet {
         return out.toString();
     }
 
+    /// The reasoning level picker: a plain select, same rules as the model form.
+    private String reasoningForm(JsonObject session) {
+        String sessionId = string(session, "id");
+        String current = string(session, "reasoningLevel");
+        String[][] levels = {{"", "默认"}, {"low", "低"}, {"medium", "中"}, {"high", "高"}};
+        StringBuilder out = new StringBuilder("<form method=\"post\" action=\"")
+                .append(url("/plain/s/" + sessionId + "/reasoning"))
+                .append("\" class=\"modelform\"><label>思考 <select name=\"reasoningLevel\">");
+        boolean matched = false;
+        for (String[] level : levels) {
+            if (level[0].equals(current)) {
+                matched = true;
+            }
+        }
+        if (!current.isBlank() && !matched) {
+            out.append("<option value=\"").append(PlainHtml.escape(current))
+                    .append("\" selected>").append(PlainHtml.escape(current)).append("</option>");
+        }
+        for (String[] level : levels) {
+            out.append("<option value=\"").append(level[0]).append("\"")
+                    .append(level[0].equals(current) ? " selected" : "").append(">")
+                    .append(level[1]).append("</option>");
+        }
+        out.append("</select></label> <input type=\"submit\" value=\"应用\"></form>\n");
+        return out.toString();
+    }
+
     private static String capsLabel(JsonObject model) {
         JsonElement caps = model.get("caps");
         if (caps == null || !caps.isJsonObject()) {
@@ -677,10 +864,18 @@ public final class PlainChatServlet extends HttpServlet {
             return "<p class=\"muted\">发送消息需要先<a href=\"" + url("/plain/elevate")
                     + "\">开发者提权</a>。</p>\n";
         }
+        boolean search = searchConfigured();
         return "<div class=\"chat-composer\"><div class=\"chat-composer-title\">发送消息</div>\n"
-                + "<form method=\"post\" action=\"" + url("/plain/s/" + sessionId + "/send") + "\">\n"
+                + "<form method=\"post\" enctype=\"multipart/form-data\" action=\""
+                + url("/plain/s/" + sessionId + "/send") + "\">\n"
                 + "<textarea name=\"text\" rows=\"4\" cols=\"80\""
                 + " placeholder=\"输入消息，发送后回答会出现在上方\"></textarea>\n"
+                + "<div class=\"composer-files\"><label>附件 <input type=\"file\" name=\"file\" multiple></label>"
+                + "<span class=\"hint\">图片 / PDF / Office / 文本，单条最多 "
+                + ChatAttachments.MAX_PER_MESSAGE + " 个</span></div>\n"
+                + (search
+                    ? "<div class=\"composer-search\"><label class=\"check\"><input type=\"checkbox\" name=\"search\" value=\"1\"> 联网搜索</label></div>\n"
+                    : "")
                 + "<input type=\"hidden\" name=\"auto\" value=\"1\">\n"
                 + "<div class=\"chat-composer-bar\"><input type=\"submit\" value=\"发送\"> "
                 + "<span class=\"chat-composer-hint\">提交后自动回到本页；生成中会自动刷新。</span></div>\n"
@@ -692,32 +887,37 @@ public final class PlainChatServlet extends HttpServlet {
 
     private String nav(HttpServletRequest request) {
         Instant expiry = elevation.expiryOf(elevKey(request), true);
-        // <br> and submit inputs, not CSS: w3m and lynx ignore the stylesheet and
-        // would flow every link into one line. The expiry is left to the elevation
-        // page; a nav label that grows with the time squeezes the text column.
-        return "<div class=\"navlist\"><div class=\"legacy-brand\"><span class=\"legacy-logo\">H</span>"
-                + "<span class=\"legacy-brand-name\">HDSL Chat<small>兼容模式</small></span></div><br>\n"
-                + "<div class=\"nav-caption\">聊天</div>\n"
-                + "<a href=\"" + url("/plain") + "\">会话列表</a><br>\n"
-                + "<a href=\"" + url("/") + "\">完整面板</a><br>\n"
-                + "<div class=\"nav-caption\">面板</div>\n"
+        String info = request.getPathInfo() == null ? "" : request.getPathInfo();
+        boolean chatActive = info.isEmpty() || "/".equals(info) || info.startsWith("/s/");
+        boolean elevActive = info.startsWith("/elevate");
+        // Blocks and <br>-free divs: w3m and lynx ignore the stylesheet, so every
+        // item has to be block-level in the markup as well.
+        return "<div class=\"navlist\">"
+                + "<div class=\"legacy-brand\"><span class=\"legacy-logo\">H</span>"
+                + "<span class=\"legacy-brand-name\">HDSL Chat<small>兼容模式</small></span></div>\n"
+                + "<div class=\"nav-section\">聊天</div>"
+                + "<div class=\"nav-item" + (chatActive ? " active" : "") + "\">"
+                + "<a href=\"" + url("/plain") + "\">会话列表</a></div>"
+                + "<div class=\"nav-item\"><a href=\"" + url("/") + "\">完整面板</a></div>"
+                + "<div class=\"nav-section\">面板</div>"
+                + "<div class=\"nav-item" + (elevActive ? " active" : "") + "\">"
                 + "<a href=\"" + url("/plain/elevate") + "\">"
-                + (expiry == null ? "开发者提权" : "提权中")
-                + "</a><br>\n"
-                + "<form method=\"post\" action=\"" + url("/plain/logout")
-                + "\"><input type=\"submit\" value=\"退出\"></form>"
-                + "<div class=\"nav-foot\">表单与轮询兼容模式</div>"
+                + (expiry == null ? "开发者提权" : "提权中") + "</a></div>"
+                + "<div class=\"nav-item\"><form method=\"post\" action=\"" + url("/plain/logout")
+                + "\"><input class=\"nav-submit\" type=\"submit\" value=\"退出\"></form></div>"
+                + "<div class=\"nav-foot\">表单与轮询兼容模式<br>IE11 · w3m · lynx</div>"
                 + "</div>\n";
     }
 
     private void oldBrowser(HttpServletResponse response) throws IOException {
-        String body = "<h1>这个浏览器太旧了</h1>\n"
+        String body = "<div class=\"brand-hero\"><span class=\"legacy-logo lg\">H</span>"
+                + "<div><strong>HDSL 面板</strong><div class=\"muted\">兼容模式</div></div></div>\n"
+                + "<h1>这个浏览器没有加载完整面板</h1>\n"
                 + "<p>完整面板需要 JavaScript、fetch、WebSocket 和 CSS flex 布局。"
-                + "当前浏览器缺少其中至少一项，所以没有加载那套界面——不是服务器挂了。</p>\n"
-                + "<p>两个选择：</p>\n"
+                + "当前浏览器缺少其中至少一项——不是服务器挂了。</p>\n"
                 + "<ul>"
-                + "<li><a href=\"" + url("/plain") + "\"><strong>继续用纯文本版</strong></a>："
-                + "登录、看会话、发消息、下载附件都能用，适合 w3m / lynx / 老机器。</li>"
+                + "<li><a href=\"" + url("/plain") + "\"><strong>继续用纯文本版聊天</strong></a>："
+                + "登录、看会话、发消息、传附件、停止生成都能用。IE11 和 w3m / lynx 都走这条路。</li>"
                 + "<li>换一个现代浏览器（Chrome / Edge / Firefox / Safari）打开 "
                 + "<a href=\"" + url("/") + "\">完整面板</a>。</li>"
                 + "</ul>"
@@ -776,16 +976,39 @@ public final class PlainChatServlet extends HttpServlet {
 
     private void send(HttpServletRequest request, HttpServletResponse response, String sessionId)
             throws IOException, SQLException, ChatException {
+        List<String> attachmentIds = new ArrayList<>();
+        String contentType = request.getContentType();
+        if (contentType != null && contentType.toLowerCase(Locale.ROOT).startsWith("multipart/")) {
+            try {
+                for (Part part : request.getParts()) {
+                    String name = part.getSubmittedFileName();
+                    if (name == null || name.isBlank() || part.getSize() <= 0) {
+                        continue;
+                    }
+                    if (attachmentIds.size() >= ChatAttachments.MAX_PER_MESSAGE) {
+                        redirect(response, url("/plain/s/" + sessionId + "?error=too_many#bottom"));
+                        return;
+                    }
+                    JsonObject uploaded = requireChat().uploadAttachment(sessionId, part);
+                    attachmentIds.add(string(uploaded, "id"));
+                }
+            } catch (IllegalStateException | ServletException e) {
+                redirect(response, url("/plain/s/" + sessionId + "?error=attachment#bottom"));
+                return;
+            }
+        }
         String text = request.getParameter("text");
-        if (text == null || text.isBlank()) {
+        if ((text == null || text.isBlank()) && attachmentIds.isEmpty()) {
             redirect(response, url("/plain/s/" + sessionId + "?error=empty#bottom"));
             return;
         }
-        if (text.length() > MAX_TEXT_CHARS) {
+        if (text != null && text.length() > MAX_TEXT_CHARS) {
             text = text.substring(0, MAX_TEXT_CHARS);
         }
+        boolean search = request.getParameter("search") != null && searchConfigured();
         try {
-            requireChat().turns().send(sessionId, text.strip(), List.of(), null, null, null, false);
+            requireChat().turns().send(sessionId, text == null ? "" : text.strip(),
+                    attachmentIds, null, null, null, search);
         } catch (ChatException e) {
             if ("chat_busy".equals(e.code())) {
                 redirect(response, url("/plain/s/" + sessionId + "?error=busy#bottom"));
@@ -794,6 +1017,37 @@ public final class PlainChatServlet extends HttpServlet {
             throw e;
         }
         redirect(response, url("/plain/s/" + sessionId + "?auto=1#bottom"));
+    }
+
+    /// Whether the panel has a search key configured; the checkbox is only
+    /// shown (and only honoured) when it can actually do something.
+    private boolean searchConfigured() {
+        try {
+            JsonObject status = requireChat().searchStatus();
+            JsonElement configured = status.get("configured");
+            return configured != null && configured.isJsonPrimitive() && configured.getAsBoolean();
+        } catch (SQLException | ChatException e) {
+            return false;
+        }
+    }
+
+    /// The node the "重新生成上一条" form targets: the newest assistant node.
+    private static @Nullable String lastAssistantNodeId(JsonObject session) {
+        JsonElement nodes = session.get("nodes");
+        if (nodes == null || !nodes.isJsonArray()) {
+            return null;
+        }
+        String last = null;
+        for (JsonElement element : nodes.getAsJsonArray()) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+            JsonObject node = element.getAsJsonObject();
+            if ("assistant".equals(string(node, "role"))) {
+                last = string(node, "id");
+            }
+        }
+        return last;
     }
 
     // -------------------------------------------------------------- elevation --
@@ -1179,16 +1433,14 @@ public final class PlainChatServlet extends HttpServlet {
     private static String shell(@Nullable String nav, String content) {
         StringBuilder out = new StringBuilder();
         if (nav == null) {
-            // Login, errors and the too-old notice: HDSL's login card is a compact
-            // centred panel, not a full-width content card.
             out.append("<div class=\"shell-single\">");
-            out.append("<table class=\"shell shell-card\" width=\"420\" cellspacing=\"0\" cellpadding=\"0\"><tr>");
+            out.append("<table class=\"shell shell-card\" width=\"440\" cellspacing=\"0\" cellpadding=\"0\"><tr>");
             out.append("<td class=\"shell-main\">").append(content).append("</td>");
             out.append("</tr></table></div>\n");
             return out.toString();
         }
         out.append("<table class=\"shell\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\"><tr>");
-        out.append("<td class=\"shell-nav\" width=\"14%\">").append(nav).append("</td>");
+        out.append("<td class=\"shell-nav\">").append(nav).append("</td>");
         out.append("<td class=\"shell-main\">").append(content).append("</td>");
         out.append("</tr></table>\n");
         return out.toString();
@@ -1248,7 +1500,12 @@ public final class PlainChatServlet extends HttpServlet {
     private static String errorText(String code) {
         return switch (code) {
             case "empty" -> "消息不能为空";
-            case "busy" -> "上一条回答还在生成，等它结束再发（或者先刷新看看）";
+            case "busy" -> "上一条回答还在生成，等它结束再发（或者点「停止生成」）";
+            case "too_many" -> "附件太多：单条消息最多 " + ChatAttachments.MAX_PER_MESSAGE + " 个";
+            case "attachment" -> "附件上传失败：格式或大小不支持，或请求过大";
+            case "empty_title" -> "标题不能为空";
+            case "confirm" -> "删除会话前请勾选「确认删除」";
+            case "no_reply" -> "这个会话还没有可重新生成的回答";
             default -> code;
         };
     }
