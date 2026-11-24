@@ -54,7 +54,10 @@ export function TranscodeSettingsPage() {
     if (!feature) return;
     setPolicy(feature.failurePolicy);
     setTimeoutMinutes(feature.failureTimeoutMinutes);
-  }, [feature?.failurePolicy, feature?.failureTimeoutMinutes]);
+    setBinaryMirror(feature.binaryMirror ?? "");
+    setSourceMirror(feature.sourceMirror ?? "");
+  }, [feature?.failurePolicy, feature?.failureTimeoutMinutes, feature?.binaryMirror,
+      feature?.sourceMirror]);
 
   useEffect(() => {
     if (!installJob || installJob.state !== "running") return;
@@ -120,6 +123,29 @@ export function TranscodeSettingsPage() {
       await load();
     } catch (e) {
       toast("error", errMsg(e));
+    }
+  };
+
+  const [binaryMirror, setBinaryMirror] = useState("");
+  const [sourceMirror, setSourceMirror] = useState("");
+
+  /// 保存下载源。接口把失败策略和源放在同一个 PATCH 里，所以顺带带上当前策略，
+  /// 免得保存源把未保存的策略改动带走。
+  const saveSources = async () => {
+    setSaving(true);
+    try {
+      const next = await api.transcode.updateSettings({
+        failurePolicy: policy,
+        failureTimeoutMinutes: timeoutMinutes,
+        binaryMirror,
+        sourceMirror,
+      });
+      setTranscodeFeature(next);
+      toast("success", "下载源已保存");
+    } catch (e) {
+      toast("error", errMsg(e));
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -473,6 +499,41 @@ export function TranscodeSettingsPage() {
         </div>
         <p style={{ fontSize: 12, padding: "4px 8px 8px", lineHeight: 1.6, color: "var(--monet-on-surface-variant)" }}>
           这些值来自 `server.yaml` 的 `transcode:` 段与 `HDSL_TRANSCODE_*` 环境变量；改完重启面板生效。
+        </p>
+      </div>
+
+      <div className="card">
+        <div className="comp-row">
+          <span className="comp-label">下载源（镜像）</span>
+          <span className="comp-value mono" style={{ fontSize: 11, overflowWrap: "anywhere" }}>
+            {binaryMirror || "官方"} / {sourceMirror || "官方"}
+          </span>
+        </div>
+        <div style={{ display: "grid", gap: 6, padding: "4px 8px 8px" }}>
+          <label style={{ fontSize: 12 }}>二进制构建下载前缀</label>
+          <input className="input" placeholder="https://gh-proxy.com/ 或留空用官方 GitHub"
+                 value={binaryMirror} onChange={(e) => setBinaryMirror(e.target.value)} />
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="btn btn-text" onClick={() => setBinaryMirror("")}>官方（默认）</button>
+            <button className="btn btn-text" onClick={() => setBinaryMirror("https://gh-proxy.com/")}>
+              gh-proxy.com（第三方代理）
+            </button>
+          </div>
+          <label style={{ fontSize: 12 }}>源码归档下载前缀</label>
+          <input className="input" placeholder="https://你的镜像/ffmpeg/ 或留空用 ffmpeg.org"
+                 value={sourceMirror} onChange={(e) => setSourceMirror(e.target.value)} />
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="btn btn-text" onClick={() => setSourceMirror("")}>官方（默认）</button>
+          </div>
+          <button className="btn btn-raised" disabled={saving} onClick={() => void saveSources()}>
+            {saving ? "保存中…" : "保存下载源"}
+          </button>
+        </div>
+        <p style={{ fontSize: 12, padding: "4px 8px 8px", lineHeight: 1.6,
+                    color: "var(--monet-on-surface-variant)" }}>
+          前缀会把官方绝对地址直接接在后面（<span className="mono">https://gh-proxy.com/</span> +{" "}
+          <span className="mono">https://github.com/…</span>）。镜像只改变从哪里取字节，
+          不改变校验用的 SHA-256；镜像返回的字节不一样就按校验失败处理，不会装上去。
         </p>
       </div>
 

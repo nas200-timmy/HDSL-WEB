@@ -73,6 +73,8 @@ public final class TranscodeModule {
         this.buildKit = new FfmpegBuildKit(
                 TranscodePaths.dataDir(config).resolve("tools").resolve("ffmpeg"),
                 runtimeManager, toolchains, TranscodePaths.dataDir(config).resolve("logs"));
+        this.runtimeManager.setBinaryMirror(() -> config.transcode.binaryMirror);
+        this.buildKit.setSourceMirror(() -> config.transcode.sourceMirror);
         this.installer = new FfmpegInstaller(this);
         if (feature.enabled()) {
             queue.start();

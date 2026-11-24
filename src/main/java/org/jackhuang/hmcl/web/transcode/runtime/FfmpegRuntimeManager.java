@@ -67,6 +67,15 @@ public final class FfmpegRuntimeManager {
 
     private static final Logger LOG = Logger.LOG;
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+    /// A deployment mirror prefix for binary downloads; empty for the official
+    /// URL only. A supplier so a settings change applies to the next install
+    /// without a restart.
+    private volatile java.util.function.Supplier<String> binaryMirror = () -> "";
+
+    public void setBinaryMirror(java.util.function.Supplier<String> mirror) {
+        this.binaryMirror = mirror == null ? () -> "" : mirror;
+    }
+
     private static final String POINTER = "current.json";
     private static final String STATE = "state.json";
 
@@ -199,13 +208,10 @@ public final class FfmpegRuntimeManager {
 
             Path download = Files.createTempFile(toolsDir, ".download-", suffix(entry.archive()));
             try {
-                progress.stage("downloading " + entry.url(), 0);
-                try {
-                    download(entry, download, progress);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new IOException("ffmpeg_install_interrupted", e);
-                }
+                java.util.List<String> candidates = FfmpegDownload.candidates(
+                        binaryMirror.get(), entry.url(), entry.mirrors());
+                String used = downloadFirst(candidates, download, progress);
+                LOG.info("ffmpeg: " + entry.id() + " downloaded from " + used);
                 progress.stage("verifying SHA-256", 0.6);
                 verifySha(download, entry.sha256());
                 return installArchive(download, entry, progress);
@@ -453,9 +459,33 @@ public final class FfmpegRuntimeManager {
         }
     }
 
-    private void download(FfmpegCatalog.Entry entry, Path target, Progress progress)
+    /// Tries each candidate until one delivers; a failed attempt never leaves a
+    /// partial file behind for the SHA check to misread.
+    private String downloadFirst(java.util.List<String> candidates, Path target, Progress progress)
+            throws IOException {
+        IOException failure = null;
+        for (String candidate : candidates) {
+            progress.stage("downloading " + candidate, 0);
+            try {
+                download(candidate, target, progress);
+                return candidate;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("ffmpeg_install_interrupted", e);
+            } catch (IOException e) {
+                LOG.info("ffmpeg download from " + candidate + " failed: " + e.getMessage());
+                failure = e;
+                Files.deleteIfExists(target);
+            }
+        }
+        throw new IOException("ffmpeg_download_failed: every source failed ("
+                + String.join(", ", candidates) + ")"
+                + (failure == null ? "" : ": " + failure.getMessage()), failure);
+    }
+
+    private void download(String url, Path target, Progress progress)
             throws IOException, InterruptedException {
-        URI uri = URI.create(entry.url());
+        URI uri = URI.create(url);
         HttpClient client = HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .connectTimeout(Duration.ofSeconds(20))

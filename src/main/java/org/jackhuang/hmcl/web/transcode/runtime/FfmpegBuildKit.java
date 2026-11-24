@@ -79,6 +79,14 @@ import java.util.stream.Stream;
 public final class FfmpegBuildKit {
 
     private static final Logger LOG = Logger.LOG;
+    /// A deployment mirror prefix for source archives; empty for the official
+    /// URL only. A supplier so a settings change applies without a restart.
+    private volatile java.util.function.Supplier<String> sourceMirror = () -> "";
+
+    public void setSourceMirror(java.util.function.Supplier<String> mirror) {
+        this.sourceMirror = mirror == null ? () -> "" : mirror;
+    }
+
     private static final long DEFAULT_MINIMUM_FREE_BYTES = 3L * 1024 * 1024 * 1024;
     public static final String SUPPORTED_RECIPE = "gpl-static-v1";
 
@@ -160,14 +168,40 @@ public final class FfmpegBuildKit {
         Path archive = toolsDir.resolve(".download-build-" + safe(buildId)
                 + suffix(entry.archive()));
         try {
-            FfmpegDownload.download(entry.url(), archive, Duration.ofMinutes(10),
-                    (message, fraction) -> progress.stage(message, 0.10 + fraction * 0.10),
-                    cancelled);
+            java.util.List<String> candidates = FfmpegDownload.candidates(
+                    sourceMirror.get(), entry.url(), entry.mirrors());
+            String used = downloadFirst(candidates, archive, cancelled, progress);
+            LOG.info("ffmpeg source: " + entry.id() + " downloaded from " + used);
             return buildFromArchive(archive, entry, versionDir, toolchain, buildId,
                     requestedFeatures, progress, cancelled);
         } finally {
             Files.deleteIfExists(archive);
         }
+    }
+
+    /// Tries each candidate until one delivers; the archive is deleted between
+    /// attempts so a partial file cannot be mistaken for a complete one.
+    private static String downloadFirst(java.util.List<String> candidates, Path archive,
+                                        BooleanSupplier cancelled,
+                                        FfmpegRuntimeManager.Progress progress)
+            throws IOException {
+        IOException failure = null;
+        for (String candidate : candidates) {
+            progress.stage("downloading " + candidate, 0.10);
+            try {
+                FfmpegDownload.download(candidate, archive, Duration.ofMinutes(10),
+                        (message, fraction) -> progress.stage(message, 0.10 + fraction * 0.10),
+                        cancelled);
+                return candidate;
+            } catch (IOException e) {
+                LOG.info("ffmpeg source download from " + candidate + " failed: " + e.getMessage());
+                failure = e;
+                Files.deleteIfExists(archive);
+            }
+        }
+        throw new IOException("ffmpeg_download_failed: every source failed ("
+                + String.join(", ", candidates) + ")"
+                + (failure == null ? "" : ": " + failure.getMessage()), failure);
     }
 
     /// The orchestration below the download. Package-visible so tests can drive a

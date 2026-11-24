@@ -1301,7 +1301,12 @@ export const api = {
     qualityCancel: (id: string) =>
       request<TranscodeQualityJob>(`/api/transcode/tools/quality/${encodeURIComponent(id)}/cancel`,
         jsonInit("POST", {})),
-    updateSettings: (body: { failurePolicy: string; failureTimeoutMinutes?: number }) =>
+    updateSettings: (body: {
+      failurePolicy: string;
+      failureTimeoutMinutes?: number;
+      binaryMirror?: string;
+      sourceMirror?: string;
+    }) =>
       request<TranscodeFeature>("/api/transcode/settings", jsonInit("PUT", body)),
     runtimeInstall: (body: { kind: "static" | "package" | "compile"; url?: string; sha256?: string; version?: string }) =>
       request<TranscodeInstallJob>("/api/transcode/runtime/install", jsonInit("POST", body)),
@@ -1488,6 +1493,10 @@ export interface TranscodeFeature {
   maxQueue: number;
   failurePolicy: "ask" | "timeout-auto" | "full-auto";
   failureTimeoutMinutes: number;
+  /// 二进制下载的镜像前缀（官方绝对 URL 直接接在后面）；空串=只用官方地址
+  binaryMirror: string;
+  /// 源码归档的镜像前缀；空串=只用官方地址
+  sourceMirror: string;
   autoResume: boolean;
   consent?: TranscodeConsentInfo;
 }

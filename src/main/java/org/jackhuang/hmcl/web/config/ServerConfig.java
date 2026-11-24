@@ -310,6 +310,17 @@ public final class ServerConfig {
         /// means resolve from `PATH` and then from `<data>/transcode/tools/ffmpeg`.
         public volatile String ffmpegPath = "";
 
+        /// A mirror prefix for ffmpeg binary downloads
+        /// (`transcode.binary_mirror`, `HDSL_FFMPEG_BINARY_MIRROR`). Empty uses
+        /// the pinned URL only. The prefix is concatenated with the absolute
+        /// official URL (`https://gh-proxy.com/` + `https://github.com/…`);
+        /// the SHA-256 pin never changes with the source.
+        public volatile String binaryMirror = "";
+
+        /// The same for ffmpeg source archives (`transcode.source_mirror`,
+        /// `HDSL_FFMPEG_SOURCE_MIRROR`).
+        public volatile String sourceMirror = "";
+
         /// Optional local ffmpeg catalogue (`transcode.ffmpeg_catalog`,
         /// `HDSL_FFMPEG_CATALOG`). Empty means the built-in jar resource; a
         /// path is read as-is and may add or override entries. Remote URLs are

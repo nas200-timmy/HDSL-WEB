@@ -75,6 +75,8 @@ public final class ServerConfigLoader {
     public static final String ENV_MEDIA_ROOT = "HDSL_MEDIA_ROOT";
     public static final String ENV_FFMPEG_PATH = "HDSL_FFMPEG_PATH";
     public static final String ENV_FFMPEG_CATALOG = "HDSL_FFMPEG_CATALOG";
+    public static final String ENV_FFMPEG_BINARY_MIRROR = "HDSL_FFMPEG_BINARY_MIRROR";
+    public static final String ENV_FFMPEG_SOURCE_MIRROR = "HDSL_FFMPEG_SOURCE_MIRROR";
     public static final String ENV_TRANSCODE_MAX_CONCURRENT = "HDSL_TRANSCODE_MAX_CONCURRENT";
     public static final String ENV_TRANSCODE_MAX_QUEUE = "HDSL_TRANSCODE_MAX_QUEUE";
     public static final String ENV_TRANSCODE_FAILURE_POLICY = "HDSL_TRANSCODE_FAILURE_POLICY";
@@ -383,6 +385,14 @@ public final class ServerConfigLoader {
         if (section.containsKey("ffmpeg_path")) {
             target.ffmpegPath = stringField(section, "ffmpeg_path");
         }
+        if (section.containsKey("binary_mirror")) {
+            target.binaryMirror = mirrorPrefix(stringField(section, "binary_mirror"),
+                    "transcode.binary_mirror");
+        }
+        if (section.containsKey("source_mirror")) {
+            target.sourceMirror = mirrorPrefix(stringField(section, "source_mirror"),
+                    "transcode.source_mirror");
+        }
         if (section.containsKey("ffmpeg_catalog")) {
             target.ffmpegCatalog = stringField(section, "ffmpeg_catalog");
         }
@@ -610,6 +620,14 @@ public final class ServerConfigLoader {
         if (env.containsKey(ENV_FFMPEG_CATALOG)) {
             config.transcode.ffmpegCatalog = env.get(ENV_FFMPEG_CATALOG);
         }
+        if (env.containsKey(ENV_FFMPEG_BINARY_MIRROR)) {
+            config.transcode.binaryMirror = mirrorPrefix(env.get(ENV_FFMPEG_BINARY_MIRROR),
+                    ENV_FFMPEG_BINARY_MIRROR);
+        }
+        if (env.containsKey(ENV_FFMPEG_SOURCE_MIRROR)) {
+            config.transcode.sourceMirror = mirrorPrefix(env.get(ENV_FFMPEG_SOURCE_MIRROR),
+                    ENV_FFMPEG_SOURCE_MIRROR);
+        }
         if (env.containsKey(ENV_TRANSCODE_MAX_CONCURRENT)) {
             config.transcode.maxConcurrent = parseInt(env.get(ENV_TRANSCODE_MAX_CONCURRENT),
                     ENV_TRANSCODE_MAX_CONCURRENT);
@@ -829,6 +847,37 @@ public final class ServerConfigLoader {
     }
 
     // ------------------------------------------------------------ yaml fields --
+
+    /// Normalizes a mirror prefix: https, a host, no credentials or query, and a
+    /// trailing slash so the absolute official URL can simply be appended.
+    ///
+    /// @param value what the operator wrote
+    /// @param name  the key, for the error message
+    /// @return the prefix, or `""` when empty
+    /// @throws ConfigException when the value cannot be a prefix
+    public static String mirrorPrefix(@Nullable String value, String name) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        String text = value.trim();
+        URI uri;
+        try {
+            uri = URI.create(text);
+        } catch (RuntimeException e) {
+            throw new ConfigException(name + " is not a URL: " + text);
+        }
+        if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null
+                || uri.getHost().isBlank()) {
+            throw new ConfigException(name + " must be an https URL with a host: " + text);
+        }
+        if (uri.getUserInfo() != null) {
+            throw new ConfigException(name + " must not carry credentials");
+        }
+        if (uri.getQuery() != null || uri.getFragment() != null) {
+            throw new ConfigException(name + " must not carry a query or fragment");
+        }
+        return text.endsWith("/") ? text : text + "/";
+    }
 
     private static String stringField(Map<String, Object> map, String key) {
         Object value = map.get(key);

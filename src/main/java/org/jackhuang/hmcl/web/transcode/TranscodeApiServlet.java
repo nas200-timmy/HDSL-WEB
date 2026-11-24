@@ -28,6 +28,7 @@ import org.jackhuang.hmcl.web.audit.AuditLog;
 import org.jackhuang.hmcl.web.auth.AuthFilter;
 import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.config.ServerConfig;
+import org.jackhuang.hmcl.web.config.ServerConfigLoader;
 import org.jackhuang.hmcl.web.config.ServerConfigWriter;
 import org.jackhuang.hmcl.web.developer.DeveloperAuth;
 import org.jackhuang.hmcl.web.developer.DeveloperElevation;
@@ -250,7 +251,25 @@ public final class TranscodeApiServlet extends HttpServlet {
                     "failureTimeoutMinutes must be between 1 and 1440");
             return;
         }
+        String binaryMirror = config.transcode.binaryMirror;
+        String sourceMirror = config.transcode.sourceMirror;
         try {
+            if (body.has("binaryMirror")) {
+                binaryMirror = ServerConfigLoader.mirrorPrefix(stringField(body, "binaryMirror"),
+                        "binaryMirror");
+            }
+            if (body.has("sourceMirror")) {
+                sourceMirror = ServerConfigLoader.mirrorPrefix(stringField(body, "sourceMirror"),
+                        "sourceMirror");
+            }
+        } catch (ServerConfigLoader.ConfigException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+            return;
+        }
+        try {
+            ServerConfigWriter.setTranscodeSources(config.dataDir, binaryMirror, sourceMirror);
+            config.transcode.binaryMirror = binaryMirror;
+            config.transcode.sourceMirror = sourceMirror;
             ServerConfigWriter.setTranscodeFailurePolicy(config.dataDir, policy,
                     body.has("failureTimeoutMinutes") ? timeout : config.transcode.failureTimeoutMinutes);
             config.transcode.failurePolicy = policy;
@@ -343,6 +362,8 @@ public final class TranscodeApiServlet extends HttpServlet {
         body.addProperty("maxQueue", config.transcode.maxQueue);
         body.addProperty("failurePolicy", config.transcode.failurePolicy);
         body.addProperty("failureTimeoutMinutes", config.transcode.failureTimeoutMinutes);
+        body.addProperty("binaryMirror", config.transcode.binaryMirror);
+        body.addProperty("sourceMirror", config.transcode.sourceMirror);
         body.addProperty("autoResume", config.transcode.autoResume);
         feature.consent().ifPresent(record -> {
             JsonObject consent = new JsonObject();

@@ -32,6 +32,8 @@ import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.HexFormat;
 import java.util.concurrent.CancellationException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.function.BooleanSupplier;
 
 /// One pinned HTTPS download, shared by the source build and the portable
@@ -45,6 +47,31 @@ import java.util.function.BooleanSupplier;
 final class FfmpegDownload {
 
     private FfmpegDownload() {
+    }
+
+    /// The URLs to try for one artifact, in order: a deployment mirror prefix,
+    /// the catalogue's own mirrors, then the pinned official URL.
+    ///
+    /// A prefix is concatenated with the absolute official URL
+    /// (`https://gh-proxy.com/` + `https://github.com/...`), which is the shape
+    /// most GitHub proxies use. The digest never changes with the source: a
+    /// mirror that serves different bytes fails verification like any other.
+    ///
+    /// @param prefix   the configured prefix, empty for none
+    /// @param official the pinned URL
+    /// @param mirrors  the catalogue's alternates, possibly empty
+    /// @return the candidates, first choice first, without duplicates
+    static List<String> candidates(String prefix, String official, List<String> mirrors) {
+        List<String> urls = new ArrayList<>();
+        String base = prefix == null ? "" : prefix.trim();
+        if (!base.isEmpty()) {
+            urls.add(base + official);
+        }
+        if (mirrors != null) {
+            urls.addAll(mirrors);
+        }
+        urls.add(official);
+        return urls.stream().distinct().toList();
     }
 
     static void download(String url, Path target, Duration timeout,
