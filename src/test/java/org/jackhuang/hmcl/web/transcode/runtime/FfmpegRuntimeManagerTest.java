@@ -98,6 +98,33 @@ class FfmpegRuntimeManagerTest {
         assertFalse(Files.exists(tools.resolve("bad")));
     }
 
+    @Test
+    void sourceEntriesAreNotInstallable() {
+        FfmpegCatalog.Entry source = FfmpegCatalog.parse("""
+                {
+                  "schema": 1,
+                  "entries": [
+                    {
+                      "id": "linux-source-7.1",
+                      "os": "linux",
+                      "arch": "x64",
+                      "libc": "glibc",
+                      "kind": "source",
+                      "ffmpegVersion": "7.1.5",
+                      "license": "GPL-3.0",
+                      "features": ["libx264"]
+                    }
+                  ]
+                }
+                """, "test").entries().get(0);
+        Path tools = temp.resolve("ffmpeg-source");
+        FfmpegRuntimeManager manager = new FfmpegRuntimeManager(tools, FfmpegCatalog.Catalog.empty());
+        IOException error = assertThrows(IOException.class, () -> manager.installArchive(
+                temp.resolve("no-such-archive.tar.xz"), source, (message, fraction) -> {
+                }));
+        assertTrue(error.getMessage().contains("ffmpeg_source_unsupported"), error.getMessage());
+    }
+
     private Path zipWithFakeFfmpeg() throws Exception {
         Path archive = temp.resolve("ffmpeg.zip");
         Files.createDirectories(temp.resolve("scripts"));

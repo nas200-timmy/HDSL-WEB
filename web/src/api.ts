@@ -1301,11 +1301,13 @@ export const api = {
       request<TranscodeFeature>("/api/transcode/settings", jsonInit("PUT", body)),
     runtimeInstall: (body: { kind: "static" | "package" | "compile"; url?: string; sha256?: string; version?: string }) =>
       request<TranscodeInstallJob>("/api/transcode/runtime/install", jsonInit("POST", body)),
-    runtime: () => request<TranscodeRuntime>("/api/transcode/runtime"),
+    runtime: (major?: string) => request<TranscodeRuntime>(
+      `/api/transcode/runtime${major ? `?major=${encodeURIComponent(major)}` : ""}`),
     runtimeCatalog: () => request<{ entries: TranscodeCatalogEntry[] }>("/api/transcode/runtime/catalog"),
     runtimeInstallArtifact: (body: {
       mode: "auto" | "artifact" | "custom" | "package" | "source";
       id?: string;
+      major?: string;
       features?: string[];
       url?: string;
       sha256?: string;
@@ -1751,6 +1753,7 @@ export interface TranscodeRuntimeVersion {
   id: string;
   version: string;
   catalogId: string;
+  major: string;
   source: string;
   license: string;
   sha256: string;
@@ -1775,11 +1778,20 @@ export interface TranscodeCatalogEntry {
   size: number;
   archive: string;
   notes: string;
+  kind: "binary" | "source";
+  vendor: string;
+  major: string;
+  variant: string;
+  minGlibc: string;
+  mirrors: string[];
+  signatureUrl: string;
+  buildRecipe: string;
   features: string[];
 }
 
 export interface TranscodeRuntime {
-  host: { os: string; arch: string; libc: string };
+  host: { os: string; arch: string; libc: string; libcVersion: string };
+  majors: string[];
   current: TranscodeRuntimeVersion | null;
   installed: TranscodeRuntimeVersion[];
   catalog: TranscodeCatalogEntry[];

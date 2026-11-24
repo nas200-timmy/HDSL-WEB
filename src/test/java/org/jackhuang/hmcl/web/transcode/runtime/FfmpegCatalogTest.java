@@ -74,6 +74,142 @@ class FfmpegCatalogTest {
         FfmpegCatalog.Catalog catalog = FfmpegCatalog.load(null);
         assertFalse(catalog.entries().isEmpty());
         assertNotNull(catalog.find("linux-x64-glibc-gpl-btbn-8.1.3-2026-10"));
+        assertEquals(List.of("7.1", "8.1"), catalog.majors());
+        assertEquals(6, catalog.entries().size());
+    }
+
+    @Test
+    void builtinCatalogueDescribesEachPlatformHonestly() {
+        FfmpegCatalog.Catalog catalog = FfmpegCatalog.load(null);
+        FfmpegCatalog.Entry linuxX64 = catalog.find("linux-x64-glibc-gpl-btbn-8.1.3-2026-10");
+        FfmpegCatalog.Entry linuxArm64 = catalog.find("linux-arm64-glibc-gpl-btbn-8.1.3-2026-10");
+        FfmpegCatalog.Entry windowsX64 = catalog.find("windows-x64-gpl-btbn-8.1.3-2026-10");
+        assertNotNull(linuxX64);
+        assertNotNull(linuxArm64);
+        assertNotNull(windowsX64);
+
+        assertEquals("2.28", linuxX64.minGlibc());
+        assertEquals("2.28", linuxArm64.minGlibc());
+        assertEquals("", windowsX64.minGlibc());
+        assertEquals("btbn", linuxX64.vendor());
+        assertEquals("gpl", linuxX64.variant());
+        assertEquals("binary", linuxX64.kind());
+
+        assertTrue(linuxX64.features().containsAll(List.of("vaapi", "qsv", "nvenc")));
+        assertFalse(linuxArm64.features().contains("vaapi"));
+        assertFalse(linuxArm64.features().contains("qsv"));
+        assertTrue(linuxArm64.features().contains("nvenc"));
+        assertTrue(windowsX64.features().containsAll(List.of("qsv", "nvenc", "amf")));
+    }
+
+    @Test
+    void parsesV2FieldsAndInfersMajor() {
+        String json = """
+                {
+                  "schema": 1,
+                  "entries": [
+                    {
+                      "id": "linux-x64-v2",
+                      "os": "linux",
+                      "arch": "x64",
+                      "libc": "glibc",
+                      "ffmpegVersion": "8.1.3-27-g8dca1586f4",
+                      "license": "GPL-3.0",
+                      "kind": "binary",
+                      "vendor": "btbn",
+                      "variant": "gpl",
+                      "minGlibc": "2.28",
+                      "mirrors": ["https://mirror.example/ffmpeg.tar.xz"],
+                      "signatureUrl": "https://example.com/ffmpeg.sig",
+                      "buildRecipe": "",
+                      "features": ["libx264"],
+                      "url": "https://example.com/ffmpeg.tar.xz",
+                      "sha256": "%s",
+                      "size": 123,
+                      "archive": "tar.xz"
+                    }
+                  ]
+                }
+                """.formatted("a".repeat(64));
+        FfmpegCatalog.Entry entry = FfmpegCatalog.parse(json, "test").entries().get(0);
+        assertEquals("binary", entry.kind());
+        assertEquals("btbn", entry.vendor());
+        assertEquals("8.1", entry.major());
+        assertEquals("gpl", entry.variant());
+        assertEquals("2.28", entry.minGlibc());
+        assertEquals(List.of("https://mirror.example/ffmpeg.tar.xz"), entry.mirrors());
+        assertEquals("https://example.com/ffmpeg.sig", entry.signatureUrl());
+        assertEquals("", entry.buildRecipe());
+    }
+
+    @Test
+    void sourceEntriesParseWithoutArtifactFields() {
+        String json = """
+                {
+                  "schema": 1,
+                  "entries": [
+                    {
+                      "id": "linux-source-7.1",
+                      "os": "linux",
+                      "arch": "x64",
+                      "libc": "glibc",
+                      "kind": "source",
+                      "ffmpegVersion": "7.1.5",
+                      "license": "GPL-3.0",
+                      "vendor": "self",
+                      "variant": "gpl",
+                      "features": ["libx264", "libvmaf"],
+                      "buildRecipe": "configure:--disable-shared --enable-static"
+                    }
+                  ]
+                }
+                """;
+        FfmpegCatalog.Entry entry = FfmpegCatalog.parse(json, "test").entries().get(0);
+        assertEquals("source", entry.kind());
+        assertEquals("7.1", entry.major());
+        assertEquals("", entry.url());
+        assertEquals("", entry.sha256());
+        assertEquals("", entry.archive());
+        assertEquals("configure:--disable-shared --enable-static", entry.buildRecipe());
+        assertFalse(entry.isBinary());
+    }
+
+    @Test
+    void legacyEntriesKeepV2Defaults() {
+        FfmpegCatalog.Entry entry = FfmpegCatalog.parse(
+                "{\"schema\":1,\"entries\":[" + entry("legacy", "glibc", "7.1.5") + "]}",
+                "test").entries().get(0);
+        assertEquals("binary", entry.kind());
+        assertEquals("", entry.vendor());
+        assertEquals("7.1", entry.major());
+        assertEquals("", entry.variant());
+        assertEquals("", entry.minGlibc());
+        assertEquals(List.of(), entry.mirrors());
+        assertEquals("", entry.signatureUrl());
+        assertEquals("", entry.buildRecipe());
+        assertTrue(entry.isBinary());
+    }
+
+    @Test
+    void rejectsUnknownKind() {
+        String json = """
+                {
+                  "schema": 1,
+                  "entries": [
+                    {
+                      "id": "bad-kind",
+                      "os": "linux",
+                      "arch": "x64",
+                      "libc": "glibc",
+                      "kind": "script",
+                      "ffmpegVersion": "7.1.5",
+                      "url": "https://example.com/ffmpeg.zip",
+                      "sha256": "%s"
+                    }
+                  ]
+                }
+                """.formatted("a".repeat(64));
+        assertTrue(FfmpegCatalog.parse(json, "test").entries().isEmpty());
     }
 
     @Test

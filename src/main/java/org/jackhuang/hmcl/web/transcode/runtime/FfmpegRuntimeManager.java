@@ -82,6 +82,7 @@ public final class FfmpegRuntimeManager {
         public String id = "";
         public String version = "";
         public String catalogId = "";
+        public String major = "";
         public String source = "";
         public String license = "";
         public String sha256 = "";
@@ -169,6 +170,9 @@ public final class FfmpegRuntimeManager {
     /// Downloads and installs one catalogue entry, then activates it.
     public Installed install(FfmpegCatalog.Entry entry, Progress progress) throws IOException {
         synchronized (lock) {
+            if (!entry.isBinary()) {
+                throw new IOException("ffmpeg_source_unsupported: source builds are not part of this stage");
+            }
             if (entry.url() == null || entry.url().isBlank()) {
                 throw new IOException("ffmpeg_artifact_invalid: the entry has no URL");
             }
@@ -212,6 +216,9 @@ public final class FfmpegRuntimeManager {
     /// the only production caller.
     Installed installArchive(Path archive, FfmpegCatalog.Entry entry, Progress progress) throws IOException {
         synchronized (lock) {
+            if (!entry.isBinary()) {
+                throw new IOException("ffmpeg_source_unsupported: source builds are not part of this stage");
+            }
             if (entry.sha256() == null || !entry.sha256().matches("[0-9a-fA-F]{64}")) {
                 throw new IOException("ffmpeg_artifact_invalid: the entry has no pinned SHA-256");
             }
@@ -262,6 +269,7 @@ public final class FfmpegRuntimeManager {
                 record.id = id;
                 record.version = entry.ffmpegVersion();
                 record.catalogId = entry.id();
+                record.major = entry.major();
                 record.source = entry.id().startsWith("custom-") ? "custom" : "catalog";
                 record.license = entry.license();
                 record.sha256 = entry.sha256().toLowerCase(Locale.ROOT);
@@ -546,6 +554,9 @@ public final class FfmpegRuntimeManager {
             }
             if (record.featuresProbed == null) {
                 record.featuresProbed = List.of();
+            }
+            if (record.major == null) {
+                record.major = "";
             }
             return record;
         } catch (IOException | RuntimeException e) {

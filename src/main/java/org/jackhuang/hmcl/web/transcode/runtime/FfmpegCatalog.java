@@ -22,6 +22,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.jackhuang.hmcl.util.logging.Logger;
+import org.jackhuang.hmcl.util.versioning.VersionNumber;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -32,10 +33,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /// The pinned ffmpeg artifact catalogue.
 ///
@@ -62,6 +66,13 @@ public final class FfmpegCatalog {
     /// `features` is a **declaration**: it says what the build is expected to
     /// contain, not what the panel observed. The installation probe is what
     /// turns a declaration into `featuresProbed`.
+    ///
+    /// The second half of the record is the v2 shape: a version line (`7.1`,
+    /// `8.1`), the build vendor/variant, the minimum glibc, mirrors and the
+    /// source-build recipe. They have defaults so a v1 catalogue keeps loading:
+    /// `kind` defaults to `binary`, `vendor`/`variant`/`minGlibc` to empty,
+    /// `mirrors` to an empty list, and `major` is inferred from `ffmpegVersion`
+    /// (`8.1.3-27-…` → `8.1`).
     public record Entry(
             String id,
             String os,
@@ -74,10 +85,45 @@ public final class FfmpegCatalog {
             String sha256,
             long size,
             String archive,
-            String notes) {
+            String notes,
+            String kind,
+            String vendor,
+            String major,
+            String variant,
+            String minGlibc,
+            List<String> mirrors,
+            String signatureUrl,
+            String buildRecipe) {
 
         public Entry {
-            features = List.copyOf(features);
+            features = features == null ? List.of() : List.copyOf(features);
+            kind = blankTo(kind, "binary").toLowerCase(Locale.ROOT);
+            if (!"binary".equals(kind) && !"source".equals(kind)) {
+                throw new IllegalArgumentException("kind must be binary or source");
+            }
+            vendor = nullToEmpty(vendor);
+            major = nullToEmpty(major);
+            if (major.isEmpty()) {
+                major = inferMajor(ffmpegVersion);
+            }
+            variant = nullToEmpty(variant);
+            minGlibc = nullToEmpty(minGlibc);
+            mirrors = mirrors == null ? List.of() : List.copyOf(mirrors);
+            signatureUrl = nullToEmpty(signatureUrl);
+            buildRecipe = nullToEmpty(buildRecipe);
+        }
+
+        /// The pre-v2 constructor. It keeps direct callers and the old tests
+        /// source-compatible while filling the new fields with their defaults.
+        public Entry(String id, String os, String arch, String libc, String ffmpegVersion,
+                     String license, List<String> features, String url, String sha256, long size,
+                     String archive, String notes) {
+            this(id, os, arch, libc, ffmpegVersion, license, features, url, sha256, size,
+                    archive, notes, "binary", "", "", "", "", List.of(), "", "");
+        }
+
+        public boolean isBinary() {
+            return "binary".equals(kind);
         }
 
         /// Whether this entry can run on the host. `any` in the catalogue is a
@@ -106,6 +152,23 @@ public final class FfmpegCatalog {
                     "custom", List.of(), url, sha256, 0,
                     archiveFrom(url), "operator-supplied");
         }
+
+        /// `8.1.3-27-g8dca1586f4` → `8.1`, `n7.1.5` → `7.1`.
+        public static String inferMajor(@Nullable String ffmpegVersion) {
+            if (ffmpegVersion == null) {
+                return "";
+            }
+            Matcher matcher = Pattern.compile("^\\D*(\\d+)\\.(\\d+)").matcher(ffmpegVersion.trim());
+            return matcher.find() ? matcher.group(1) + "." + matcher.group(2) : "";
+        }
+
+        private static String nullToEmpty(@Nullable String value) {
+            return value == null ? "" : value.trim();
+        }
+
+        private static String blankTo(@Nullable String value, String fallback) {
+            return value == null || value.isBlank() ? fallback : value.trim();
+        }
     }
 
     public record Catalog(int schema, String updatedAt, List<Entry> entries) {
@@ -120,6 +183,19 @@ public final class FfmpegCatalog {
                 }
             }
             return null;
+        }
+
+        /// Distinct version lines present in the catalogue, oldest first.
+        public List<String> majors() {
+            List<String> majors = new ArrayList<>();
+            for (Entry entry : entries) {
+                String major = entry.major();
+                if (!major.isBlank() && !majors.contains(major)) {
+                    majors.add(major);
+                }
+            }
+            majors.sort(Comparator.comparing(VersionNumber::asVersion));
+            return List.copyOf(majors);
         }
 
         public static Catalog empty() {
@@ -209,22 +285,53 @@ public final class FfmpegCatalog {
         if (license.isEmpty()) {
             license = "unknown";
         }
-        String url = required(object, "url");
-        validateUrl(url);
-        String sha256 = required(object, "sha256");
-        if (!sha256.matches("[0-9a-fA-F]{64}")) {
-            throw new IllegalArgumentException("sha256 for '" + id + "' must be 64 hex digits");
+        String kind = string(object, "kind").toLowerCase(Locale.ROOT);
+        if (kind.isEmpty()) {
+            kind = "binary";
         }
+        if (!"binary".equals(kind) && !"source".equals(kind)) {
+            throw new IllegalArgumentException("kind must be binary or source for '" + id + "'");
+        }
+
+        String url = string(object, "url");
+        String sha256 = string(object, "sha256");
         long size = object.has("size") && object.get("size").isJsonPrimitive()
                 ? object.get("size").getAsLong() : 0;
-        String archive = string(object, "archive");
-        if (archive.isEmpty()) {
-            archive = archiveFrom(url);
+        String archive = string(object, "archive").toLowerCase(Locale.ROOT);
+
+        if ("binary".equals(kind)) {
+            if (url.isEmpty()) {
+                throw new IllegalArgumentException("missing url for '" + id + "'");
+            }
+            validateUrl(url);
+            if (sha256.isEmpty()) {
+                throw new IllegalArgumentException("missing sha256 for '" + id + "'");
+            }
+            if (!sha256.matches("[0-9a-fA-F]{64}")) {
+                throw new IllegalArgumentException("sha256 for '" + id + "' must be 64 hex digits");
+            }
+            if (archive.isEmpty()) {
+                archive = archiveFrom(url);
+            }
+            validateArchive(id, archive);
+        } else {
+            // A source entry describes how M2 would build ffmpeg. It is kept in
+            // the same catalogue but has no downloaded artifact yet, so URL,
+            // hash and archive are optional; when present they still validate.
+            if (!url.isEmpty()) {
+                validateUrl(url);
+            }
+            if (!sha256.isEmpty() && !sha256.matches("[0-9a-fA-F]{64}")) {
+                throw new IllegalArgumentException("sha256 for '" + id + "' must be 64 hex digits");
+            }
+            if (archive.isEmpty() && !url.isEmpty()) {
+                archive = archiveFrom(url);
+            }
+            if (!archive.isEmpty()) {
+                validateArchive(id, archive);
+            }
         }
-        archive = archive.toLowerCase(Locale.ROOT);
-        if (!Set.of("zip", "tar", "tar.gz", "tgz", "tar.xz", "txz").contains(archive)) {
-            throw new IllegalArgumentException("unsupported archive '" + archive + "' for '" + id + "'");
-        }
+
         List<String> features = new ArrayList<>();
         if (object.has("features") && object.get("features").isJsonArray()) {
             for (JsonElement feature : object.getAsJsonArray("features")) {
@@ -236,8 +343,32 @@ public final class FfmpegCatalog {
                 }
             }
         }
+        List<String> mirrors = new ArrayList<>();
+        if (object.has("mirrors") && object.get("mirrors").isJsonArray()) {
+            for (JsonElement mirror : object.getAsJsonArray("mirrors")) {
+                if (mirror.isJsonPrimitive()) {
+                    String value = mirror.getAsString().trim();
+                    if (!value.isEmpty()) {
+                        mirrors.add(value);
+                    }
+                }
+            }
+        }
+        String major = string(object, "major");
+        if (major.isEmpty()) {
+            major = Entry.inferMajor(ffmpegVersion);
+        }
         return new Entry(id, os, arch, libc, ffmpegVersion, license, features,
-                url, sha256, size, archive, string(object, "notes"));
+                url, sha256, size, archive, string(object, "notes"),
+                kind, string(object, "vendor"), major, string(object, "variant"),
+                string(object, "minGlibc"), mirrors, string(object, "signatureUrl"),
+                string(object, "buildRecipe"));
+    }
+
+    private static void validateArchive(String id, String archive) {
+        if (!Set.of("zip", "tar", "tar.gz", "tgz", "tar.xz", "txz").contains(archive)) {
+            throw new IllegalArgumentException("unsupported archive '" + archive + "' for '" + id + "'");
+        }
     }
 
     /// Mirrors [FfmpegInstaller#validateUrl] without making the catalogue depend

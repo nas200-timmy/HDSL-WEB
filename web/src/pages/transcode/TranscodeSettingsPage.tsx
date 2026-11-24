@@ -21,6 +21,7 @@ export function TranscodeSettingsPage() {
   const feature = useTranscodeFeature();
   const [capabilities, setCapabilities] = useState<TranscodeCapabilities | null>(null);
   const [runtime, setRuntime] = useState<TranscodeRuntime | null>(null);
+  const [preferredMajor, setPreferredMajor] = useState("auto");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [policy, setPolicy] = useState("ask");
@@ -41,7 +42,7 @@ export function TranscodeSettingsPage() {
     try {
       const [nextCapabilities, nextRuntime] = await Promise.all([
         api.transcode.capabilities(),
-        api.transcode.runtime(),
+        api.transcode.runtime(preferredMajor),
       ]);
       setCapabilities(nextCapabilities);
       setRuntime(nextRuntime);
@@ -55,7 +56,7 @@ export function TranscodeSettingsPage() {
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [preferredMajor]);
 
   useEffect(() => {
     if (!feature) return;
@@ -87,7 +88,7 @@ export function TranscodeSettingsPage() {
     }
   };
 
-  const startRuntimeInstall = async (body: { mode: "auto" | "artifact"; id?: string }) => {
+  const startRuntimeInstall = async (body: { mode: "auto" | "artifact"; id?: string; major?: string }) => {
     try {
       setInstallJob(await api.transcode.runtimeInstallArtifact(body));
     } catch (e) {
@@ -176,6 +177,22 @@ export function TranscodeSettingsPage() {
             <span className="comp-label">宿主</span>
             <span className="comp-value mono" style={{ fontSize: 12 }}>
               {runtime.host.os}/{runtime.host.arch}/{runtime.host.libc}
+              {runtime.host.libcVersion ? ` ${runtime.host.libcVersion}` : ""}
+            </span>
+          </div>
+        )}
+        {runtime && (
+          <div className="comp-row">
+            <span className="comp-label">ffmpeg 版本线</span>
+            <span className="comp-value">
+              <select className="input" style={{ width: "auto", minWidth: 180 }}
+                      value={preferredMajor}
+                      onChange={(e) => setPreferredMajor(e.target.value)}>
+                <option value="auto">自动（优先最高可用版本线）</option>
+                {runtime.majors.map((major) => (
+                  <option key={major} value={major}>{major}</option>
+                ))}
+              </select>
             </span>
           </div>
         )}
@@ -183,7 +200,8 @@ export function TranscodeSettingsPage() {
           <div className="comp-row">
             <span className="comp-label">当前</span>
             <span className="comp-value" style={{ fontSize: 12 }}>
-              {runtime.current.id} · {runtime.current.source} · {runtime.current.license}
+              {runtime.current.id}
+              {runtime.current.major ? ` · ${runtime.current.major}` : ""} · {runtime.current.source} · {runtime.current.license}
               {runtime.current.featuresProbed.length > 0
                 ? ` · ${runtime.current.featuresProbed.slice(0, 6).join(" / ")}`
                 : " · 未探测到声明特性"}
@@ -194,18 +212,20 @@ export function TranscodeSettingsPage() {
           <div style={{ display: "flex", gap: 8, padding: "8px", flexWrap: "wrap", alignItems: "center" }}>
             <button className="btn btn-raised"
                     disabled={installJob?.state === "running"}
-                    onClick={() => void startRuntimeInstall({ mode: "auto" })}>
+                    onClick={() => void startRuntimeInstall({ mode: "auto", major: preferredMajor })}>
               安装推荐版本
             </button>
             <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+              {runtime.recommended.entry.major ? `${runtime.recommended.entry.major} · ` : ""}
               {runtime.recommended.entry.ffmpegVersion} · {runtime.recommended.reason}
             </span>
           </div>
         )}
         {runtime && !runtime.recommended && (
           <p style={{ margin: 0, padding: "0 8px 8px", fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-            内置目录还没有匹配当前平台的条目。
-            {runtime.recommendationError ? `（${runtime.recommendationError}）` : ""}
+            {runtime.recommendationError
+              ? `没有可安装的推荐版本：${runtime.recommendationError}`
+              : "内置目录还没有匹配当前平台的条目。"}
             可以用 `transcode.ffmpeg_catalog` 指向一份已验证的本地目录，或在下面用自定义 URL。
           </p>
         )}
@@ -217,7 +237,7 @@ export function TranscodeSettingsPage() {
                             padding: "6px 0", borderTop: "1px solid var(--monet-outline-variant)" }}>
                 <span className="mono" style={{ fontSize: 12, minWidth: 120 }}>{item.id}</span>
                 <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-                  {item.version} · {item.license} · {item.featuresProbed.length}/{item.featuresDeclared.length} 特性
+                  {item.major ? `${item.major} · ` : ""}{item.version} · {item.license} · {item.featuresProbed.length}/{item.featuresDeclared.length} 特性
                 </span>
                 {item.current
                   ? <span className="tag running">当前</span>
@@ -243,12 +263,14 @@ export function TranscodeSettingsPage() {
                    style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                 <span className="mono" style={{ fontSize: 12, minWidth: 160 }}>{entry.id}</span>
                 <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-                  {entry.ffmpegVersion} · {entry.license} · {entry.os}/{entry.arch}/{entry.libc}
+                  {entry.major ? `${entry.major} · ` : ""}{entry.ffmpegVersion} · {entry.license} · {entry.os}/{entry.arch}/{entry.libc}
                 </span>
-                <button className="btn btn-text" disabled={installJob?.state === "running"}
-                        onClick={() => void startRuntimeInstall({ mode: "artifact", id: entry.id })}>
-                  安装
-                </button>
+                {entry.kind === "source"
+                  ? <span className="tag plain" style={{ fontSize: 11 }}>源码（M2）</span>
+                  : <button className="btn btn-text" disabled={installJob?.state === "running"}
+                            onClick={() => void startRuntimeInstall({ mode: "artifact", id: entry.id })}>
+                      安装
+                    </button>}
               </div>
             ))}
           </div>

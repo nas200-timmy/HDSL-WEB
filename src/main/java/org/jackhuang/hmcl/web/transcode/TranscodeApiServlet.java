@@ -141,7 +141,7 @@ public final class TranscodeApiServlet extends HttpServlet {
             return;
         }
         if ("/runtime".equals(path)) {
-            runtimeJson(response);
+            runtimeJson(response, request.getParameter("major"));
             return;
         }
         if ("/runtime/catalog".equals(path)) {
@@ -760,7 +760,7 @@ public final class TranscodeApiServlet extends HttpServlet {
             String mode = stringField(body, "mode");
             if (mode != null && !mode.isBlank()) {
                 job = switch (mode) {
-                    case "auto" -> module.installer().startAuto(features(body));
+                    case "auto" -> module.installer().startAuto(features(body), stringField(body, "major"));
                     case "artifact" -> module.installer().startArtifact(requiredField(body, "id"));
                     case "custom" -> module.installer().startCustom(
                             requiredField(body, "url"),
@@ -822,6 +822,10 @@ public final class TranscodeApiServlet extends HttpServlet {
     }
 
     private void runtimeJson(HttpServletResponse response) throws IOException {
+        runtimeJson(response, "auto");
+    }
+
+    private void runtimeJson(HttpServletResponse response, @Nullable String preferredMajor) throws IOException {
         FfmpegRuntimeManager manager = module.runtimeManager();
         FfmpegCapabilities.Host host = FfmpegCapabilities.detect();
         JsonObject body = new JsonObject();
@@ -829,6 +833,7 @@ public final class TranscodeApiServlet extends HttpServlet {
         hostJson.addProperty("os", host.os());
         hostJson.addProperty("arch", host.arch());
         hostJson.addProperty("libc", host.libc());
+        hostJson.addProperty("libcVersion", host.libcVersion());
         body.add("host", hostJson);
 
         FfmpegRuntimeManager.Installed current = manager.current();
@@ -845,9 +850,15 @@ public final class TranscodeApiServlet extends HttpServlet {
         }
         body.add("catalog", catalog);
 
+        JsonArray majors = new JsonArray();
+        for (String major : module.catalog().majors()) {
+            majors.add(major);
+        }
+        body.add("majors", majors);
+
         try {
             FfmpegSelector.Recommendation recommendation = FfmpegSelector.select(
-                    module.catalog(), host, Set.of());
+                    module.catalog(), host, Set.of(), preferredMajor);
             JsonObject recommended = new JsonObject();
             recommended.add("entry", entryJson(recommendation.entry()));
             recommended.addProperty("reason", recommendation.reason());
@@ -875,6 +886,7 @@ public final class TranscodeApiServlet extends HttpServlet {
         object.addProperty("id", installed.id());
         object.addProperty("version", record.version);
         object.addProperty("catalogId", record.catalogId);
+        object.addProperty("major", record.major == null ? "" : record.major);
         object.addProperty("source", record.source);
         object.addProperty("license", record.license);
         object.addProperty("sha256", record.sha256);
@@ -901,6 +913,14 @@ public final class TranscodeApiServlet extends HttpServlet {
         object.addProperty("size", entry.size());
         object.addProperty("archive", entry.archive());
         object.addProperty("notes", entry.notes());
+        object.addProperty("kind", entry.kind());
+        object.addProperty("vendor", entry.vendor());
+        object.addProperty("major", entry.major());
+        object.addProperty("variant", entry.variant());
+        object.addProperty("minGlibc", entry.minGlibc());
+        object.addProperty("signatureUrl", entry.signatureUrl());
+        object.addProperty("buildRecipe", entry.buildRecipe());
+        object.add("mirrors", strings(entry.mirrors()));
         object.add("features", strings(entry.features()));
         return object;
     }

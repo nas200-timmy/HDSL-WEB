@@ -109,6 +109,9 @@ public final class FfmpegInstaller {
         if (entry == null) {
             throw new IOException("ffmpeg_no_candidate: unknown catalog id " + id);
         }
+        if (!entry.isBinary()) {
+            throw new IOException("ffmpeg_source_unsupported: source builds are not part of this stage");
+        }
         FfmpegCapabilities.Host host = FfmpegCapabilities.detect();
         if (!entry.matches(host.os(), host.arch(), host.libc())) {
             throw new IOException("ffmpeg_unsupported_platform: " + entry.id()
@@ -120,10 +123,16 @@ public final class FfmpegInstaller {
         return job;
     }
 
-    /// Lets the selector choose an entry for this host.
+    /// Lets the selector choose an entry for this host using `auto`.
     public InstallJob startAuto(Set<String> requiredFeatures) throws IOException {
+        return startAuto(requiredFeatures, "auto");
+    }
+
+    /// Lets the selector choose an entry for this host and version line
+    /// (`auto`, `7.1`, `8.1`). An explicit line is never silently replaced.
+    public InstallJob startAuto(Set<String> requiredFeatures, @Nullable String major) throws IOException {
         FfmpegSelector.Recommendation recommendation = FfmpegSelector.select(
-                module.catalog(), FfmpegCapabilities.detect(), requiredFeatures);
+                module.catalog(), FfmpegCapabilities.detect(), requiredFeatures, major);
         InstallJob job = newJob("auto");
         job.log = "selected " + recommendation.entry().id() + ": " + recommendation.reason() + "\n";
         executor.execute(() -> runArtifact(job, recommendation.entry()));
