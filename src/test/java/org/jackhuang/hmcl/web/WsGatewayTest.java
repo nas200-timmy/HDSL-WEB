@@ -401,6 +401,54 @@ class WsGatewayTest {
         }
     }
 
+    /// Concurrent publishers must not kill a healthy session: EventBus callbacks
+    /// run on the publishing thread, so parallel API calls used to race
+    /// BasicRemote.sendText; the IllegalStateException landed in the catch that
+    /// closes "a browser that left mid-frame" and dropped a live connection
+    /// (2026-11 audit). Sixteen parallel creations must all arrive, and the
+    /// session must still be open afterwards.
+    @Test
+    void concurrentPublishesKeepTheSessionAlive() throws Exception {
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir,
+                Map.of(UserStore.ENV_ADMIN_PASSWORD, PASSWORD),
+                config -> config.bindHost = "127.0.0.1")) {
+            String base = running.baseUrl();
+            String cookie = login(base);
+            TestSession conn = connect(running.port(), cookie);
+
+            int count = 16;
+            List<java.util.concurrent.CompletableFuture<HttpResponse<String>>> futures = new ArrayList<>();
+            for (int i = 0; i < count; i++) {
+                HttpRequest request = HttpRequest.newBuilder(URI.create(base + "/api/instances"))
+                        .header("Cookie", cookie)
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(
+                                "{\"name\":\"ws-conc-" + i + "\",\"version\":\"0.1.7-rc.1\",\"autoInstall\":false}"))
+                        .build();
+                futures.add(TestSupport.client().sendAsync(request, HttpResponse.BodyHandlers.ofString()));
+            }
+            for (var future : futures) {
+                HttpResponse<String> response = future.get(30, TimeUnit.SECONDS);
+                assertEquals(201, response.statusCode(), response.body());
+                created.add(JsonParser.parseString(response.body()).getAsJsonObject()
+                        .getAsJsonObject("instance").get("id").getAsString());
+            }
+
+            long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+            java.util.Set<String> arrived = new java.util.HashSet<>();
+            while (arrived.size() < count && System.nanoTime() < deadline) {
+                JsonObject json = conn.events().poll(200, TimeUnit.MILLISECONDS);
+                if (json != null && "instance-created".equals(json.get("type").getAsString())) {
+                    arrived.add(json.getAsJsonObject("instance").get("id").getAsString());
+                }
+            }
+            assertEquals(count, arrived.size(),
+                    "every concurrent creation must reach the open session");
+            assertTrue(conn.session().isOpen(),
+                    "concurrent publishes must not close a healthy session");
+        }
+    }
+
     @Test
     void acpStartForAnUnknownInstanceAnswersError() throws Exception {
         try (TestSupport.RunningServer running = TestSupport.start(dataDir,

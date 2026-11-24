@@ -296,7 +296,13 @@ public final class WsGateway {
             return;
         }
         try {
-            session.getBasicRemote().sendText(Json.GSON.toJson(payload));
+            // EventBus 在发布线程上同步回调：聊天 turn、转码 worker、任务线程会
+            // 同时打到同一个会话。BasicRemote 禁止并发 send——IllegalStateException
+            // 原先落进下面的 catch，把健康会话当死浏览器关掉（2026-11 审计）。
+            // 与 TerminalWebSocket.data 同一把锁纪律；写失败仍按死消费者处理。
+            synchronized (session) {
+                session.getBasicRemote().sendText(Json.GSON.toJson(payload));
+            }
         } catch (IOException | RuntimeException e) {
             // A browser that left mid-frame; the close handler cleans up.
             try {
