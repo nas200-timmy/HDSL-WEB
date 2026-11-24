@@ -69,10 +69,12 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 ///
 /// [provision] runs during [ZcodeBuilder]'s build, while the unpacked sources
 /// are still on disk. It needs a MinGW-w64 C++ compiler; resolution order is
-/// the `HDSL_ZCODE_MINGW` directory, the panel's toolchain cache
-/// (`<data>/hdsl/toolchains/mingw`), the `PATH`, and — as the bare-deployment
-/// answer — a download of llvm-mingw's latest Windows x86_64 zip (override the
-/// URL with `HDSL_ZCODE_MINGW_URL` for mirrors). The compile itself is the two
+/// the panel's build toolchain (`<data>/toolchains/build/w64devkit-*`, the
+/// w64devkit the build already installed), the `HDSL_ZCODE_MINGW` directory,
+/// the panel's own toolchain cache (`<data>/hdsl/toolchains/mingw`), the
+/// `PATH`, and — as the last resort — a download of llvm-mingw's latest
+/// Windows x86_64 zip (override the URL with `HDSL_ZCODE_MINGW_URL` for
+/// mirrors). The compile itself is the two
 /// `add_executable` lines of upstream's CMakeLists reproduced verbatim
 /// (`-std=c++17 -municode -static`), so no CMake and no upstream patch are
 /// involved. MSVC is deliberately still not an option: unlike that several-GB
@@ -154,6 +156,19 @@ public final class ZcodeWindowsRuntimeHost {
     /// @param zcodeRoot `<data>/zcode`
     /// @param log      the build log
     public static void provision(Path sources, Path zcodeRoot, Consumer<String> log) {
+        provision(sources, zcodeRoot, log, null);
+    }
+
+    /// The same, with the panel's build toolchain named as the first place to
+    /// look for a compiler.
+    ///
+    /// @param sources  the unpacked ZCode source tree
+    /// @param zcodeRoot `<data>/zcode`
+    /// @param log      the build log
+    /// @param buildToolchainBin the `bin/` of the toolchain the build resolved,
+    ///                          or `null`
+    public static void provision(Path sources, Path zcodeRoot, Consumer<String> log,
+                                 @Nullable Path buildToolchainBin) {
         if (OperatingSystem.CURRENT_OS != OperatingSystem.WINDOWS) {
             log.accept("非 Windows 宿主：runtime host 只在 win32 上被使用，跳过制备");
             return;
@@ -168,7 +183,7 @@ public final class ZcodeWindowsRuntimeHost {
             log.accept("该版本源码没有 scripts/windows-runtime-host（上游改过布局或更旧），跳过制备");
             return;
         }
-        Optional<Path> compiler = findCompiler(zcodeRoot, log);
+        Optional<Path> compiler = findCompiler(zcodeRoot, log, buildToolchainBin);
         if (compiler.isEmpty()) {
             log.accept("!! 没有可用的 MinGW C++ 编译器，runtime host 未制备：Windows 上启动 agent 仍会报"
                     + " “Windows runtime host is missing”。可用 " + ENV_TOOLCHAIN
@@ -243,7 +258,14 @@ public final class ZcodeWindowsRuntimeHost {
 
     /// Resolves a MinGW C++ compiler: operator override, panel cache, PATH, then
     /// a download of llvm-mingw into the panel's toolchain cache.
-    private static Optional<Path> findCompiler(Path zcodeRoot, Consumer<String> log) {
+    private static Optional<Path> findCompiler(Path zcodeRoot, Consumer<String> log,
+                                               @Nullable Path buildToolchainBin) {
+        if (buildToolchainBin != null) {
+            Optional<Path> built = findCompilerIn(buildToolchainBin);
+            if (built.isPresent()) {
+                return built;
+            }
+        }
         String override = System.getenv(ENV_TOOLCHAIN);
         if (override != null && !override.isBlank()) {
             Optional<Path> found = findCompilerIn(Path.of(override));

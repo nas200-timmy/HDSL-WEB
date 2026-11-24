@@ -32,7 +32,7 @@ import java.util.function.Predicate;
 
 /// The environment a child process needs when the image is a minimal one.
 ///
-/// Three things a managed bundle provides and an image does not:
+/// Four things a managed bundle provides and an image does not:
 ///
 /// - `PATH` gets the closure's `bin`, where `setpriv` lives;
 /// - `LD_LIBRARY_PATH` gets the closure's `lib`, where `libstdc++`, `libgcc_s`
@@ -42,7 +42,11 @@ import java.util.function.Predicate;
 ///   agents' own TLS stacks at the panel's `cacert.pem`;
 /// - a shared CPython, when [PythonRuntimeManager] has installed one, puts its
 ///   `bin` on `PATH` and names it in `PYTHON` and `npm_config_python`, which is
-///   what node-gyp reads.
+///   what node-gyp reads;
+/// - an installed [BuildToolchainManager] bundle puts its `bin` first and names
+///   `CC`, `CXX`, `MAKE`, `AR`, `LD` and `PKG_CONFIG`, so a terminal, a brand
+///   install and a ZCode build all see the same compiler. A variable the
+///   operator already set to a non-blank value is left alone.
 ///
 /// `SHELL` is only set when a real shell exists. A child that is told
 /// `SHELL=/bin/bash` on an image without bash does not fall back; it fails when
@@ -65,9 +69,13 @@ public final class BootstrapEnvironment {
         Installed runtime = BootstrapRuntimeManager.currentRuntimeClosure();
         BootstrapRuntimeManager.CaInstalled ca = BootstrapRuntimeManager.currentCaBundle();
         PythonRuntimeManager.Installed python = PythonRuntimeManager.currentShared();
+        BuildToolchainManager.Toolchain build = BuildToolchainManager.currentInstalled();
         return additions(runtime == null ? null : runtime.directory(),
                 ca == null ? null : ca.file(),
                 python == null ? null : python.directory(),
+                build == null ? null : build.binDir(),
+                build == null || build.directory() == null ? null : build.directory().resolve("lib"),
+                build == null ? Map.of() : build.environment(),
                 System.getenv(), Files::exists);
     }
 
@@ -81,9 +89,13 @@ public final class BootstrapEnvironment {
         Installed runtime = BootstrapRuntimeManager.currentRuntimeClosure();
         BootstrapRuntimeManager.CaInstalled ca = BootstrapRuntimeManager.currentCaBundle();
         PythonRuntimeManager.Installed python = PythonRuntimeManager.currentShared();
+        BuildToolchainManager.Toolchain build = BuildToolchainManager.currentInstalled();
         environment.putAll(additions(runtime == null ? null : runtime.directory(),
                 ca == null ? null : ca.file(),
                 python == null ? null : python.directory(),
+                build == null ? null : build.binDir(),
+                build == null || build.directory() == null ? null : build.directory().resolve("lib"),
+                build == null ? Map.of() : build.environment(),
                 environment, Files::exists));
     }
 
@@ -105,7 +117,7 @@ public final class BootstrapEnvironment {
     /// @return the variables to add or replace
     static Map<String, String> additions(@Nullable Path runtimeDirectory, @Nullable Path caFile,
                                          Map<String, String> base, Predicate<Path> exists) {
-        return additions(runtimeDirectory, caFile, null, base, exists);
+        return additions(runtimeDirectory, caFile, null, null, null, Map.of(), base, exists);
     }
 
     /// The pure form including the shared Python runtime.
@@ -120,8 +132,40 @@ public final class BootstrapEnvironment {
     static Map<String, String> additions(@Nullable Path runtimeDirectory, @Nullable Path caFile,
                                          @Nullable Path pythonDirectory,
                                          Map<String, String> base, Predicate<Path> exists) {
+        return additions(runtimeDirectory, caFile, pythonDirectory, null, null, Map.of(),
+                base, exists);
+    }
+
+    /// The pure form including the build toolchain, the runtime closure and the
+    /// shared CPython.
+    ///
+    /// @param runtimeDirectory the active runtime closure's version directory,
+    ///                         or `null`
+    /// @param caFile           the active `cacert.pem`, or `null`
+    /// @param pythonDirectory  the active CPython version directory, or `null`
+    /// @param buildBin         the build toolchain's `bin/`, or `null`
+    /// @param buildLib         the build toolchain's `lib/`, or `null`
+    /// @param buildVariables   the build toolchain's `CC`/`CXX`/`MAKE`/… map
+    /// @param base             the environment the additions are computed against
+    /// @param exists           how to ask whether a path exists
+    /// @return the variables to add or replace
+    static Map<String, String> additions(@Nullable Path runtimeDirectory, @Nullable Path caFile,
+                                         @Nullable Path pythonDirectory, @Nullable Path buildBin,
+                                         @Nullable Path buildLib,
+                                         Map<String, String> buildVariables,
+                                         Map<String, String> base, Predicate<Path> exists) {
         Map<String, String> additions = new LinkedHashMap<>();
         List<Path> pathPrefixes = new ArrayList<>();
+        if (buildBin != null && exists.test(buildBin)) {
+            pathPrefixes.add(buildBin);
+        }
+        if (buildLib != null && exists.test(buildLib)) {
+            additions.put("LD_LIBRARY_PATH", prepend(buildLib, base.get("LD_LIBRARY_PATH")));
+        }
+        for (String name : List.of("CC", "CXX", "MAKE", "AR", "LD", "PKG_CONFIG",
+                "ZIG_GLOBAL_CACHE_DIR")) {
+            putIfUnusable(additions, base, name, buildVariables.get(name));
+        }
         if (runtimeDirectory != null) {
             Path bin = runtimeDirectory.resolve("bin");
             Path lib = runtimeDirectory.resolve("lib");
@@ -130,7 +174,9 @@ public final class BootstrapEnvironment {
                 pathPrefixes.add(bin);
             }
             if (exists.test(lib)) {
-                additions.put("LD_LIBRARY_PATH", prepend(lib, base.get("LD_LIBRARY_PATH")));
+                String existing = additions.get("LD_LIBRARY_PATH");
+                additions.put("LD_LIBRARY_PATH", prepend(lib,
+                        existing != null ? existing : base.get("LD_LIBRARY_PATH")));
             }
         }
         if (pythonDirectory != null) {
@@ -183,7 +229,10 @@ public final class BootstrapEnvironment {
     }
 
     private static void putIfUnusable(Map<String, String> additions, Map<String, String> base,
-                                      String name, String value) {
+                                      String name, @Nullable String value) {
+        if (value == null || value.isBlank()) {
+            return;
+        }
         String existing = base.get(name);
         if (existing == null || existing.isBlank()) {
             additions.put(name, value);

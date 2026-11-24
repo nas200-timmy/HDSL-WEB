@@ -18,6 +18,7 @@
 package org.jackhuang.hmcl.web.brand;
 
 import org.jackhuang.hmcl.dsh.BootstrapRuntimeManager;
+import org.jackhuang.hmcl.dsh.BuildToolchainManager;
 import org.jackhuang.hmcl.dsh.DshNodeRuntime;
 import org.jackhuang.hmcl.dsh.NodeRuntime;
 import org.jackhuang.hmcl.dsh.NodeRuntimeManager;
@@ -1535,6 +1536,11 @@ public final class BrandInstaller {
             extractZip(download(url, message, "下载源码"), target, message::cancelled);
         });
 
+        // A source build compiles the dashboard and, through uv, whatever wheels
+        // this machine has no binary for. Resolve the toolchain before the
+        // expensive npm/uv work, not after it fails in node-gyp or gcc.
+        BuildToolchainManager.Toolchain toolchain = ensureSourceBuildToolchain("Octop", message);
+
         stage(message, 1, total, "应用 dashboard 补丁", 0.05, 0.02, 5, () -> {
             Path patch = target.resolve(".hdsl-octop.patch");
             try (InputStream in = BrandInstaller.class.getResourceAsStream("/octop/octop-runtime-base.patch")) {
@@ -1553,6 +1559,7 @@ public final class BrandInstaller {
         Path dashboard = target.resolve("dashboard");
         Map<String, String> npmEnv = new HashMap<>();
         npmEnv.put("NPM_CONFIG_REGISTRY", registry);
+        toolchain.applyTo(npmEnv);
         stage(message, 2, total, "安装前端依赖（npm ci）", 0.07, 0.35, 240, () ->
                 runWithPackageCount(dashboard.resolve("node_modules"), dashboard.resolve("package-lock.json"),
                         message, "npm ci", () ->
@@ -1583,6 +1590,7 @@ public final class BrandInstaller {
         pythonEnv.put("UV_CACHE_DIR", brandRoot.resolve("cache/uv").toString());
         pythonEnv.put("UV_LINK_MODE", "copy");
         pythonEnv.put("PYTHONDONTWRITEBYTECODE", "1");
+        toolchain.applyTo(pythonEnv);
         // uv reads both names; the deprecated one is kept for older toolchains and for the
         // build scripts some dependencies run themselves.
         pythonEnv.put("UV_DEFAULT_INDEX", pypi.url());
@@ -1614,6 +1622,53 @@ public final class BrandInstaller {
         message.report("Installed Octop " + version + " from source · 100%", 1.0);
     }
 
+
+    /// Resolves the C/C++ toolchain a source build needs, installing the
+    /// panel's portable one when the host has none.
+    ///
+    /// Only source builds call this: a portable archive or a published npm
+    /// package needs no compiler, and downloading a toolchain for it would be
+    /// a surprise. The returned toolchain is merged into the npm/uv/node
+    /// environments by the caller.
+    ///
+    /// @param label the brand's name, for the error message
+    /// @param message the install log
+    /// @return the resolved toolchain
+    /// @throws BrandException `build_toolchain_missing` when nothing can be provided
+    static BuildToolchainManager.Toolchain ensureSourceBuildToolchain(String label,
+                                                                      Consumer<String> message)
+            throws BrandException {
+        return ensureSourceBuildToolchain(label, message, BuildToolchainManager.defaultManager());
+    }
+
+    /// The same, with the manager named so a test can drive it without a network.
+    ///
+    /// @param label the brand's name, for the error message
+    /// @param message the install log
+    /// @param manager the manager to resolve through
+    /// @return the resolved toolchain
+    /// @throws BrandException `build_toolchain_missing` when nothing can be provided
+    static BuildToolchainManager.Toolchain ensureSourceBuildToolchain(String label,
+                                                                      Consumer<String> message,
+                                                                      BuildToolchainManager manager)
+            throws BrandException {
+        try {
+            BuildToolchainManager.Toolchain toolchain = manager.ensureForBuild(
+                    (line, fraction) -> message.accept("[toolchain] " + line), () -> false);
+            message.accept("构建工具链：" + toolchain.describe());
+            return toolchain;
+        } catch (IOException e) {
+            String detail = e.getMessage() == null ? "" : e.getMessage().trim();
+            String prefix = "build_toolchain_missing:";
+            if (detail.startsWith(prefix)) {
+                detail = detail.substring(prefix.length()).trim();
+            }
+            throw new BrandException("build_toolchain_missing: " + label
+                    + " 的源码构建需要 C/C++ 编译器与 make，但面板无法提供（" + detail
+                    + "）。联网后重试即可：Windows 会安装 w64devkit，Linux x64 会安装"
+                    + " Zig + GNU make 组合；也可以先自行安装 gcc/g++/make。", e);
+        }
+    }
 
     // ---------------------------------------------------------------- Hermes --
     //
@@ -1851,6 +1906,7 @@ public final class BrandInstaller {
 
         HermesLock lock = readHermesLock(target);
         message.accept("Lock: uv " + lock.uvVersion() + " · CPython " + lock.pythonVersion());
+        BuildToolchainManager.Toolchain toolchain = ensureSourceBuildToolchain("Hermes", message);
 
         BrandSources.Effective pypi = BrandSources.pypi();
         message.accept("下载源：PyPI=" + pypi.url() + " (" + pypi.source() + ") · npm="
@@ -1865,13 +1921,13 @@ public final class BrandInstaller {
 
         Path[] uvHolder = new Path[1];
         stage(message, 1, total, "准备 uv " + lock.uvVersion(), 0.10, 0.03, 30, () -> ioStep(() -> {
-            Path toolchain = toolchainDirectory(brandRoot);
-            Path uv = toolchain.resolve("uv");
+            Path toolchainDir = toolchainDirectory(brandRoot);
+            Path uv = toolchainDir.resolve("uv");
             if (!Files.isRegularFile(uv)) {
-                Path archiveFile = Files.createTempFile(toolchain, "uv", ".tar.gz");
+                Path archiveFile = Files.createTempFile(toolchainDir, "uv", ".tar.gz");
                 try {
                     downloadArtifact(lock.uv(), archiveFile, message);
-                    Path unpacked = Files.createTempDirectory(toolchain, "uv-");
+                    Path unpacked = Files.createTempDirectory(toolchainDir, "uv-");
                     extractTarGz(archiveFile, unpacked, message::cancelled);
                     Path binary;
                     try (Stream<Path> walk = Files.walk(unpacked, 3)) {
@@ -1943,6 +1999,7 @@ public final class BrandInstaller {
         pythonEnv.put("PYTHONDONTWRITEBYTECODE", "1");
         pythonEnv.put("UV_NO_PROGRESS", "1");
         pythonEnv.put("PIP_INDEX_URL", BrandSources.pypi().url());
+        toolchain.applyTo(pythonEnv);
         stage(message, 4, total, "安装 Python 依赖（uv sync --extra all）", 0.27, 0.49, 300, () ->
                 runChecked(List.of(uvHolder[0].toString(), "sync", "--frozen", "--no-dev",
                                 "--python", pythonHolder[0].toString(), "--extra", "all"),
@@ -1986,6 +2043,7 @@ public final class BrandInstaller {
         }
         Map<String, String> nodeEnv = new HashMap<>(node.pathEnvironment());
         nodeEnv.put("npm_config_registry", NpmRegistry.effective().registry());
+        toolchain.applyTo(nodeEnv);
         Path products = brandRoot.resolve("products").resolve(version);
         Path icons = products.resolve("icons");
         Path tuiOut = products.resolve("tui");

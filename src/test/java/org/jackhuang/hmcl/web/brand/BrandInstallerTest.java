@@ -19,6 +19,8 @@ package org.jackhuang.hmcl.web.brand;
 
 import kala.compress.archivers.tar.TarArchiveEntry;
 import kala.compress.archivers.tar.TarArchiveOutputStream;
+import org.jackhuang.hmcl.dsh.BuildToolchainManager;
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -145,6 +147,49 @@ class BrandInstallerTest {
         assertTrue(Files.isRegularFile(uv));
         assertTrue(Files.isExecutable(uv));
         assertEquals(toolchain.resolve("uv-x86_64-unknown-linux-gnu").resolve("uv"), uv);
+    }
+
+    /// A source build resolves the panel's build toolchain and gets its
+    /// compiler variables; a portable-archive install never asks for one.
+    @Test
+    void aSourceBuildGetsTheBuildToolchainsEnvironment() throws Exception {
+        Path bin = root.resolve("fake-build-bin");
+        Files.createDirectories(bin);
+        for (String name : List.of("cc", "c++", "make", "pkg-config", "nasm")) {
+            Path script = bin.resolve(name);
+            Files.writeString(script, "#!/bin/sh\nexit 0\n", StandardCharsets.UTF_8);
+            script.toFile().setExecutable(true, false);
+            Files.writeString(bin.resolve(name + ".exe"), "stub", StandardCharsets.UTF_8);
+        }
+        BuildToolchainManager manager = new BuildToolchainManager(
+                root.resolve("toolchains/build"), bin.toString());
+
+        BuildToolchainManager.Toolchain toolchain = BrandInstaller.ensureSourceBuildToolchain(
+                "Octop", line -> {
+                }, manager);
+
+        assertTrue(toolchain.usable(), toolchain.missingMessage());
+        String cc = OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS
+                ? bin.resolve("cc.exe").toString() : bin.resolve("cc").toRealPath().toString();
+        assertEquals(cc, toolchain.environment().get("CC"));
+        assertEquals(OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS
+                        ? bin.resolve("make.exe").toString() : bin.resolve("make").toRealPath().toString(),
+                toolchain.environment().get("MAKE"));
+    }
+
+    /// The failure is one the page can act on, not "install failed".
+    @Test
+    void aMissingSourceBuildToolchainIsAnActionableError() throws Exception {
+        Path notADirectory = root.resolve("not-a-directory");
+        Files.writeString(notADirectory, "x", StandardCharsets.UTF_8);
+        BuildToolchainManager manager = new BuildToolchainManager(notADirectory, "");
+
+        BrandException error = assertThrows(BrandException.class,
+                () -> BrandInstaller.ensureSourceBuildToolchain("Octop", line -> {
+                }, manager));
+
+        assertTrue(error.getMessage().startsWith("build_toolchain_missing:"), error.getMessage());
+        assertTrue(error.getMessage().contains("gcc/g++/make"), error.getMessage());
     }
 
     /// A minimal zip holding the given path/content pairs.

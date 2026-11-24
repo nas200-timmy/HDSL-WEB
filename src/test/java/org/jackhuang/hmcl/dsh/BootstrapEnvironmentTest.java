@@ -125,6 +125,70 @@ class BootstrapEnvironmentTest {
     }
 
     @Test
+    void aBuildToolchainAddsItsBinAndCompilersWithoutHidingPython() throws Exception {
+        Path build = temp.resolve("build").resolve("zig-test");
+        Files.createDirectories(build.resolve("bin"));
+        Files.createDirectories(build.resolve("lib"));
+        Files.writeString(build.resolve("bin").resolve("cc"), "#!/bin/sh\n");
+        Files.writeString(build.resolve("bin").resolve("make"), "#!/bin/sh\n");
+        Files.writeString(build.resolve("lib").resolve("libpkgconf.so.3"), "fake");
+        Path python = temp.resolve("python-build").resolve("3.12.16");
+        Files.createDirectories(python.resolve("bin"));
+        Files.writeString(python.resolve("bin").resolve("python3"), "#!/bin/sh\n");
+
+        Map<String, String> variables = Map.of(
+                "CC", build.resolve("bin").resolve("cc").toString(),
+                "CXX", build.resolve("bin").resolve("c++").toString(),
+                "MAKE", build.resolve("bin").resolve("make").toString(),
+                "PKG_CONFIG", build.resolve("bin").resolve("pkg-config").toString());
+
+        Map<String, String> additions = BootstrapEnvironment.additions(null, null, python,
+                build.resolve("bin"), build.resolve("lib"), variables,
+                Map.of("PATH", "/usr/bin:/bin"), Files::exists);
+
+        assertEquals(build.resolve("bin") + File.pathSeparator + python.resolve("bin")
+                + File.pathSeparator + "/usr/bin:/bin", additions.get("PATH"));
+        assertEquals(build.resolve("bin").resolve("cc").toString(), additions.get("CC"));
+        assertEquals(build.resolve("bin").resolve("c++").toString(), additions.get("CXX"));
+        assertEquals(build.resolve("bin").resolve("make").toString(), additions.get("MAKE"));
+        assertEquals(build.resolve("bin").resolve("pkg-config").toString(),
+                additions.get("PKG_CONFIG"));
+        assertEquals(build.resolve("lib").toString(), additions.get("LD_LIBRARY_PATH"));
+        assertEquals(python.resolve("bin").resolve("python3").toString(), additions.get("PYTHON"));
+    }
+
+    @Test
+    void anOperatorsCompilerIsNotReplacedByTheBuildToolchain() throws Exception {
+        Path build = temp.resolve("build-operator").resolve("toolchain");
+        Files.createDirectories(build.resolve("bin"));
+
+        Map<String, String> additions = BootstrapEnvironment.additions(null, null, null,
+                build.resolve("bin"), null,
+                Map.of("CC", build.resolve("bin").resolve("cc").toString(),
+                        "CXX", build.resolve("bin").resolve("c++").toString(),
+                        "MAKE", build.resolve("bin").resolve("make").toString()),
+                Map.of("PATH", "/usr/bin", "CC", "/opt/operator/cc"), Files::exists);
+
+        assertFalse(additions.containsKey("CC"));
+        assertEquals(build.resolve("bin").resolve("c++").toString(), additions.get("CXX"));
+        assertEquals(build.resolve("bin").resolve("make").toString(), additions.get("MAKE"));
+        assertEquals(build.resolve("bin") + File.pathSeparator + "/usr/bin",
+                additions.get("PATH"));
+    }
+
+    @Test
+    void aBuildLibraryIsPrependedToAnExistingLdLibraryPath() throws Exception {
+        Path build = temp.resolve("build-lib").resolve("toolchain");
+        Path lib = Files.createDirectories(build.resolve("lib"));
+
+        Map<String, String> additions = BootstrapEnvironment.additions(null, null, null, null,
+                build.resolve("lib"), Map.of(), Map.of("LD_LIBRARY_PATH", "/opt/lib"),
+                Files::exists);
+
+        assertEquals(lib + File.pathSeparator + "/opt/lib", additions.get("LD_LIBRARY_PATH"));
+    }
+
+    @Test
     void aCaBundleFillsEveryTlsVariable() throws Exception {
         Path ca = temp.resolve("cacert.pem");
         Files.writeString(ca, "cert");
