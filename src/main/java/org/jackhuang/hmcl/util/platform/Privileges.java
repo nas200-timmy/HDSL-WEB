@@ -417,17 +417,19 @@ public final class Privileges {
     /// The argv to run `command` with, as an agent.
     ///
     /// Inside a container running as root this is
-    /// `setpriv --reuid=1000 --regid=1000 --clear-groups [--groups=…] -- <command>`;
+    /// `setpriv --reuid=1000 --regid=1000 {--groups=…|--clear-groups} -- <command>`;
     /// anywhere else it is the command itself. `setpriv` execs in place, so the
     /// child still owns its process group and the PTY's session semantics are
     /// unchanged.
     ///
-    /// `--clear-groups` plus an explicit list replaced `--init-groups` because
-    /// the latter reads `/etc/passwd` and `/etc/group`. A minimal image may ship
-    /// neither, and then every agent launch failed with `setpriv: could not
-    /// initialize groups`. The list keeps the image's supplementary groups —
-    /// `render`, `video`, whatever the entrypoint granted — while never
-    /// inheriting root's group 0.
+    /// An explicit numeric list replaced `--init-groups` because the latter
+    /// reads `/etc/passwd` and `/etc/group`. A minimal image may ship neither,
+    /// and then every agent launch failed with `setpriv: could not initialize
+    /// groups`. The list keeps the image's supplementary groups — `render`,
+    /// `video`, whatever the entrypoint granted — while never inheriting root's
+    /// group 0: `--groups` replaces the whole supplementary set by itself, and
+    /// setpriv(1) rejects it next to `--clear-groups`, so that flag only
+    /// appears when there is nothing to grant.
     ///
     /// @param command the program and its arguments, program first
     /// @return the argv to hand to the process builder
@@ -460,8 +462,11 @@ public final class Privileges {
         wrapped.add(setpriv());
         wrapped.add("--reuid=" + AGENT_UID);
         wrapped.add("--regid=" + AGENT_UID);
-        wrapped.add("--clear-groups");
-        if (!groups.isEmpty()) {
+        // setpriv(1) 的四个组选项互斥: --groups 自己就会整体替换附加组集合,
+        // 与 --clear-groups 同传直接报 mutually exclusive arguments。
+        if (groups.isEmpty()) {
+            wrapped.add("--clear-groups");
+        } else {
             StringBuilder list = new StringBuilder("--groups=");
             for (int i = 0; i < groups.size(); i++) {
                 if (i > 0) {

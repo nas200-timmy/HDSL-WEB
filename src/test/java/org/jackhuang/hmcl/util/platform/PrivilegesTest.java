@@ -76,10 +76,9 @@ class PrivilegesTest {
 
         assertEquals("--reuid=" + Privileges.AGENT_UID, wrapped.get(1), wrapped.toString());
         assertEquals("--regid=" + Privileges.AGENT_UID, wrapped.get(2), wrapped.toString());
-        assertEquals("--clear-groups", wrapped.get(3), wrapped.toString());
-        assertEquals("--groups=44,109", wrapped.get(4), wrapped.toString());
-        assertEquals("--", wrapped.get(5), wrapped.toString());
-        assertEquals(command, wrapped.subList(6, wrapped.size()),
+        assertEquals("--groups=44,109", wrapped.get(3), wrapped.toString());
+        assertEquals("--", wrapped.get(4), wrapped.toString());
+        assertEquals(command, wrapped.subList(5, wrapped.size()),
                 "the agent's argv must arrive unchanged after the separator");
         assertTrue(wrapped.get(0).endsWith("setpriv"), wrapped.get(0));
     }
