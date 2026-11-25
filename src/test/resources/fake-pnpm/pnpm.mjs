@@ -26,7 +26,7 @@
 // file are one-line wrappers around it, so there is one implementation rather
 // than two that drift apart.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -99,16 +99,33 @@ if (marker && existsSync(marker) && args[0] === "install") {
 // runs instead of this stub calling itself.
 const windows = process.platform === "win32";
 const names = windows ? ["pnpm.cmd", "pnpm.exe", "pnpm.bat", "pnpm"] : ["pnpm"];
+const samePath = (left, right) =>
+    windows ? left.toLowerCase() === right.toLowerCase() : left === right;
 for (const entry of (process.env.PATH ?? "").split(windows ? ";" : ":")) {
-    if (!entry || entry === here) {
+    if (!entry || samePath(entry, here)) {
         continue;
     }
     for (const name of names) {
         const candidate = join(entry, name);
-        if (existsSync(candidate)) {
-            const result = spawnSync(candidate, args, { stdio: "inherit" });
-            process.exit(result.status ?? 1);
+        // A directory or a link named `pnpm` is not a program: on Windows a
+        // shim directory earlier on PATH made `existsSync` true, `spawnSync`
+        // fail, and this stub exit 1 — which the launcher read as "the
+        // runtime has no pnpm" and then bypassed the stub entirely.
+        let isFile = false;
+        try {
+            isFile = statSync(candidate).isFile();
+        } catch {
+            // Not there, or not readable: the next candidate may be.
         }
+        if (!isFile) {
+            continue;
+        }
+        const result = spawnSync(candidate, args, { stdio: "inherit" });
+        if (result.error) {
+            // Try the next candidate rather than pretending the command ran.
+            continue;
+        }
+        process.exit(result.status ?? 1);
     }
 }
 console.error("fake pnpm: no real pnpm below this one on PATH");
