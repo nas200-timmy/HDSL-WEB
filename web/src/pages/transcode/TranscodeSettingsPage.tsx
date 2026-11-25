@@ -172,14 +172,22 @@ export function TranscodeSettingsPage() {
   const binaries = catalog.filter((entry) => entry.kind === "binary");
   const sources = catalog.filter((entry) => entry.kind === "source");
   const host = runtime?.host;
-  const vendorIds = [...new Set(binaries.map((entry) => entry.vendor))];
-  const effectiveVendor = vendorIds.includes(binaryVendor) ? binaryVendor : vendorIds[0] ?? "";
-  const platformBinaries = binaries.filter((entry) => entry.vendor === effectiveVendor
-    && entry.os === host?.os && entry.arch === host?.arch
+  // 目录里有 Windows 专属的构建源（gyan.dev）。先把“这个宿主真的能装”的条目筛出来，
+  // 否则选中它只会得到两个空下拉框——看起来像源坏了，其实是该源没有当前平台的制品。
+  const platformBinaries = binaries.filter((entry) => entry.os === host?.os
+    && entry.arch === host?.arch
     && (!entry.libc || entry.libc === "none" || entry.libc === host?.libc));
-  const binaryMajors = [...new Set(platformBinaries.map((entry) => entry.major).filter(Boolean))];
+  const vendorIds = [...new Set(platformBinaries.map((entry) => entry.vendor))];
+  const currentVendor = runtime?.current
+    ? catalog.find((entry) => entry.id === runtime.current?.catalogId)?.vendor ?? ""
+    : "";
+  const effectiveVendor = vendorIds.includes(binaryVendor)
+    ? binaryVendor
+    : vendorIds.includes(currentVendor) ? currentVendor : vendorIds[0] ?? "";
+  const vendorBinaries = platformBinaries.filter((entry) => entry.vendor === effectiveVendor);
+  const binaryMajors = [...new Set(vendorBinaries.map((entry) => entry.major).filter(Boolean))];
   const effectiveMajor = binaryMajors.includes(binaryMajor) ? binaryMajor : binaryMajors[0] ?? "";
-  const majorBinaries = platformBinaries.filter((entry) => entry.major === effectiveMajor);
+  const majorBinaries = vendorBinaries.filter((entry) => entry.major === effectiveMajor);
   const effectiveBinary = majorBinaries.find((entry) => entry.id === binaryId)
     ?? majorBinaries[0] ?? null;
   const installedIds = new Set((runtime?.installed ?? []).map((item) => item.id));
@@ -297,6 +305,12 @@ export function TranscodeSettingsPage() {
                 </select>
               </span>
             </div>
+            {vendorIds.length === 0 && (
+              <span style={{ fontSize: 11, color: "var(--monet-error)", lineHeight: 1.6 }}>
+                目录里没有适用于 {host?.os}/{host?.arch}{host?.libc ? `/${host.libc}` : ""} 的二进制
+                构建；可以改用“使用系统 ffmpeg”，或等目录更新。
+              </span>
+            )}
             <div className="comp-row">
               <span className="comp-label">平台</span>
               <span className="comp-value mono" style={{ fontSize: 12 }}>
