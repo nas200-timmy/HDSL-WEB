@@ -79,6 +79,10 @@ public final class TranscodeJob {
     public boolean fallbackAttempted;
     public long decisionDeadline = -1;
     public @Nullable String logFile;
+    /// The binary this job actually started with, captured when the worker begins.
+    /// Kept after the job ends: switching the panel's default must not rewrite the
+    /// answer to "which ffmpeg produced this file?". `null` until the first start.
+    public @Nullable FfmpegUsed ffmpeg;
     public long createdAt = System.currentTimeMillis();
     public long startedAt = -1;
     public long endedAt = -1;
@@ -107,6 +111,16 @@ public final class TranscodeJob {
         public List<String> droppedArgs = List.of();
     }
 
+    /// Which ffmpeg a job ran with. `kind` is the locator's resolution kind
+    /// (`path`, `managed`, `system` or `missing`); `id` names the managed runtime.
+    public static final class FfmpegUsed {
+        public String kind = "";
+        public String id = "";
+        public String path = "";
+        public String version = "";
+        public String error = "";
+    }
+
     /// One ffmpeg invocation of this job. A two-pass preset has two, a tool job one.
     public static final class Step {
         public String name = "";
@@ -127,6 +141,7 @@ public final class TranscodeJob {
         sizeBytes = -1;
         frame = -1;
         error = null;
+        ffmpeg = null;
         encoder = null;
         fallbackFrom = null;
         fallbackTo = null;

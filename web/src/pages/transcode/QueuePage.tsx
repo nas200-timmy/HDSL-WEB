@@ -9,7 +9,7 @@ import { Dialog } from "../../components/Dialog";
 import { toast } from "../../store";
 import { errMsg } from "../../utils";
 import { RefreshIcon } from "../../components/icons";
-import { fmtBytes, fmtDuration, jobEtaMs, latestLogLine, pct, stateLabel, stateTone, HelpNote } from "./common";
+import { ffmpegVersionLabel, fmtBytes, fmtDuration, jobEtaMs, latestLogLine, pct, stateLabel, stateTone, HelpNote } from "./common";
 import { valueLabel } from "./labels";
 import { useQueueStream } from "./queue/useQueueStream";
 import { QueueToolbar, type QueueBatchAction } from "./queue/QueueToolbar";
@@ -356,7 +356,9 @@ export function QueuePage({ onOpenTab }: { onOpenTab: (tab: string) => void }) {
           <span className={`tc-stat${stats.failed > 0 ? " danger" : ""}`}><b>{stats.failed}</b>失败/待决定</span>
           <span className="tc-stat-meta">
             并发 {snapshot?.maxConcurrent ?? "—"} · 上限 {snapshot?.maxQueue ?? "—"} ·
-            队列{runState === "running" ? "运行中" : runState === "paused" ? "已暂停" : "未启动"} · 关网页不停任务
+            队列{runState === "running" ? "运行中" : runState === "paused" ? "已暂停" : "未启动"} ·
+            ffmpeg {snapshot ? (snapshot.runtime.available
+              ? ffmpegVersionLabel(snapshot.runtime.version) : "不可用") : "—"} · 关网页不停任务
           </span>
         </div>
         <div className="tc-queue-actions">

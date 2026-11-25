@@ -106,6 +106,14 @@ class TranscodeQueueTest {
             Path output = media.resolve(jobJson.get("output").getAsString());
             assertTrue(Files.isRegularFile(output));
             assertTrue(Files.size(output) > 0);
+            var runtime = module.queue().snapshot().getAsJsonObject("runtime");
+            assertEquals("path", runtime.get("kind").getAsString());
+            assertTrue(runtime.get("available").getAsBoolean());
+            assertTrue(runtime.get("version").getAsString().contains("7.1.5"));
+            var used = jobJson.getAsJsonObject("ffmpeg");
+            assertEquals("path", used.get("kind").getAsString());
+            assertEquals(runtime.get("path").getAsString(), used.get("path").getAsString());
+            assertTrue(used.get("version").getAsString().contains("7.1.5"));
             String log = module.queue().log(job.get("id").getAsString(), 100);
             assertTrue(log.contains("ffmpeg"), log);
             assertEquals(1.0, jobJson.get("fraction").getAsDouble(), 0.0001);

@@ -38,9 +38,28 @@ public final class TranscodeRuntime {
 
     private final ServerConfig config;
     private volatile @Nullable FfmpegProbe.FfmpegInfo info;
+    private volatile @Nullable FfmpegLocator.Resolution resolution;
 
     public TranscodeRuntime(ServerConfig config) {
         this.config = config;
+    }
+
+    /// Where the configured default currently points, without starting a process.
+    /// The queue embeds this in its read-only snapshot so an agent ticket can tell
+    /// which binary a job will use without reaching into the settings API.
+    public FfmpegLocator.Resolution resolution() {
+        FfmpegLocator.Resolution current = resolution;
+        if (current != null) {
+            return current;
+        }
+        synchronized (this) {
+            current = resolution;
+            if (current == null) {
+                current = FfmpegLocator.resolve(config);
+                resolution = current;
+            }
+            return current;
+        }
     }
 
     /// The cached probe, or a fresh one on first use.
@@ -61,6 +80,7 @@ public final class TranscodeRuntime {
 
     /// Re-probes after the operator installed or pointed at a different binary.
     public synchronized FfmpegProbe.FfmpegInfo refresh() {
+        resolution = FfmpegLocator.resolve(config);
         FfmpegProbe.FfmpegInfo next = FfmpegProbe.probe(FfmpegLocator.locate(config));
         info = next;
         return next;

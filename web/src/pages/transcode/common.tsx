@@ -74,6 +74,12 @@ export function pct(value: number): string {
   return value < 0 ? "—" : `${Math.round(value * 100)}%`;
 }
 
+/** `ffmpeg version 8.1.3-gpl-... Copyright ...` → `8.1.3-gpl-...`; unknown text passes through. */
+export function ffmpegVersionLabel(version: string): string {
+  const match = /^ffmpeg version (\S+)/i.exec(version.trim());
+  return match ? match[1] : version;
+}
+
 export function stateLabel(state: string): string {
   return (
     {

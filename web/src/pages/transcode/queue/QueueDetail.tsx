@@ -1,6 +1,6 @@
 import type { TranscodeJob } from "../../../api";
 import { ContentCopyIcon } from "../../../components/icons";
-import { fmtBytes, fmtDuration, jobEtaMs, pct, stateLabel, stateTone } from "../common";
+import { ffmpegVersionLabel, fmtBytes, fmtDuration, jobEtaMs, pct, stateLabel, stateTone } from "../common";
 import { valueLabel } from "../labels";
 
 interface QueueDetailProps {
@@ -53,6 +53,14 @@ export function QueueDetail({ job, log, onOpenLog, onCopy, onResetPreset }: Queu
         <span>编码器</span>
         <span className="mono" title={job.encoder ?? undefined}>
           {job.encoder ? valueLabel("videoEncoder", job.encoder) : "—"}
+        </span>
+        <span>ffmpeg</span>
+        <span className="mono" title={job.ffmpeg
+          ? `${job.ffmpeg.version || job.ffmpeg.error}\n${job.ffmpeg.path}` : undefined}>
+          {job.ffmpeg
+            ? `${job.ffmpeg.version ? ffmpegVersionLabel(job.ffmpeg.version) : "不可用"}`
+              + `${job.ffmpeg.kind === "managed" && job.ffmpeg.id ? ` · ${job.ffmpeg.id}` : ""}`
+            : "尚未启动"}
         </span>
         <span>进度</span>
         <span className="mono">

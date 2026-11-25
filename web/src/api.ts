@@ -1672,12 +1672,33 @@ export interface TranscodeJob {
   startedAt: number;
   endedAt: number;
   command: string[];
+  /** The ffmpeg this job actually started with; null until it first runs. */
+  ffmpeg?: TranscodeFfmpegUsed | null;
   /** Every encoder hop this job went through, newest last. */
   switchRecords?: TranscodeSwitchRecord[];
   /** One entry per ffmpeg invocation (a two-pass preset has two). */
   steps?: TranscodeJobStep[];
   /** Computed server-side. Never derive button availability from `state` in the UI. */
   caps: TranscodeJobCaps;
+}
+
+export interface TranscodeFfmpegUsed {
+  kind: "path" | "managed" | "system" | "missing" | "none";
+  id: string;
+  path: string;
+  version: string;
+  error: string;
+}
+
+/** What a job started right now would run; embedded in the queue snapshot. */
+export interface TranscodeQueueRuntime {
+  default: string;
+  kind: TranscodeFfmpegUsed["kind"];
+  id: string;
+  path: string;
+  version: string;
+  available: boolean;
+  error: string;
 }
 
 /** What the server allows right now; the UI only renders what is true here. */
@@ -1727,6 +1748,8 @@ export interface TranscodeQueueSnapshot {
   runState: "idle" | "running" | "paused";
   maxConcurrent: number;
   maxQueue: number;
+  /** The binary a job started now would use. Read-only for agent tickets too. */
+  runtime: TranscodeQueueRuntime;
   jobs: TranscodeJob[];
 }
 

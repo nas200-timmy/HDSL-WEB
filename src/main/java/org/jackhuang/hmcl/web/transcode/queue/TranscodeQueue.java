@@ -32,6 +32,7 @@ import org.jackhuang.hmcl.web.http.Json;
 import org.jackhuang.hmcl.web.transcode.TranscodeModule;
 import org.jackhuang.hmcl.web.transcode.command.CommandBuilder;
 import org.jackhuang.hmcl.web.transcode.preset.TranscodePreset;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegLocator;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegProbe;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
@@ -746,8 +747,8 @@ public final class TranscodeQueue {
     }
 
     public JsonObject snapshot() {
+        JsonObject body = new JsonObject();
         synchronized (lock) {
-            JsonObject body = new JsonObject();
             body.addProperty("runState", runState.name().toLowerCase(Locale.ROOT));
             body.addProperty("maxConcurrent", module.config().transcode.maxConcurrent);
             body.addProperty("maxQueue", module.config().transcode.maxQueue);
@@ -756,8 +757,29 @@ public final class TranscodeQueue {
                 array.add(jobView(job));
             }
             body.add("jobs", array);
-            return body;
         }
+        // Done outside the queue lock: the first call probes ffmpeg, and holding the
+        // lock for that would stall every queue action behind `-version`/`-encoders`.
+        body.add("runtime", runtimeJson());
+        return body;
+    }
+
+    /// What a job started right now would run. Exposed in the queue snapshot so a
+    /// read-only agent ticket can answer "which ffmpeg is this queue using?" without
+    /// the operator-only `/runtime` endpoints.
+    private JsonObject runtimeJson() {
+        FfmpegProbe.FfmpegInfo info = module.runtime().info();
+        FfmpegLocator.Resolution resolution = module.runtime().resolution();
+        JsonObject runtime = new JsonObject();
+        runtime.addProperty("default", module.config().transcode.defaultRuntime == null
+                ? "auto" : module.config().transcode.defaultRuntime);
+        runtime.addProperty("kind", resolution.kind());
+        runtime.addProperty("id", resolution.id() == null ? "" : resolution.id());
+        runtime.addProperty("path", resolution.ffmpeg() == null ? "" : resolution.ffmpeg().toString());
+        runtime.addProperty("version", info.available() ? info.version() : "");
+        runtime.addProperty("available", info.available());
+        runtime.addProperty("error", info.error() == null ? "" : info.error());
+        return runtime;
     }
 
     /// The job as the UI sees it: the stored fields plus a `caps` block saying which
@@ -881,6 +903,24 @@ public final class TranscodeQueue {
         }
     }
 
+    /// Stamps the job with the binary the worker is about to invoke, before the
+    /// availability check: a job that failed because ffmpeg disappeared should still
+    /// say which runtime it was pointed at. Persisted with the job and never rewritten
+    /// by later default-runtime switches.
+    private void recordFfmpeg(TranscodeJob job, FfmpegProbe.FfmpegInfo info) {
+        FfmpegLocator.Resolution resolution = module.runtime().resolution();
+        TranscodeJob.FfmpegUsed used = new TranscodeJob.FfmpegUsed();
+        used.kind = resolution.kind();
+        used.id = resolution.id() == null ? "" : resolution.id();
+        Path binary = info.ffmpeg() != null ? info.ffmpeg() : resolution.ffmpeg();
+        used.path = binary == null ? "" : binary.toString();
+        used.version = info.version();
+        used.error = info.error() == null ? "" : info.error();
+        synchronized (lock) {
+            job.ffmpeg = used;
+        }
+    }
+
     private void runJob(TranscodeJob job) {
         Path part = null;
         try {
@@ -890,6 +930,7 @@ public final class TranscodeQueue {
                 }
             }
             FfmpegProbe.FfmpegInfo info = module.runtime().info();
+            recordFfmpeg(job, info);
             if (!info.available()) {
                 fail(job, info.error() == null ? "ffmpeg is unavailable" : info.error(), null);
                 return;

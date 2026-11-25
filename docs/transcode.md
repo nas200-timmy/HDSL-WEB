@@ -204,6 +204,7 @@ ffmpeg 获取阶梯：
   - `transcode.ffmpeg_path` 仍是运维硬覆盖，优先于这里的默认；
   - 改动需要开发者提权并记审计（`PUT /api/transcode/runtime/default`）。
 - `GET /api/transcode/runtime` 增加 `default`、`resolved`（kind/id/路径）、`system`（检测结果）与 `compilers`（系统/便携可用性与详情）；旧字段保留。
+- **队列快照带运行时**：`GET /api/transcode/queue` 的 `runtime` 块（`default/kind/id/path/version/available/error`）表示“现在开跑会用哪个 ffmpeg”，只读 agent 票也能看到；每个任务在**第一次启动时**把实际使用的二进制写进 `job.ffmpeg`（`kind/id/path/version/error`），任务结束后仍保留。之后切换默认运行时不会改写已完成任务的记录。队列详情接口 `GET /queue/jobs/{id}` 同样带 `ffmpeg`。
 
 ### 8. 硬件直通
 
@@ -244,6 +245,7 @@ ffmpeg 获取阶梯：
 - `AgentScopes` 默认拒绝：未显式映射的路由返回 null，`AuthFilter` 直接拒绝；`/i/*`、`/ws/*` 对 Agent 关闭的规则不变。
 - 暴露工具目录 `GET /api/transcode/agent/tools`（JSON Schema、write 标记、所需 scope）；执行仍走明确 REST 端点，不做通用 dispatcher。
 - Agent 不能启用/禁用功能、不能修改失败策略、不能改媒体根/ffmpeg 路径；这些只允许登录会话（必要时开发者提权）。
+- 只读的 `transcode` 票在 `GET /api/transcode/queue` 里能看到 `runtime` 块与每个任务的 `ffmpeg`，回答“这个任务用的是哪个 ffmpeg / 什么版本”；安装、切换、设为默认仍是操作员动作。
 - 全局并发/队列上限对 Agent 同样生效；关键操作写 `AuditLog`，记录 `agent:<label>`、scope、grant id。
 - 可选：`transcode-raw` 和删除类操作走 `TaskService.WAITING_APPROVAL`，由操作员在面板批准。
 
