@@ -1312,8 +1312,9 @@ export const api = {
       `/api/transcode/runtime${major ? `?major=${encodeURIComponent(major)}` : ""}`),
     runtimeCatalog: () => request<{ entries: TranscodeCatalogEntry[] }>("/api/transcode/runtime/catalog"),
     runtimeSource: () => request<TranscodeSourceStatus>("/api/transcode/runtime/source"),
+    runtimeFullBuilds: () => request<TranscodeFullBuilds>("/api/transcode/runtime/full-builds"),
     runtimeInstallArtifact: (body: {
-      mode: "auto" | "artifact" | "custom" | "package" | "source";
+      mode: "auto" | "artifact" | "custom" | "package" | "source" | "full-source";
       id?: string;
       major?: string;
       features?: string[];
@@ -1858,6 +1859,30 @@ export interface TranscodeToolchain {
   dependencies: TranscodeToolchainDependency[];
   missing: string[];
   features: string[];
+}
+
+export interface TranscodeFullBuildDependency {
+  id: string;
+  kind: "tool" | "codec";
+  version: string;
+}
+
+export interface TranscodeFullBuild {
+  id: string;
+  profile: "gpl" | "lgpl";
+  ffmpegVersion: string;
+  license: string;
+  downloadBytes: number;
+  buildMinutes: number;
+  diskBytes: number;
+  features: string[];
+  dependencies: TranscodeFullBuildDependency[];
+}
+
+export interface TranscodeFullBuilds {
+  entries: TranscodeFullBuild[];
+  available: boolean;
+  reason: string;
 }
 
 export interface TranscodeSourceStatus {

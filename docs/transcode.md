@@ -65,8 +65,10 @@
   “改 MKV / 丢弃不兼容项 / 取消”三选；编码器参数已做组合校验，但 profile/tune/pix_fmt 的
   逐项枚举仍未全部覆盖；编码器故障探测仍是失败后决策，不是启动探测/任务前检查/stderr 三层自动；
   Agent 写操作确认卡与工具目录、应急上传三重校验仍未做。
-- 全编码源码构建（面板托管依赖栈）：设计稿见文末「附：全编码源码构建」。本版明确不做，默认
-  仍用二进制目录；现在的最小源码构建保持“宿主有什么编什么”。
+- 全编码源码构建（Linux）：已落地，见文末「附：全编码源码构建」。默认仍用二进制目录；
+  源码卡片的「构建方案」可选 `全编码 GPL` / `全编码 LGPL`，由面板下载并编译依赖栈，产物为静态
+  ffmpeg（libav 与编码库静态，glibc 动态）。Windows/macOS 仍只走二进制；硬件编码库（VAAPI/QSV）
+  暂未纳入托管依赖。
 
 ## Context
 
@@ -197,7 +199,9 @@ ffmpeg 获取阶梯：
 - **安装卡片**：先选类型 `系统 / 下载二进制 / 源码构建`。
   - `系统`：只检测 `PATH` 里的 ffmpeg/ffprobe，显示版本与路径；不下载。找不到时给出包管理器提示或 `transcode.ffmpeg_path`。
   - `二进制`：`vendor`（BtbN / gyan.dev / Jellyfin）→ 当前平台（os/arch/libc，只读）→ 大版本 → 具体 build；详情显示许可、特性、minGlibc、大小、SHA-256、镜像数。Jellyfin 的 LZU 镜像就是 catalog 里的 `mirrors`，属于该 vendor，不是独立来源。
-  - `源码构建`：来源（当前为官方 ffmpeg.org）→ 版本 → 编译器（`auto` / `system` / `portable`）→ 构建。`system` 不可用时直接报错，不会偷偷下载；`portable` 未安装时下载固定版本的 Zig/w64devkit。实际编译器写入 runtime.json 的 `toolchain`。
+  - `源码构建`：先选「构建方案」：
+    - `官方源码 · 宿主依赖（最小构建）`：来源（当前为官方 ffmpeg.org）→ 版本 → 编译器（`auto` / `system` / `portable`）→ 构建。`system` 不可用时直接报错，不会偷偷下载；`portable` 未安装时下载固定版本的 Zig/w64devkit。实际编译器写入 runtime.json 的 `toolchain`。
+    - `全编码 GPL / 全编码 LGPL（静态）`：面板下载并编译 x264/x265/libvpx/libaom/svt-av1/opus/lame/vorbis，以及 cmake（预编译工具）与 nasm（源码），再用这些静态库编译 FFmpeg；产物 `license` 为 `GPL-2.0-or-later` 或 `LGPL-2.1-or-later`，`buildRecipe=full-static-v1`。当前只支持 Linux。
   - 只有最后的“安装/构建”按钮会下载或编译；切换下拉不触网。
 - **默认运行时**（卡片下方，类似证书默认项）：`transcode.default_runtime: auto | system | <runtime-id>`，也接受 `HDSL_TRANSCODE_DEFAULT_RUNTIME`。
   - `auto`：托管 `current` 优先，否则 `PATH`；
@@ -206,8 +210,10 @@ ffmpeg 获取阶梯：
   - `transcode.ffmpeg_path` 仍是运维硬覆盖，优先于这里的默认；
   - 改动需要开发者提权并记审计（`PUT /api/transcode/runtime/default`）。
 - `GET /api/transcode/runtime` 增加 `default`、`resolved`（kind/id/路径）、`system`（检测结果）与 `compilers`（系统/便携可用性与详情）；旧字段保留。
+- `GET /api/transcode/runtime/full-builds` 返回全编码 recipe（id/profile/版本/特性/依赖/预计大小与时间）以及当前宿主是否可构建；安装走 `POST /api/transcode/runtime/install {mode:"full-source", id:"full-gpl-9.1", compiler:"system"}`，仍需开发者提权与审计。
 - 设置页只保留这一套安装入口；旧的“在线安装”折叠块（静态包 / 自定义 URL / 重复的安装状态）已移除。`mode=custom` 仍留在后端接口，页面不再暴露第二套路径。
-- 源码版本下拉写的是**源码包**的许可（LGPL-2.1+），不是产物许可：构建启用 libx264/libx265 后产物按 GPL-3.0 记录，否则是最小编码集（LGPL）。页面从 `/api/transcode/runtime/source` 读缺失的 Debian/Ubuntu 开发包并给出安装命令；要全编码就装包后重建，或直接选 BtbN / gyan.dev 的 GPL 二进制。
+- **最小构建**的源码版本下拉写的是**源码包**的许可（LGPL-2.1+），不是产物许可：构建启用 libx264/libx265 后产物按 GPL-3.0 记录，否则是最小编码集（LGPL）。页面从 `/api/transcode/runtime/source` 读缺失的 Debian/Ubuntu 开发包并给出安装命令；要全编码可以直接选「全编码 GPL」，不必在宿主装开发包。
+- **全编码构建**的预检只需要系统 `cc/c++/make`；cmake 与 nasm 由面板自己缓存到 `<data>/transcode/tools/ffmpeg/.build-tools/`，不写入最终运行时目录。下载大小、预计时间与磁盘占用来自 recipe 的声明值。
 - 已安装的二进制/源码版本在下拉和按钮上标记，重复安装按钮禁用；“任务状态”只由安装卡片显示。
 - **队列快照带运行时**：`GET /api/transcode/queue` 的 `runtime` 块（`default/kind/id/path/version/available/error`）表示“现在开跑会用哪个 ffmpeg”，只读 agent 票也能看到；每个任务在**第一次启动时**把实际使用的二进制写进 `job.ffmpeg`（`kind/id/path/version/error`），任务结束后仍保留。之后切换默认运行时不会改写已完成任务的记录。队列详情接口 `GET /queue/jobs/{id}` 同样带 `ffmpeg`。
 
@@ -894,11 +900,11 @@ Agent：`transcode` scope 只读 runtime 状态与能力；安装/切换/删除/
 - 安装失败/取消不会留下半套 `current`；旧版本可回滚；未被引用的旧版本可删除；所有操作有审计。
 - 自定义 URL 仍可用，但必须显式哈希 + 提权；同源 sidecar 不再作为唯一信任。
 
-## 附：全编码源码构建（设计稿，暂不实现）
+## 附：全编码源码构建（2026-11-25 实现）
 
-> 状态：设计稿，2026-11-25。**本版线不实现**：二进制目录（BtbN / gyan / Jellyfin）已经覆盖
-> “要一个能用的全编码 ffmpeg”，源码构建继续只做当前的最小 / 宿主依赖模式。本文留给后续版本，
-> 也用来解释为什么“再补一个源码 URL”解决不了全编码问题。
+> 状态：Linux 已实现（`FfmpegFullBuildKit`，recipe `full-static-v1`）；本文保留设计与取舍。
+> Windows/macOS 仍只走二进制；硬件编码库（VAAPI/QSV）暂未纳入托管依赖。默认仍推荐二进制目录，
+> 全编码构建是“没有合适的二进制、或要特定补丁/许可组合”时的源码路径。
 >
 > 目标：在一台**没有系统 ffmpeg、也没有 libx264-dev 等开发包**的干净宿主机上，由面板自己下载
 > 并编译一套固定版本的依赖库与 FFmpeg，产出一个可托管、可探测、可回滚、可删除的运行时。
@@ -934,14 +940,14 @@ FFmpeg 自己，H.264/HEVC 软件编码来自 x264/x265，VP9/AV1 来自 libvpx/
 | D. 只发二进制 | 维持 BtbN / gyan / Jellyfin 目录 | 立刻可用、跨机器、无需编译器 | 不能按宿主选补丁/特性；版本受发布方节奏限制；许可证固定 |
 
 结论：C 不解决“干净宿主缺库”，只是把“上游源码”换成“Debian 补丁源码”；D 是当前默认，继续保留。
-B 才是“全编码源码构建”的完整形态，但它是独立产品线，不塞进本版。
+B 才是“全编码源码构建”的完整形态，已在 Linux 落地（`full-static-v1`）。
 
 ### 3. 两种 profile，而不是一个“全编码”开关
 
 | profile | 内容 | 产物许可 | 用途 |
 |---|---|---|---|
 | `lgpl` | 仅宽松许可依赖：libvpx、libaom、libsvtav1、libdav1d、libopus、libmp3lame、libvorbis、libwebp、libtheora、libjxl 等 | LGPL-2.1-or-later | 不想承担 GPL 义务；有 VP9/AV1/Opus 等 |
-| `gpl` | `lgpl` + libx264、libx265、libxvid（以及 GPL-only 滤镜） | GPL-3.0（按实际链接记录） | 需要 H.264/HEVC 软件编码 |
+| `gpl` | `lgpl` + libx264、libx265 | GPL-2.0-or-later（按实际链接记录） | 需要 H.264/HEVC 软件编码 |
 | `nonfree` | 额外 libfdk_aac / libnpp 等 | 不可再分发 | **默认不提供**，只在文档中说明存在 |
 
 `gpl` 不是“另一种源码”，而是 `--enable-gpl` 加 GPL 库；`lgpl` 里也可以有硬件编码器
@@ -1060,8 +1066,8 @@ B 才是“全编码源码构建”的完整形态，但它是独立产品线，
 - 构建逻辑是 Java 里的固定 recipe，不接受目录或用户传入的 `configure` 参数；不拼接 shell。
 - 解包必须防路径穿越、绝对路径、越界软链；沿用 `FfmpegArchive` 的检查并补依赖归档的测试。
 - 构建产物由 agent uid 写出，探测与单帧编码也以 agent 身份执行；面板不以 root 运行新二进制。
-- `lgpl` profile 禁止 `--enable-gpl`，也禁止链接 x264/x265/xvid；构建后静态检查
-  `-encoders` 与链接表，发现 GPL 库即失败，而不是悄悄改许可。
+- `lgpl` profile 禁止 `--enable-gpl`，也禁止链接 x264/x265；当前靠构建参数与
+  `-encoders` 探测双重确认，链接表静态审计仍待补。
 - `nonfree` 不提供 UI；若未来提供，必须单独确认、不可再分发，并在 `runtime.json` 记录。
 - GPL profile 的分发义务：面板应保留对应源码包与构建配方（下载缓存/日志可清理，但配方与版本
   固定），并在设置页说明；这是产品选择，不只是技术问题。
@@ -1071,8 +1077,8 @@ B 才是“全编码源码构建”的完整形态，但它是独立产品线，
 
 - 干净 Debian 13（无 ffmpeg、无 `-dev`）：
   - `lgpl` profile 构建成功，`-encoders` 含 `libvpx-vp9`、`libaom-av1`、`libsvtav1`、`libopus`、
-    `libmp3lame`，不含 `libx264` / `libx265` / `libxvid`；`runtime.json.license=LGPL-2.1-or-later`；
-  - `gpl` profile 构建成功，含 `libx264` / `libx265` / `libxvid`，`license=GPL-3.0`；
+    `libmp3lame`，不含 `libx264` / `libx265`；`runtime.json.license=LGPL-2.1-or-later`；
+  - `gpl` profile 构建成功，含 `libx264` / `libx265`，`license=GPL-2.0-or-later`；
   - 两种 profile 都通过 H.264/HEVC/VP9/AV1 的单帧编码（有对应编码器时）。
 - 依赖归档坏哈希/截断/路径穿越：失败且不产生 `current`。
 - 磁盘不足、超时、取消、断网换源：日志可读，临时目录可回收，旧 `current` 不受影响。
@@ -1081,15 +1087,15 @@ B 才是“全编码源码构建”的完整形态，但它是独立产品线，
 - `lgpl` 产物中静态检查不到 GPL 库；`gpl` 产物许可字段正确。
 - Windows：第一版不做；若后续做，只承诺 MinGW-w64 工具链，不引入 MSVC 全家桶。
 
-### 11. 里程碑（本版不做，仅排期参考）
+### 11. 里程碑（M0–M2 已落地，M3–M4 未做）
 
-| 阶段 | 内容 | 验收 |
+| 阶段 | 内容 | 状态 |
 |---|---|---|
-| M0 | 配方 JSON、依赖 recipe 骨架、预检、UI 只读展示 | 能列出依赖与预计大小，不下载 |
-| M1 | Linux `lgpl` profile：libvpx/aom/svt-av1/opus/mp3lame 编译链 | 干净宿主构建成功并通过编码测试 |
-| M2 | Linux `gpl` profile：x264/x265/xvid | 同上，许可与特性矩阵正确 |
-| M3 | 源码缓存、镜像、断点/重试、依赖版本升级流程 | 失败可恢复，升级有哈希记录 |
-| M4 | Windows MinGW、硬件头文件矩阵、多 GPU 探测 | 各平台有冒烟；不承诺 macOS 源码构建 |
+| M0 | 配方 JSON、依赖 recipe 骨架、预检、UI 展示 | 已完成：`FfmpegFullBuildCatalog` + `/runtime/full-builds` |
+| M1 | Linux `lgpl` profile：libvpx/aom/svt-av1/opus/mp3lame 编译链 | 已完成（依赖栈 + 静态链接） |
+| M2 | Linux `gpl` profile：x264/x265 | 已完成（`featuresDeclared` + 单帧探测） |
+| M3 | 对象缓存、镜像/断点/重试、依赖版本升级流程 | 未做；当前只缓存 cmake/nasm，源码包每次重新下载 |
+| M4 | Windows MinGW、硬件头文件矩阵、多 GPU 探测 | 未做；只承诺 Linux |
 
 ### 12. 开放问题
 

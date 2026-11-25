@@ -349,6 +349,72 @@ public final class FfmpegInstaller {
         return startSourceEntry(entry, features, "source build " + id, compiler);
     }
 
+    /// Starts a managed full-codec static build. The recipe builds its own
+    /// dependency stack (x264/x265/libvpx/libaom/svt-av1/opus/lame/vorbis) and
+    /// the cmake/nasm tools; the host only needs a C/C++ compiler and make.
+    public InstallJob startFullSource(String id,
+                                      FfmpegToolchainManager.Preference compiler)
+            throws IOException {
+        FfmpegFullBuildCatalog.Entry entry = module.fullBuildCatalog().find(id);
+        if (entry == null) {
+            throw new IOException("ffmpeg_no_candidate: unknown full build " + id);
+        }
+        if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                != org.jackhuang.hmcl.util.platform.OperatingSystem.LINUX) {
+            throw new IOException("ffmpeg_full_build_unsupported_platform:"
+                    + " the managed full build is implemented for Linux only");
+        }
+        String versionId = FfmpegRuntimeManager.safeId(entry.id());
+        Path versionDir = toolsDir.resolve(versionId);
+        if (Files.isRegularFile(versionDir.resolve("runtime.json"))) {
+            throw new IOException("ffmpeg_already_installed: " + versionId
+                    + "; delete the installed version before rebuilding");
+        }
+        InstallJob job = newJob("full-source");
+        job.logPath = module.fullBuildKit().logFor(job.id).toString();
+        job.log = "full build " + id + " (" + entry.profile() + ")\n";
+        executor.execute(() -> runFullSource(job, entry, versionDir, compiler));
+        return job;
+    }
+
+    private void runFullSource(InstallJob job, FfmpegFullBuildCatalog.Entry entry,
+                               Path versionDir,
+                               FfmpegToolchainManager.Preference compiler) {
+        try {
+            FfmpegBuildKit.BuildResult result = module.fullBuildKit().build(
+                    entry, versionDir, job.id,
+                    (message, fraction) -> {
+                        if (job.state != State.CANCELLED) {
+                            job.message = message;
+                            job.progress = fraction;
+                            log(job, message + "\n");
+                        }
+                    },
+                    () -> job.state == State.CANCELLED, compiler);
+            if (job.state != State.CANCELLED) {
+                job.state = State.DONE;
+                job.progress = 1;
+                job.message = "done";
+                job.endedAt = System.currentTimeMillis();
+                log(job, "built " + entry.ffmpegVersion() + " with "
+                        + result.featuresEnabled().size() + " features"
+                        + (result.logFile() == null ? "" : "; log: " + result.logFile()) + "\n");
+                module.runtime().refresh();
+            }
+        } catch (CancellationException e) {
+            job.state = State.CANCELLED;
+            job.message = "cancelled";
+            job.endedAt = System.currentTimeMillis();
+        } catch (Exception e) {
+            if (job.state != State.CANCELLED) {
+                job.state = State.FAILED;
+                job.error = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                job.message = "failed";
+                job.endedAt = System.currentTimeMillis();
+            }
+        }
+    }
+
     private InstallJob startSourceEntry(FfmpegCatalog.Entry entry, Set<String> features,
                                         String reason) throws IOException {
         return startSourceEntry(entry, features, reason,

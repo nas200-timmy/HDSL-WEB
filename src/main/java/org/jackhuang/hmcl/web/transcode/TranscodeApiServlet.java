@@ -42,6 +42,7 @@ import org.jackhuang.hmcl.web.transcode.preset.TranscodePreset;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegCapabilities;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegToolchainManager;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegInstaller;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegFullBuildCatalog;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegCatalog;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegLocator;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegProbe;
@@ -153,6 +154,10 @@ public final class TranscodeApiServlet extends HttpServlet {
         }
         if ("/runtime/source".equals(path)) {
             sourceJson(response);
+            return;
+        }
+        if ("/runtime/full-builds".equals(path)) {
+            fullBuildsJson(response);
             return;
         }
         if (path.startsWith("/runtime/jobs/")) {
@@ -819,6 +824,8 @@ public final class TranscodeApiServlet extends HttpServlet {
                                 : module.installer().startSource(features(body),
                                         stringField(body, "major"), compiler);
                     }
+                    case "full-source" -> module.installer().startFullSource(
+                            requiredField(body, "id"), compiler);
                     default -> throw new IOException("unknown ffmpeg install mode: " + mode);
                 };
             } else {
@@ -1030,6 +1037,43 @@ public final class TranscodeApiServlet extends HttpServlet {
         boolean portableFallback = host.os().equals("windows") && host.arch().equals("x64");
         body.addProperty("buildable", candidates.size() > 0 && (toolchain.usable() || portableFallback));
         body.addProperty("portableFallback", portableFallback);
+        Json.write(response, body);
+    }
+
+    /// The managed full-codec recipes and whether this host can start one. The
+    /// installer still downloads cmake/nasm itself; the precheck only needs the
+    /// base compiler, make and disk space.
+    private void fullBuildsJson(HttpServletResponse response) throws IOException {
+        JsonObject body = new JsonObject();
+        JsonArray entries = new JsonArray();
+        for (FfmpegFullBuildCatalog.Entry entry : module.fullBuildCatalog().entries()) {
+            JsonObject item = new JsonObject();
+            item.addProperty("id", entry.id());
+            item.addProperty("profile", entry.profile());
+            item.addProperty("ffmpegVersion", entry.ffmpegVersion());
+            item.addProperty("license", entry.gpl() ? "GPL-2.0-or-later" : "LGPL-2.1-or-later");
+            item.addProperty("downloadBytes", entry.downloadBytes());
+            item.addProperty("buildMinutes", entry.buildMinutes());
+            item.addProperty("diskBytes", entry.diskBytes());
+            JsonArray features = new JsonArray();
+            entry.features().forEach(features::add);
+            item.add("features", features);
+            JsonArray dependencies = new JsonArray();
+            for (FfmpegFullBuildCatalog.Dependency dependency : entry.dependencies()) {
+                JsonObject dep = new JsonObject();
+                dep.addProperty("id", dependency.id());
+                dep.addProperty("kind", dependency.kind());
+                dep.addProperty("version", dependency.version());
+                dependencies.add(dep);
+            }
+            item.add("dependencies", dependencies);
+            entries.add(item);
+        }
+        body.add("entries", entries);
+        FfmpegToolchainManager.Toolchain toolchain = module.toolchains().detect();
+        body.addProperty("available", toolchain.usable());
+        body.addProperty("reason", toolchain.usable() ? ""
+                : toolchain.missingMessage());
         Json.write(response, body);
     }
 

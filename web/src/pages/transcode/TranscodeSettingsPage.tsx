@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { api, type TranscodeCapabilities, type TranscodeInstallJob, type TranscodeRuntime,
-  type TranscodeSourceStatus } from "../../api";
+import { api, type TranscodeCapabilities, type TranscodeFullBuilds, type TranscodeInstallJob,
+  type TranscodeRuntime, type TranscodeSourceStatus } from "../../api";
 import { refreshTranscodeFeature, setTranscodeFeature, useTranscodeFeature } from "../../transcodeFeature";
 import { errMsg } from "../../utils";
 import { toast } from "../../store";
@@ -13,6 +13,8 @@ export function TranscodeSettingsPage() {
   const [capabilities, setCapabilities] = useState<TranscodeCapabilities | null>(null);
   const [runtime, setRuntime] = useState<TranscodeRuntime | null>(null);
   const [sourceStatus, setSourceStatus] = useState<TranscodeSourceStatus | null>(null);
+  const [fullBuilds, setFullBuilds] = useState<TranscodeFullBuilds | null>(null);
+  const [fullBuildId, setFullBuildId] = useState("");
   const [runtimeMode, setRuntimeMode] = useState<"system" | "binary" | "source">("binary");
   const [binaryVendor, setBinaryVendor] = useState("");
   const [binaryMajor, setBinaryMajor] = useState("");
@@ -34,14 +36,16 @@ export function TranscodeSettingsPage() {
     setBusy(true);
     setError(null);
     try {
-      const [nextCapabilities, nextRuntime, nextSource] = await Promise.all([
+      const [nextCapabilities, nextRuntime, nextSource, nextFull] = await Promise.all([
         api.transcode.capabilities(),
         api.transcode.runtime(),
         api.transcode.runtimeSource().catch(() => null),
+        api.transcode.runtimeFullBuilds().catch(() => null),
       ]);
       setCapabilities(nextCapabilities);
       setRuntime(nextRuntime);
       setSourceStatus(nextSource);
+      setFullBuilds(nextFull);
       await refreshTranscodeFeature();
     } catch (e) {
       setError(errMsg(e));
@@ -75,7 +79,7 @@ export function TranscodeSettingsPage() {
   }, [installJob]);
 
   const startRuntimeInstall = async (body: {
-    mode: "auto" | "artifact" | "package" | "source";
+    mode: "auto" | "artifact" | "package" | "source" | "full-source";
     id?: string;
     major?: string;
     features?: string[];
@@ -200,6 +204,14 @@ export function TranscodeSettingsPage() {
     ?? sourceVersions[0] ?? null;
   const sourceInstalled = effectiveSource
     ? (runtime?.installed ?? []).some((item) => item.catalogId === effectiveSource.id)
+    : false;
+  const fullEntries = (fullBuilds?.entries ?? [])
+    .filter(() => !host || host.os === "linux");
+  const effectiveFull = fullEntries.find((entry) => entry.id === fullBuildId)
+    ?? fullEntries[0] ?? null;
+  const fullSelected = fullBuildId !== "" && effectiveFull != null;
+  const fullInstalled = effectiveFull
+    ? (runtime?.installed ?? []).some((item) => item.catalogId === effectiveFull.id)
     : false;
   const sourceToolchain = sourceStatus?.toolchain;
   const missingCodecDeps = sourceToolchain?.dependencies.filter((dep) => !dep.present) ?? [];
@@ -371,6 +383,80 @@ export function TranscodeSettingsPage() {
         {runtimeMode === "source" && (
           <div style={{ padding: "0 8px 10px", display: "grid", gap: 6 }}>
             <div className="comp-row">
+              <span className="comp-label">构建方案</span>
+              <span className="comp-value">
+                <select className="input" style={{ width: "auto", minWidth: 280 }}
+                        value={fullSelected && effectiveFull ? effectiveFull.id : "minimal"}
+                        onChange={(e) => setFullBuildId(e.target.value === "minimal" ? "" : e.target.value)}>
+                  <option value="minimal">官方源码 · 宿主依赖（最小构建）</option>
+                  {fullEntries.map((entry) => (
+                    <option key={entry.id} value={entry.id}>
+                      {entry.profile === "gpl" ? "全编码 GPL" : "全编码 LGPL"} · {entry.ffmpegVersion}（静态）
+                    </option>
+                  ))}
+                </select>
+              </span>
+            </div>
+            {fullSelected && effectiveFull && (
+              <>
+                <div className="comp-row">
+                  <span className="comp-label">许可</span>
+                  <span className="comp-value" style={{ fontSize: 12 }}>
+                    {effectiveFull.license}
+                    {" · "}
+                    {effectiveFull.profile === "gpl"
+                      ? "含 libx264/libx265 等 GPL 编码器"
+                      : "不含 GPL 编码器"}
+                  </span>
+                </div>
+                <div className="comp-row">
+                  <span className="comp-label">依赖</span>
+                  <span className="comp-value" style={{ fontSize: 11, overflowWrap: "anywhere" }}>
+                    {effectiveFull.dependencies.filter((dep) => dep.kind === "codec")
+                      .map((dep) => `${dep.id} ${dep.version}`).join(" · ")}
+                  </span>
+                </div>
+                <div className="comp-row">
+                  <span className="comp-label">预计</span>
+                  <span className="comp-value" style={{ fontSize: 11 }}>
+                    下载 {Math.round(effectiveFull.downloadBytes / 1048576)} MB ·
+                    约 {effectiveFull.buildMinutes} 分钟 ·
+                    磁盘 {Math.round(effectiveFull.diskBytes / 1073741824)} GiB
+                  </span>
+                </div>
+                <div style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", lineHeight: 1.6 }}>
+                  声明编码器：{effectiveFull.features.join("、")}
+                  <br />
+                  全量构建会下载并编译 x264/x265/libvpx/libaom/svt-av1/opus/lame/vorbis，
+                  以及 cmake/nasm；产物是静态 ffmpeg（libav 与编码库静态，glibc 仍动态）。
+                  首次构建较慢，之后会复用 cmake/nasm 缓存。
+                  {fullBuilds && !fullBuilds.available && (
+                    <>
+                      <br />
+                      <span style={{ color: "var(--monet-error)" }}>{fullBuilds.reason}</span>
+                    </>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button className="btn btn-raised"
+                          disabled={!fullBuilds?.available || fullInstalled
+                            || installJob?.state === "running"}
+                          onClick={() => effectiveFull && void startRuntimeInstall({
+                            mode: "full-source", id: effectiveFull.id, compiler: "system",
+                          })}>
+                    {fullInstalled ? "已构建" : "开始全量构建"}
+                  </button>
+                  <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)",
+                                 alignSelf: "center" }}>
+                    {fullInstalled
+                      ? "这个 recipe 已经构建过；要重编先删除已安装的运行时。"
+                      : "只有点这里才会下载源码并编译；面板不会替你 sudo。"}
+                  </span>
+                </div>
+              </>
+            )}
+            {!fullSelected && (<>
+            <div className="comp-row">
               <span className="comp-label">源码来源</span>
               <span className="comp-value">
                 <select className="input" style={{ width: "auto", minWidth: 220 }}
@@ -468,6 +554,7 @@ export function TranscodeSettingsPage() {
                   : "只有点这里才会下载源码并编译。"}
               </span>
             </div>
+            </>)}
           </div>
         )}
 

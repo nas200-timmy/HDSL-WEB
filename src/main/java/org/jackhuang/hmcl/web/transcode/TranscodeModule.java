@@ -24,6 +24,8 @@ import org.jackhuang.hmcl.web.transcode.preset.PresetStore;
 import org.jackhuang.hmcl.web.transcode.quality.QualityService;
 import org.jackhuang.hmcl.web.transcode.queue.TranscodeQueue;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegBuildKit;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegFullBuildCatalog;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegFullBuildKit;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegCatalog;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegInstaller;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegRuntimeManager;
@@ -56,6 +58,8 @@ public final class TranscodeModule {
     private final FfmpegRuntimeManager runtimeManager;
     private final FfmpegToolchainManager toolchains;
     private final FfmpegBuildKit buildKit;
+    private final FfmpegFullBuildCatalog.Catalog fullBuildCatalog;
+    private final FfmpegFullBuildKit fullBuildKit;
 
     public TranscodeModule(ServerConfig config, EventBus eventBus) {
         this.config = config;
@@ -70,11 +74,16 @@ public final class TranscodeModule {
         this.runtimeManager = new FfmpegRuntimeManager(
                 TranscodePaths.dataDir(config).resolve("tools").resolve("ffmpeg"), catalog);
         this.toolchains = new FfmpegToolchainManager(config.dataDir.resolve("toolchains"));
+        Path ffmpegToolsDir = TranscodePaths.dataDir(config).resolve("tools").resolve("ffmpeg");
+        Path transcodeLogsDir = TranscodePaths.dataDir(config).resolve("logs");
         this.buildKit = new FfmpegBuildKit(
-                TranscodePaths.dataDir(config).resolve("tools").resolve("ffmpeg"),
-                runtimeManager, toolchains, TranscodePaths.dataDir(config).resolve("logs"));
+                ffmpegToolsDir, runtimeManager, toolchains, transcodeLogsDir);
+        this.fullBuildCatalog = FfmpegFullBuildCatalog.load();
+        this.fullBuildKit = new FfmpegFullBuildKit(
+                ffmpegToolsDir, runtimeManager, toolchains, transcodeLogsDir);
         this.runtimeManager.setBinaryMirror(() -> config.transcode.binaryMirror);
         this.buildKit.setSourceMirror(() -> config.transcode.sourceMirror);
+        this.fullBuildKit.setSourceMirror(() -> config.transcode.sourceMirror);
         this.installer = new FfmpegInstaller(this);
         if (feature.enabled()) {
             queue.start();
@@ -131,6 +140,14 @@ public final class TranscodeModule {
 
     public FfmpegBuildKit buildKit() {
         return buildKit;
+    }
+
+    public FfmpegFullBuildCatalog.Catalog fullBuildCatalog() {
+        return fullBuildCatalog;
+    }
+
+    public FfmpegFullBuildKit fullBuildKit() {
+        return fullBuildKit;
     }
 
     private static @org.jetbrains.annotations.Nullable Path catalogPath(ServerConfig config) {
