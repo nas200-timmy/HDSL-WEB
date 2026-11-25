@@ -333,6 +333,30 @@ public final class ServerConfigWriter {
         writeAtomically(yamlFile, root);
     }
 
+    /// Records which runtime the transcode queue uses in `server.yaml`.
+    ///
+    /// Only `default_runtime` is touched; every other key under `transcode:`
+    /// rides along untouched. The caller validates the value, so a bad one never
+    /// reaches the file.
+    ///
+    /// @param dataDir the directory `server.yaml` lives in
+    /// @param value   `auto`, `system`, or an installed runtime id
+    /// @throws IOException when the file cannot be read or written
+    public static void setTranscodeDefaultRuntime(Path dataDir, String value) throws IOException {
+        Path yamlFile = dataDir.resolve(ServerConfigLoader.YAML_FILE_NAME);
+        Map<String, Object> root = readExisting(yamlFile);
+        Map<String, Object> transcode = new LinkedHashMap<>();
+        Object existing = root.get("transcode");
+        if (existing instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                transcode.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+        }
+        transcode.put("default_runtime", value);
+        root.put("transcode", transcode);
+        writeAtomically(yamlFile, root);
+    }
+
     /// Records the log-retention windows in `server.yaml`'s `logs:` section.
     ///
     /// Only `audit_days` / `panel_days` are touched; any other key an operator

@@ -19,6 +19,7 @@ package org.jackhuang.hmcl.web.transcode.runtime;
 
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.transcode.TranscodePaths;
+import org.jackhuang.hmcl.util.logging.Logger;
 import org.jackhuang.hmcl.util.platform.Executables;
 import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.jetbrains.annotations.NotNullByDefault;
@@ -35,14 +36,70 @@ import java.util.Optional;
 
 /// Finds the `ffmpeg` executable the transcode module should use.
 ///
-/// Order: explicit `transcode.ffmpeg_path` / `HDSL_FFMPEG_PATH`, then the panel-managed
-/// copy under `<data>/transcode/tools/ffmpeg/current/bin`, then `PATH`. A sibling
-/// `ffprobe` is required for progress duration and output validation; a build without
-/// one is reported as unavailable rather than half-working.
+/// Order: explicit `transcode.ffmpeg_path` / `HDSL_FFMPEG_PATH`, then the
+/// panel's `transcode.default_runtime` selection:
+///
+/// - `auto` — the managed `current` runtime, then `PATH`;
+/// - `system` — `PATH` only, even when a managed runtime exists;
+/// - a runtime id — that installed directory, with **no** fallback to `PATH`
+///   (a missing explicit choice is an error the page can show, not a silent
+///   switch to a different binary).
+///
+/// A sibling `ffprobe` is required for progress duration and output validation;
+/// a build without one is reported as unavailable rather than half-working.
 @NotNullByDefault
 public final class FfmpegLocator {
 
     private FfmpegLocator() {
+    }
+
+    /// Where the current default resolves to, for the settings page.
+    ///
+    /// @param kind   `path`, `managed`, `system`, `missing` or `none`
+    /// @param id     the managed runtime id for `managed`/`missing`, or `null`
+    /// @param ffmpeg the executable, or `null`
+    /// @param ffprobe the sibling probe, or `null`
+    public record Resolution(String kind, @Nullable String id,
+                             @Nullable Path ffmpeg, @Nullable Path ffprobe) {
+    }
+
+    /// The configured default, resolved without starting a process.
+    public static Resolution resolve(ServerConfig config) {
+        Path ffmpeg = locate(config, "ffmpeg");
+        Path ffprobe = ffmpeg == null ? null : sibling(ffmpeg, "ffprobe");
+        String configured = config.transcode.ffmpegPath;
+        String preference = config.transcode.defaultRuntime;
+        String normalized = preference == null ? "auto" : preference.trim();
+        String id = null;
+        String kind;
+        if (configured != null && !configured.isBlank()) {
+            kind = ffmpeg == null ? "missing" : "path";
+        } else if ("system".equalsIgnoreCase(normalized)) {
+            kind = ffmpeg == null ? "missing" : "system";
+        } else if (!"auto".equalsIgnoreCase(normalized)) {
+            id = normalized;
+            kind = ffmpeg == null ? "missing" : "managed";
+        } else {
+            Path toolsDir = TranscodePaths.dataDir(config)
+                    .resolve("tools").resolve("ffmpeg");
+            String pointed = pointerVersion(toolsDir);
+            if (pointed != null) {
+                id = pointed;
+                kind = ffmpeg == null ? "missing" : "managed";
+            } else if (Files.isRegularFile(toolsDir.resolve("current").resolve("bin")
+                    .resolve(executableName("ffmpeg")))) {
+                id = "current";
+                kind = ffmpeg == null ? "missing" : "managed";
+            } else {
+                kind = ffmpeg == null ? "none" : "system";
+            }
+        }
+        return new Resolution(kind, id, ffmpeg, ffprobe);
+    }
+
+    /// The `ffmpeg` or `ffprobe` on `PATH`, ignoring the panel's own runtimes.
+    public static @Nullable Path systemExecutable(String name) {
+        return Executables.resolve(name).orElse(null);
     }
 
     /// The pair of programs, or `null` when either is missing.
@@ -85,6 +142,24 @@ public final class FfmpegLocator {
 
         Path toolsDir = TranscodePaths.dataDir(config)
                 .resolve("tools").resolve("ffmpeg");
+        String preference = config.transcode.defaultRuntime;
+        String normalized = preference == null ? "auto" : preference.trim();
+        if ("system".equalsIgnoreCase(normalized)) {
+            // Explicit: never let a managed runtime win here.
+            return Executables.resolve(name).orElse(null);
+        }
+        if (!"auto".equalsIgnoreCase(normalized) && !normalized.isBlank()) {
+            Path version = toolsDir.resolve(normalized).normalize();
+            if (version.startsWith(toolsDir)) {
+                Path candidate = version.resolve("bin").resolve(executableName(name));
+                if (Files.isRegularFile(candidate)) {
+                    return candidate.toAbsolutePath().normalize();
+                }
+            }
+            Logger.LOG.warning("transcode.default_runtime=" + normalized
+                    + " is not an installed runtime; not falling back to another binary");
+            return null;
+        }
         String pointed = pointerVersion(toolsDir);
         if (pointed != null) {
             Path version = toolsDir.resolve(pointed).normalize();

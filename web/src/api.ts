@@ -1319,12 +1319,15 @@ export const api = {
       id?: string;
       major?: string;
       features?: string[];
+      compiler?: "auto" | "system" | "portable";
       url?: string;
       sha256?: string;
       version?: string;
     }) => request<TranscodeInstallJob>("/api/transcode/runtime/install", jsonInit("POST", body)),
     runtimeSelect: (version: string) =>
       request<TranscodeRuntime>("/api/transcode/runtime/select", jsonInit("POST", { version })),
+    runtimeDefault: (value: string) =>
+      request<TranscodeRuntime>("/api/transcode/runtime/default", jsonInit("PUT", { value })),
     runtimeRollback: () =>
       request<TranscodeRuntime>("/api/transcode/runtime/rollback", jsonInit("POST", {})),
     runtimeDelete: (id: string) =>
@@ -1844,12 +1847,38 @@ export interface TranscodeSourceStatus {
   portableFallback: boolean;
 }
 
+export interface TranscodeResolvedRuntime {
+  kind: "path" | "managed" | "system" | "missing" | "none";
+  id?: string;
+  ffmpeg: string;
+  ffprobe: string;
+}
+
+export interface TranscodeSystemRuntime {
+  available: boolean;
+  version: string;
+  ffmpeg: string;
+  ffprobe: string;
+  error: string;
+}
+
+export interface TranscodeCompilerChoice {
+  id: "system" | "portable";
+  label: string;
+  available: boolean;
+  detail: string;
+}
+
 export interface TranscodeRuntime {
   host: { os: string; arch: string; libc: string; libcVersion: string };
   majors: string[];
   current: TranscodeRuntimeVersion | null;
   installed: TranscodeRuntimeVersion[];
   catalog: TranscodeCatalogEntry[];
+  default: string;
+  resolved: TranscodeResolvedRuntime;
+  system: TranscodeSystemRuntime;
+  compilers: TranscodeCompilerChoice[];
   recommended: { entry: TranscodeCatalogEntry; reason: string } | null;
   recommendationError?: string;
 }

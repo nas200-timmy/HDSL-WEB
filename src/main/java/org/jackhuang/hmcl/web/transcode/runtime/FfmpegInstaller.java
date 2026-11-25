@@ -314,13 +314,26 @@ public final class FfmpegInstaller {
     /// Selects a pinned source entry by version line (`auto`, `7.1`, `8.1`) and
     /// starts a build job. An explicit line never falls through to another one.
     public InstallJob startSource(Set<String> features, @Nullable String major) throws IOException {
+        return startSource(features, major, FfmpegToolchainManager.Preference.AUTO);
+    }
+
+    /// The same, with an explicit compiler choice for the build.
+    public InstallJob startSource(Set<String> features, @Nullable String major,
+                                  FfmpegToolchainManager.Preference compiler) throws IOException {
         FfmpegSelector.Recommendation recommendation = FfmpegSelector.selectSource(
                 module.catalog(), FfmpegCapabilities.detect(), features, major);
-        return startSourceEntry(recommendation.entry(), features, recommendation.reason());
+        return startSourceEntry(recommendation.entry(), features, recommendation.reason(), compiler);
     }
 
     /// Starts the source entry an operator picked from the catalogue.
     public InstallJob startSourceArtifact(String id, Set<String> features) throws IOException {
+        return startSourceArtifact(id, features, FfmpegToolchainManager.Preference.AUTO);
+    }
+
+    /// The same, with an explicit compiler choice for the build.
+    public InstallJob startSourceArtifact(String id, Set<String> features,
+                                          FfmpegToolchainManager.Preference compiler)
+            throws IOException {
         FfmpegCatalog.Entry entry = module.catalog().find(id);
         if (entry == null) {
             throw new IOException("ffmpeg_no_candidate: unknown catalog id " + id);
@@ -333,11 +346,19 @@ public final class FfmpegInstaller {
             throw new IOException("ffmpeg_unsupported_platform: " + id + " is for "
                     + entry.os() + "/" + entry.arch() + "/" + entry.libc());
         }
-        return startSourceEntry(entry, features, "source build " + id);
+        return startSourceEntry(entry, features, "source build " + id, compiler);
     }
 
     private InstallJob startSourceEntry(FfmpegCatalog.Entry entry, Set<String> features,
                                         String reason) throws IOException {
+        return startSourceEntry(entry, features, reason,
+                FfmpegToolchainManager.Preference.AUTO);
+    }
+
+    private InstallJob startSourceEntry(FfmpegCatalog.Entry entry, Set<String> features,
+                                        String reason,
+                                        FfmpegToolchainManager.Preference compiler)
+            throws IOException {
         String versionId = FfmpegRuntimeManager.safeId("source-" + entry.ffmpegVersion()
                 + "-" + (entry.buildRecipe().isEmpty() ? "default" : entry.buildRecipe()));
         Path versionDir = toolsDir.resolve(versionId);
@@ -348,12 +369,13 @@ public final class FfmpegInstaller {
         InstallJob job = newJob("source");
         job.logPath = module.buildKit().logFor(job.id).toString();
         job.log = reason + "\n";
-        executor.execute(() -> runSource(job, entry, versionDir, features));
+        executor.execute(() -> runSource(job, entry, versionDir, features, compiler));
         return job;
     }
 
     private void runSource(InstallJob job, FfmpegCatalog.Entry entry, Path versionDir,
-                           Set<String> features) {
+                           Set<String> features,
+                           FfmpegToolchainManager.Preference compiler) {
         try {
             FfmpegBuildKit.BuildResult result = module.buildKit().build(
                     entry, versionDir, job.id, features,
@@ -367,7 +389,7 @@ public final class FfmpegInstaller {
                             log(job, message + "\n");
                         }
                     },
-                    () -> job.state == State.CANCELLED);
+                    () -> job.state == State.CANCELLED, compiler);
             if (job.state != State.CANCELLED) {
                 job.state = State.DONE;
                 job.progress = 1;

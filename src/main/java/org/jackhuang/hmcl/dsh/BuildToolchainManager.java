@@ -376,6 +376,7 @@ public final class BuildToolchainManager {
     private final BootstrapRuntimeManager.ArtifactSource source;
     private final Object lock = new Object();
     private volatile @Nullable Cached detectCache;
+    private volatile @Nullable Cached systemCache;
 
     /// @param root the `<data>/toolchains/build` directory
     public BuildToolchainManager(Path root) {
@@ -455,6 +456,30 @@ public final class BuildToolchainManager {
         Toolchain toolchain = detectUncached();
         detectCache = new Cached(System.currentTimeMillis(), toolchain);
         return toolchain;
+    }
+
+    /// The host's own compiler toolchain, without the portable fallback.
+    ///
+    /// Used when a caller explicitly asked for the system compiler: an
+    /// unusable answer must be reported, not silently replaced by a download.
+    ///
+    /// @return the system toolchain, usable or not
+    public Toolchain systemToolchain() {
+        Cached cached = systemCache;
+        long now = System.currentTimeMillis();
+        if (cached != null && now - cached.at < CACHE_MILLIS) {
+            return cached.toolchain();
+        }
+        Toolchain toolchain = OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS
+                ? windowsToolchain(null)
+                : posixSystem();
+        systemCache = new Cached(now, toolchain);
+        return toolchain;
+    }
+
+    /// Whether this platform has a pinned portable toolchain.
+    public static boolean portableAvailable() {
+        return portableSupported();
     }
 
     /// Makes sure a build has a usable toolchain, installing the pinned

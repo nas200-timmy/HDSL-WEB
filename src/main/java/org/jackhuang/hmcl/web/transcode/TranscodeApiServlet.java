@@ -43,6 +43,7 @@ import org.jackhuang.hmcl.web.transcode.runtime.FfmpegCapabilities;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegToolchainManager;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegInstaller;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegCatalog;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegLocator;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegProbe;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegRuntimeManager;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegSelector;
@@ -230,6 +231,10 @@ public final class TranscodeApiServlet extends HttpServlet {
     @Override
     protected void doPut(HttpServletRequest request, HttpServletResponse response) throws IOException {
         String path = path(request);
+        if ("/runtime/default".equals(path)) {
+            runtimeDefault(request, response);
+            return;
+        }
         if (!"/settings".equals(path)) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
             return;
@@ -794,6 +799,8 @@ public final class TranscodeApiServlet extends HttpServlet {
             return;
         }
         try {
+            FfmpegToolchainManager.Preference compiler =
+                    FfmpegToolchainManager.Preference.parse(stringField(body, "compiler"));
             FfmpegInstaller.InstallJob job;
             String mode = stringField(body, "mode");
             if (mode != null && !mode.isBlank()) {
@@ -808,8 +815,9 @@ public final class TranscodeApiServlet extends HttpServlet {
                     case "source" -> {
                         String id = stringField(body, "id");
                         yield id != null && !id.isBlank()
-                                ? module.installer().startSourceArtifact(id, features(body))
-                                : module.installer().startSource(features(body), stringField(body, "major"));
+                                ? module.installer().startSourceArtifact(id, features(body), compiler)
+                                : module.installer().startSource(features(body),
+                                        stringField(body, "major"), compiler);
                     }
                     default -> throw new IOException("unknown ffmpeg install mode: " + mode);
                 };
@@ -849,6 +857,47 @@ public final class TranscodeApiServlet extends HttpServlet {
         }
     }
 
+    /// Chooses the runtime the transcode queue should use (`auto`, `system`, or
+    /// an installed id). Changing this is an execution-shaped decision, so it
+    /// takes the same developer elevation as selecting an installed runtime.
+    private void runtimeDefault(HttpServletRequest request, HttpServletResponse response)
+            throws IOException {
+        if (!requireHumanElevation(request, response)) {
+            return;
+        }
+        JsonObject body = readJson(request);
+        String value = body == null ? null : stringField(body, "value");
+        if (value == null || value.isBlank()) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "value is required");
+            return;
+        }
+        String normalized;
+        try {
+            normalized = ServerConfigLoader.defaultRuntime(value, "default_runtime");
+        } catch (ServerConfigLoader.ConfigException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+            return;
+        }
+        if (!"auto".equals(normalized) && !"system".equals(normalized)) {
+            boolean installed = module.runtimeManager().installed().stream()
+                    .anyMatch(item -> item.id().equals(normalized));
+            if (!installed) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "runtime_not_installed: " + normalized);
+                return;
+            }
+        }
+        try {
+            ServerConfigWriter.setTranscodeDefaultRuntime(config.dataDir, normalized);
+            config.transcode.defaultRuntime = normalized;
+            module.runtime().refresh();
+            audit("transcode.runtime.default", normalized, "success", request);
+            runtimeJson(response);
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+        }
+    }
+
     private void runtimeRollback(HttpServletRequest request, HttpServletResponse response) throws IOException {
         if (!requireHumanElevation(request, response)) {
             return;
@@ -885,6 +934,49 @@ public final class TranscodeApiServlet extends HttpServlet {
             installed.add(installedJson(entry));
         }
         body.add("installed", installed);
+
+        body.addProperty("default", config.transcode.defaultRuntime == null
+                ? "auto" : config.transcode.defaultRuntime);
+        FfmpegLocator.Resolution resolution = FfmpegLocator.resolve(config);
+        JsonObject resolved = new JsonObject();
+        resolved.addProperty("kind", resolution.kind());
+        if (resolution.id() != null) {
+            resolved.addProperty("id", resolution.id());
+        }
+        resolved.addProperty("ffmpeg", resolution.ffmpeg() == null
+                ? "" : resolution.ffmpeg().toString());
+        resolved.addProperty("ffprobe", resolution.ffprobe() == null
+                ? "" : resolution.ffprobe().toString());
+        body.add("resolved", resolved);
+
+        Path systemFfmpeg = FfmpegLocator.systemExecutable("ffmpeg");
+        Path systemFfprobe = FfmpegLocator.systemExecutable("ffprobe");
+        JsonObject system = new JsonObject();
+        system.addProperty("ffmpeg", systemFfmpeg == null ? "" : systemFfmpeg.toString());
+        system.addProperty("ffprobe", systemFfprobe == null ? "" : systemFfprobe.toString());
+        if (systemFfmpeg != null && systemFfprobe != null) {
+            FfmpegProbe.FfmpegInfo info = FfmpegProbe.probe(
+                    new FfmpegLocator.FfmpegPaths(systemFfmpeg, systemFfprobe));
+            system.addProperty("available", info.available());
+            system.addProperty("version", info.version());
+            system.addProperty("error", info.error() == null ? "" : info.error());
+        } else {
+            system.addProperty("available", false);
+            system.addProperty("version", "");
+            system.addProperty("error", "ffmpeg/ffprobe not found on PATH");
+        }
+        body.add("system", system);
+
+        JsonArray compilers = new JsonArray();
+        for (FfmpegToolchainManager.CompilerChoice choice : module.toolchains().compilers()) {
+            JsonObject item = new JsonObject();
+            item.addProperty("id", choice.id());
+            item.addProperty("label", choice.label());
+            item.addProperty("available", choice.available());
+            item.addProperty("detail", choice.detail());
+            compilers.add(item);
+        }
+        body.add("compilers", compilers);
 
         JsonArray catalog = new JsonArray();
         for (FfmpegCatalog.Entry entry : module.catalog().entries()) {

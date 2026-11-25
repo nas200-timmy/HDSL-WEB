@@ -307,8 +307,16 @@ public final class ServerConfig {
         public volatile String mediaRoot = "";
 
         /// ffmpeg executable (`transcode.ffmpeg_path`, `HDSL_FFMPEG_PATH`); empty
-        /// means resolve from `PATH` and then from `<data>/transcode/tools/ffmpeg`.
+        /// means resolve through [#defaultRuntime]. A non-empty value is a hard
+        /// override: it wins over every managed runtime.
         public volatile String ffmpegPath = "";
+
+        /// Which runtime the transcode queue uses (`transcode.default_runtime`,
+        /// `HDSL_TRANSCODE_DEFAULT_RUNTIME`): `auto`, `system`, or one installed
+        /// runtime id. `auto` prefers the panel-managed current runtime and falls
+        /// back to `PATH`; `system` always uses `PATH`; an id uses that runtime
+        /// and **does not** fall back when it is missing.
+        public volatile String defaultRuntime = "auto";
 
         /// A mirror prefix for ffmpeg binary downloads
         /// (`transcode.binary_mirror`, `HDSL_FFMPEG_BINARY_MIRROR`). Empty uses

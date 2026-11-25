@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type TranscodeCapabilities, type TranscodeInstallJob, type TranscodeRuntime, type TranscodeSourceStatus } from "../../api";
+import { api, type TranscodeCapabilities, type TranscodeInstallJob, type TranscodeRuntime } from "../../api";
 import { refreshTranscodeFeature, setTranscodeFeature, useTranscodeFeature } from "../../transcodeFeature";
 import { errMsg } from "../../utils";
 import { toast } from "../../store";
@@ -11,8 +11,13 @@ export function TranscodeSettingsPage() {
   const feature = useTranscodeFeature();
   const [capabilities, setCapabilities] = useState<TranscodeCapabilities | null>(null);
   const [runtime, setRuntime] = useState<TranscodeRuntime | null>(null);
-  const [sourceStatus, setSourceStatus] = useState<TranscodeSourceStatus | null>(null);
-  const [preferredMajor, setPreferredMajor] = useState("auto");
+  const [runtimeMode, setRuntimeMode] = useState<"system" | "binary" | "source">("binary");
+  const [binaryVendor, setBinaryVendor] = useState("");
+  const [binaryMajor, setBinaryMajor] = useState("");
+  const [binaryId, setBinaryId] = useState("");
+  const [sourceOrigin, setSourceOrigin] = useState("");
+  const [sourceId, setSourceId] = useState("");
+  const [compilerId, setCompilerId] = useState("auto");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [policy, setPolicy] = useState("ask");
@@ -33,11 +38,10 @@ export function TranscodeSettingsPage() {
     try {
       const [nextCapabilities, nextRuntime] = await Promise.all([
         api.transcode.capabilities(),
-        api.transcode.runtime(preferredMajor),
+        api.transcode.runtime(),
       ]);
       setCapabilities(nextCapabilities);
       setRuntime(nextRuntime);
-      setSourceStatus(await api.transcode.runtimeSource().catch(() => null));
       await refreshTranscodeFeature();
     } catch (e) {
       setError(errMsg(e));
@@ -48,7 +52,7 @@ export function TranscodeSettingsPage() {
 
   useEffect(() => {
     void load();
-  }, [preferredMajor]);
+  }, []);
 
   useEffect(() => {
     if (!feature) return;
@@ -88,9 +92,21 @@ export function TranscodeSettingsPage() {
     id?: string;
     major?: string;
     features?: string[];
+    compiler?: "auto" | "system" | "portable";
   }) => {
     try {
       setInstallJob(await api.transcode.runtimeInstallArtifact(body));
+    } catch (e) {
+      toast("error", errMsg(e));
+    }
+  };
+
+  const setDefaultRuntime = async (value: string) => {
+    try {
+      setRuntime(await api.transcode.runtimeDefault(value));
+      toast("success", value === "system"
+        ? "转码队列将使用系统 ffmpeg"
+        : value === "auto" ? "转码队列将自动选择 ffmpeg" : "已设为默认 ffmpeg");
     } catch (e) {
       toast("error", errMsg(e));
     }
@@ -165,6 +181,39 @@ export function TranscodeSettingsPage() {
     }
   };
 
+  const catalog = runtime?.catalog ?? [];
+  const binaries = catalog.filter((entry) => entry.kind === "binary");
+  const sources = catalog.filter((entry) => entry.kind === "source");
+  const host = runtime?.host;
+  const vendorIds = [...new Set(binaries.map((entry) => entry.vendor))];
+  const effectiveVendor = vendorIds.includes(binaryVendor) ? binaryVendor : vendorIds[0] ?? "";
+  const platformBinaries = binaries.filter((entry) => entry.vendor === effectiveVendor
+    && entry.os === host?.os && entry.arch === host?.arch
+    && (!entry.libc || entry.libc === "none" || entry.libc === host?.libc));
+  const binaryMajors = [...new Set(platformBinaries.map((entry) => entry.major).filter(Boolean))];
+  const effectiveMajor = binaryMajors.includes(binaryMajor) ? binaryMajor : binaryMajors[0] ?? "";
+  const majorBinaries = platformBinaries.filter((entry) => entry.major === effectiveMajor);
+  const effectiveBinary = majorBinaries.find((entry) => entry.id === binaryId)
+    ?? majorBinaries[0] ?? null;
+  const originIds = [...new Set(sources.map((entry) => entry.vendor))];
+  const effectiveOrigin = originIds.includes(sourceOrigin) ? sourceOrigin : originIds[0] ?? "";
+  const originSources = sources.filter((entry) => entry.vendor === effectiveOrigin);
+  const sourceVersions = originSources;
+  const effectiveSource = sourceVersions.find((entry) => entry.id === sourceId)
+    ?? sourceVersions[0] ?? null;
+  const compilers = runtime?.compilers ?? [];
+  const effectiveCompiler = compilerId === "auto"
+    ? compilers.find((entry) => entry.id === "system" && entry.available)
+      ?? compilers.find((entry) => entry.available) ?? compilers[0] ?? null
+    : compilers.find((entry) => entry.id === compilerId)
+      ?? compilers.find((entry) => entry.available) ?? compilers[0] ?? null;
+  const vendorLabel = (id: string) => ({
+    btbn: "BtbN", gyan: "gyan.dev", jellyfin: "Jellyfin", "ffmpeg.org": "官方 ffmpeg.org",
+  } as Record<string, string>)[id] ?? id;
+  const defaultIds = ["auto", "system", ...(runtime?.installed.map((item) => item.id) ?? [])];
+  const defaultValue = runtime?.default && defaultIds.includes(runtime.default)
+    ? runtime.default : runtime?.default ?? "auto";
+
   return (
     <>
       {error && (
@@ -186,118 +235,254 @@ export function TranscodeSettingsPage() {
         </ul>
       </HelpNote>
 
-      <div className="card">
+<div className="card">
         <div className="comp-row">
-          <span className="comp-label">ffmpeg 运行时</span>
-          <span className="comp-value">
-            {runtime?.current
-              ? <span className="tag running">{runtime.current.version}</span>
-              : <span className="tag plain">未托管</span>}
+          <span className="comp-label">安装 / 使用 ffmpeg</span>
+          <span className="comp-value" style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+            {runtime?.resolved.kind === "managed"
+              ? `当前解析：${runtime.resolved.id}`
+              : runtime?.resolved.kind === "system"
+                ? `当前解析：系统 ${runtime.system.version || "ffmpeg"}`
+                : runtime?.resolved.kind === "path"
+                  ? `当前解析：自定义路径 ${runtime.resolved.ffmpeg}`
+                  : runtime?.resolved.kind === "missing"
+                    ? `指定的运行时不存在：${runtime.resolved.id}`
+                    : "当前没有可用的 ffmpeg"}
           </span>
         </div>
-        {runtime && (
-          <div className="comp-row">
-            <span className="comp-label">宿主</span>
-            <span className="comp-value mono" style={{ fontSize: 12 }}>
-              {runtime.host.os}/{runtime.host.arch}/{runtime.host.libc}
-              {runtime.host.libcVersion ? ` ${runtime.host.libcVersion}` : ""}
-            </span>
-          </div>
-        )}
-        {runtime && (
-          <div className="comp-row">
-            <span className="comp-label">ffmpeg 版本线</span>
-            <span className="comp-value">
-              <select className="input" style={{ width: "auto", minWidth: 180 }}
-                      value={preferredMajor}
-                      onChange={(e) => setPreferredMajor(e.target.value)}>
-                <option value="auto">自动（优先最高可用版本线）</option>
-                {runtime.majors.map((major) => (
-                  <option key={major} value={major}>{major}</option>
-                ))}
-              </select>
-            </span>
-          </div>
-        )}
-        {runtime?.current && (
-          <div className="comp-row">
-            <span className="comp-label">当前</span>
-            <span className="comp-value" style={{ fontSize: 12 }}>
-              {runtime.current.id}
-              {runtime.current.major ? ` · ${runtime.current.major}` : ""} · {runtime.current.source} · {runtime.current.license}
-              {runtime.current.featuresProbed.length > 0
-                ? ` · ${runtime.current.featuresProbed.slice(0, 6).join(" / ")}`
-                : " · 未探测到声明特性"}
-            </span>
-          </div>
-        )}
-        {runtime?.recommended && (
-          <div style={{ display: "flex", gap: 8, padding: "8px", flexWrap: "wrap", alignItems: "center" }}>
-            <button className="btn btn-raised"
-                    disabled={installJob?.state === "running"}
-                    onClick={() => void startRuntimeInstall({ mode: "auto", major: preferredMajor })}>
-              安装推荐版本
-            </button>
-            <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-              {runtime.recommended.entry.major ? `${runtime.recommended.entry.major} · ` : ""}
-              {runtime.recommended.entry.ffmpegVersion} · {runtime.recommended.reason}
-            </span>
-          </div>
-        )}
-        {runtime && !runtime.recommended && (
-          <p style={{ margin: 0, padding: "0 8px 8px", fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-            {runtime.recommendationError
-              ? `没有可安装的推荐版本：${runtime.recommendationError}`
-              : "内置目录还没有匹配当前平台的条目。"}
-            可以用 `transcode.ffmpeg_catalog` 指向一份已验证的本地目录，或在下面用自定义 URL。
-          </p>
-        )}
-        {runtime && (
-          <div style={{ padding: "0 8px 8px", display: "grid", gap: 6,
-                        borderTop: "1px solid var(--monet-outline-variant)" }}>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", paddingTop: 8 }}>
-              <span style={{ fontSize: 12, fontWeight: 600 }}>源码构建</span>
-              <button className="btn btn-raised"
-                      disabled={installJob?.state === "running" || !sourceStatus?.buildable}
-                      onClick={() => void startRuntimeInstall({ mode: "source", major: preferredMajor })}>
-                构建 {preferredMajor === "auto" ? "自动版本线" : preferredMajor}
-              </button>
-              <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-                {sourceStatus
-                  ? sourceStatus.toolchain.usable
-                    ? `${sourceStatus.toolchain.portable ? "便携" : "系统"}工具链 · ${sourceStatus.toolchain.binDir || "PATH"}`
-                    : sourceStatus.portableFallback
-                      ? "缺少系统工具链；开始构建时会下载固定版本的便携 MinGW"
-                      : "缺少构建工具链"
-                  : "读取构建环境…"}
+
+        <div style={{ display: "flex", gap: 6, padding: "0 8px 8px", flexWrap: "wrap" }}>
+          <button className={`btn ${runtimeMode === "system" ? "btn-raised" : "btn-text"}`}
+                  onClick={() => setRuntimeMode("system")}>使用系统 ffmpeg</button>
+          <button className={`btn ${runtimeMode === "binary" ? "btn-raised" : "btn-text"}`}
+                  onClick={() => setRuntimeMode("binary")}>下载二进制</button>
+          <button className={`btn ${runtimeMode === "source" ? "btn-raised" : "btn-text"}`}
+                  onClick={() => setRuntimeMode("source")}>源码构建</button>
+        </div>
+
+        {runtimeMode === "system" && (
+          <div style={{ padding: "0 8px 10px", display: "grid", gap: 6 }}>
+            <div className="comp-row">
+              <span className="comp-label">系统 ffmpeg</span>
+              <span className="comp-value mono" style={{ fontSize: 11, overflowWrap: "anywhere" }}>
+                {runtime?.system.available
+                  ? `${runtime.system.version || "版本未知"} · ${runtime.system.ffmpeg}`
+                  : runtime?.system.error || "未在 PATH 找到 ffmpeg/ffprobe"}
               </span>
             </div>
-            {sourceStatus && (
-              <>
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {sourceStatus.toolchain.features.length > 0
-                    ? sourceStatus.toolchain.features.map((feature) => (
-                      <span key={feature} className="tag running" style={{ fontSize: 11 }}>{feature}</span>
-                    ))
-                    : <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
-                        未检测到外部编解码开发包：将做最小构建（无 x264/x265 等）
-                      </span>}
-                </div>
-                {sourceStatus.toolchain.missing.length > 0 && (
-                  <span style={{ fontSize: 11, color: sourceStatus.buildable ? "var(--monet-on-surface-variant)" : "var(--monet-error)" }}>
-                    缺少/未验证：{sourceStatus.toolchain.missing.slice(0, 12).join("、")}
-                    {sourceStatus.toolchain.missing.length > 12 ? " …" : ""}
-                  </span>
-                )}
-                {sourceStatus.toolchain.detail && (
-                  <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
-                    {sourceStatus.toolchain.detail}
-                  </span>
-                )}
-              </>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button className="btn btn-raised" disabled={!runtime?.system.available}
+                      onClick={() => void setDefaultRuntime("system")}>
+                {runtime?.resolved.kind === "system" ? "已在使用系统 ffmpeg" : "设为默认（系统）"}
+              </button>
+              <button className="btn btn-text" disabled={busy} onClick={() => void load()}>
+                重新检测
+              </button>
+              <button className="btn btn-text" disabled={installJob?.state === "running"}
+                      onClick={() => void api.transcode.runtimeInstall({ kind: "package" })
+                        .then(setInstallJob)
+                        .catch((e) => toast("error", errMsg(e)))}>
+                通过包管理器安装
+              </button>
+            </div>
+            <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
+              只检测 PATH，不下载任何东西。找不到时可以用下面的包管理器，或填写 transcode.ffmpeg_path。
+            </span>
+          </div>
+        )}
+
+        {runtimeMode === "binary" && (
+          <div style={{ padding: "0 8px 10px", display: "grid", gap: 6 }}>
+            <div className="comp-row">
+              <span className="comp-label">下载源</span>
+              <span className="comp-value">
+                <select className="input" style={{ width: "auto", minWidth: 200 }}
+                        value={effectiveVendor}
+                        onChange={(e) => { setBinaryVendor(e.target.value); setBinaryMajor(""); setBinaryId(""); }}>
+                  {vendorIds.map((id) => <option key={id} value={id}>{vendorLabel(id)}</option>)}
+                </select>
+              </span>
+            </div>
+            <div className="comp-row">
+              <span className="comp-label">平台</span>
+              <span className="comp-value mono" style={{ fontSize: 12 }}>
+                {host?.os}/{host?.arch}/{host?.libc}{host?.libcVersion ? ` ${host.libcVersion}` : ""}
+              </span>
+            </div>
+            <div className="comp-row">
+              <span className="comp-label">大版本</span>
+              <span className="comp-value">
+                <select className="input" style={{ width: "auto", minWidth: 140 }}
+                        value={effectiveMajor}
+                        onChange={(e) => { setBinaryMajor(e.target.value); setBinaryId(""); }}>
+                  {binaryMajors.map((major) => <option key={major} value={major}>{major}</option>)}
+                </select>
+              </span>
+            </div>
+            <div className="comp-row">
+              <span className="comp-label">具体版本</span>
+              <span className="comp-value">
+                <select className="input" style={{ width: "auto", minWidth: 280 }}
+                        value={effectiveBinary?.id ?? ""}
+                        onChange={(e) => setBinaryId(e.target.value)}>
+                  {majorBinaries.map((entry) => (
+                    <option key={entry.id} value={entry.id}>
+                      {entry.ffmpegVersion} · {entry.license} · {entry.features.length} 特性
+                    </option>
+                  ))}
+                </select>
+              </span>
+            </div>
+            {effectiveBinary && (
+              <div style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", lineHeight: 1.6 }}>
+                {effectiveBinary.ffmpegVersion} · {effectiveBinary.license}
+                {effectiveBinary.minGlibc ? ` · 最低 glibc ${effectiveBinary.minGlibc}` : ""}
+                {effectiveBinary.size > 0 ? ` · ${(effectiveBinary.size / 1048576).toFixed(1)} MB` : ""}
+                {effectiveBinary.mirrors.length > 0 ? ` · ${effectiveBinary.mirrors.length} 个镜像` : ""}
+                <br />
+                <span className="mono" style={{ overflowWrap: "anywhere" }}>{effectiveBinary.sha256}</span>
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button className="btn btn-raised"
+                      disabled={!effectiveBinary || installJob?.state === "running"}
+                      onClick={() => effectiveBinary
+                        && void startRuntimeInstall({ mode: "artifact", id: effectiveBinary.id })}>
+                安装二进制
+              </button>
+              <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", alignSelf: "center" }}>
+                只有点这里才会下载；哈希按 catalog 校验。
+              </span>
+            </div>
+          </div>
+        )}
+
+        {runtimeMode === "source" && (
+          <div style={{ padding: "0 8px 10px", display: "grid", gap: 6 }}>
+            <div className="comp-row">
+              <span className="comp-label">源码来源</span>
+              <span className="comp-value">
+                <select className="input" style={{ width: "auto", minWidth: 220 }}
+                        value={effectiveOrigin}
+                        onChange={(e) => { setSourceOrigin(e.target.value); setSourceId(""); }}>
+                  {originIds.map((id) => <option key={id} value={id}>{vendorLabel(id)}</option>)}
+                </select>
+              </span>
+            </div>
+            <div className="comp-row">
+              <span className="comp-label">版本</span>
+              <span className="comp-value">
+                <select className="input" style={{ width: "auto", minWidth: 180 }}
+                        value={effectiveSource?.id ?? ""}
+                        onChange={(e) => setSourceId(e.target.value)}>
+                  {sourceVersions.map((entry) => (
+                    <option key={entry.id} value={entry.id}>
+                      {entry.ffmpegVersion} · {entry.license}
+                    </option>
+                  ))}
+                </select>
+              </span>
+            </div>
+            <div className="comp-row">
+              <span className="comp-label">编译工具</span>
+              <span className="comp-value">
+                <select className="input" style={{ width: "auto", minWidth: 260 }}
+                        value={compilerId}
+                        onChange={(e) => setCompilerId(e.target.value)}>
+                  <option value="auto">自动（系统 → 便携）</option>
+                  {compilers.map((compiler) => (
+                    <option key={compiler.id} value={compiler.id} disabled={!compiler.available}>
+                      {compiler.label}{compiler.available ? "" : "（不可用）"}
+                    </option>
+                  ))}
+                </select>
+              </span>
+            </div>
+            {effectiveCompiler && (
+              <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", lineHeight: 1.6 }}>
+                {effectiveCompiler.detail}
+              </span>
+            )}
+            {effectiveSource && (
+              <div style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", lineHeight: 1.6 }}>
+                {effectiveSource.ffmpegVersion} · {effectiveSource.license}
+                {effectiveSource.features.length > 0
+                  ? ` · 声明特性 ${effectiveSource.features.length} 项` : ""}
+                <br />
+                <span className="mono" style={{ overflowWrap: "anywhere" }}>{effectiveSource.url}</span>
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button className="btn btn-raised"
+                      disabled={!effectiveSource || installJob?.state === "running"
+                        || (compilerId !== "auto" && !effectiveCompiler?.available)}
+                      onClick={() => effectiveSource && void startRuntimeInstall({
+                        mode: "source", id: effectiveSource.id,
+                        compiler: compilerId as "auto" | "system" | "portable",
+                      })}>
+                开始构建
+              </button>
+              <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", alignSelf: "center" }}>
+                只有点这里才会下载源码并编译。
+              </span>
+            </div>
+          </div>
+        )}
+
+        {installJob && (
+          <div style={{ padding: "0 8px 10px", borderTop: "1px solid var(--monet-outline-variant)" }}>
+            <div className="comp-row">
+              <span className="comp-label">任务状态</span>
+              <span className="comp-value">
+                <span className={`tag ${installJob.state === "done" ? "running" : "plain"}`}>
+                  {installJob.state === "done" ? "完成" : installJob.state === "failed" ? "失败"
+                    : installJob.state === "cancelled" ? "已取消" : installJob.message || "运行中"}
+                </span>
+              </span>
+            </div>
+            <ProgressBar fraction={installJob.progress} />
+            {installJob.error && (
+              <span style={{ fontSize: 12, color: "var(--monet-error)" }}>{installJob.error}</span>
+            )}
+            {installJob.log && (
+              <pre style={{ margin: "6px 0 0", padding: 8, maxHeight: 160, overflow: "auto", fontSize: 10,
+                            background: "var(--monet-surface-container-low)", whiteSpace: "pre-wrap" }}>
+                {installJob.log}
+              </pre>
             )}
           </div>
         )}
+      </div>
+
+      <div className="card">
+        <div className="comp-row">
+          <span className="comp-label">转码使用的 ffmpeg</span>
+          <span className="comp-value">
+            <select className="input" style={{ width: "auto", minWidth: 260 }}
+                    value={defaultValue}
+                    onChange={(e) => void setDefaultRuntime(e.target.value)}>
+              <option value="auto">自动（托管 current 优先，否则系统）</option>
+              <option value="system">系统 ffmpeg（PATH）</option>
+              {runtime?.installed.map((item) => (
+                <option key={item.id} value={item.id}>{item.id}</option>
+              ))}
+              {!defaultIds.includes(defaultValue) && (
+                <option value={defaultValue}>{defaultValue}（未安装）</option>
+              )}
+            </select>
+          </span>
+        </div>
+        <div className="comp-row">
+          <span className="comp-label">当前解析到</span>
+          <span className="comp-value" style={{ fontSize: 12, overflowWrap: "anywhere" }}>
+            {runtime?.resolved.kind === "managed" ? `托管 ${runtime.resolved.id}`
+              : runtime?.resolved.kind === "system" ? `系统 ${runtime.system.version || ""}`
+              : runtime?.resolved.kind === "path" ? `自定义路径 ${runtime.resolved.ffmpeg}`
+              : runtime?.resolved.kind === "missing" ? `指定的运行时不存在：${runtime.resolved.id}`
+              : "没有可用的 ffmpeg"}
+            {runtime?.resolved.ffmpeg ? ` · ${runtime.resolved.ffmpeg}` : ""}
+          </span>
+        </div>
         {runtime && runtime.installed.length > 0 && (
           <div style={{ padding: "0 8px 8px", display: "grid", gap: 4 }}>
             {runtime.installed.map((item) => (
@@ -307,13 +492,22 @@ export function TranscodeSettingsPage() {
                 <span className="mono" style={{ fontSize: 12, minWidth: 120 }}>{item.id}</span>
                 <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
                   {item.major ? `${item.major} · ` : ""}{item.version} · {item.license}
-                  {item.buildRecipe ? ` · ${item.buildRecipe}` : ""} · {item.featuresProbed.length}/{item.featuresDeclared.length} 特性
+                  {item.toolchain ? ` · ${item.toolchain}` : ""}
+                  {item.featuresProbed.length > 0
+                    ? ` · ${item.featuresProbed.length}/${item.featuresDeclared.length} 特性` : ""}
                 </span>
-                {item.current
-                  ? <span className="tag running">当前</span>
-                  : <button className="btn btn-text" onClick={() => void selectRuntime(item.id)}>启用</button>}
+                {item.current && <span className="tag running">current</span>}
+                {defaultValue === item.id
+                  ? <span className="tag running">默认</span>
+                  : <button className="btn btn-text"
+                            onClick={() => void setDefaultRuntime(item.id)}>设为默认</button>}
                 {!item.current && (
-                  <button className="btn btn-text danger" onClick={() => void deleteRuntime(item.id)}>删除</button>
+                  <button className="btn btn-text"
+                          onClick={() => void selectRuntime(item.id)}>启用</button>
+                )}
+                {!item.current && (
+                  <button className="btn btn-text danger"
+                          onClick={() => void deleteRuntime(item.id)}>删除</button>
                 )}
               </div>
             ))}
@@ -325,33 +519,11 @@ export function TranscodeSettingsPage() {
             )}
           </div>
         )}
-        {runtime && runtime.catalog.length > 0 && (
-          <div style={{ padding: "0 8px 8px", display: "grid", gap: 4 }}>
-            <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>目录条目</span>
-            {runtime.catalog.map((entry) => (
-              <div key={entry.id}
-                   style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <span className="mono" style={{ fontSize: 12, minWidth: 160 }}>{entry.id}</span>
-                <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-                  {entry.major ? `${entry.major} · ` : ""}{entry.ffmpegVersion} · {entry.license} · {entry.os}/{entry.arch}/{entry.libc}
-                </span>
-                {entry.kind === "source"
-                  ? <>
-                      <span className="tag plain" style={{ fontSize: 11 }}>源码</span>
-                      <button className="btn btn-text"
-                              disabled={installJob?.state === "running" || !sourceStatus?.buildable}
-                              onClick={() => void startRuntimeInstall({ mode: "source", id: entry.id })}>
-                        源码构建
-                      </button>
-                    </>
-                  : <button className="btn btn-text" disabled={installJob?.state === "running"}
-                            onClick={() => void startRuntimeInstall({ mode: "artifact", id: entry.id })}>
-                      安装
-                    </button>}
-              </div>
-            ))}
-          </div>
-        )}
+        <p style={{ margin: 0, padding: "0 8px 8px", fontSize: 11,
+                    color: "var(--monet-on-surface-variant)" }}>
+          默认选择持久化在 server.yaml 的 transcode.default_runtime；auto 之外的值不会静默回退。
+          若 server.yaml 设置了 ffmpeg_path，它优先于这里的默认选择。
+        </p>
       </div>
 
       <div className="card">

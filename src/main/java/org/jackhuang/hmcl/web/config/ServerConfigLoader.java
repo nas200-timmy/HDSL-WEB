@@ -77,6 +77,7 @@ public final class ServerConfigLoader {
     public static final String ENV_FFMPEG_CATALOG = "HDSL_FFMPEG_CATALOG";
     public static final String ENV_FFMPEG_BINARY_MIRROR = "HDSL_FFMPEG_BINARY_MIRROR";
     public static final String ENV_FFMPEG_SOURCE_MIRROR = "HDSL_FFMPEG_SOURCE_MIRROR";
+    public static final String ENV_TRANSCODE_DEFAULT_RUNTIME = "HDSL_TRANSCODE_DEFAULT_RUNTIME";
     public static final String ENV_TRANSCODE_MAX_CONCURRENT = "HDSL_TRANSCODE_MAX_CONCURRENT";
     public static final String ENV_TRANSCODE_MAX_QUEUE = "HDSL_TRANSCODE_MAX_QUEUE";
     public static final String ENV_TRANSCODE_FAILURE_POLICY = "HDSL_TRANSCODE_FAILURE_POLICY";
@@ -396,6 +397,10 @@ public final class ServerConfigLoader {
         if (section.containsKey("ffmpeg_catalog")) {
             target.ffmpegCatalog = stringField(section, "ffmpeg_catalog");
         }
+        if (section.containsKey("default_runtime")) {
+            target.defaultRuntime = defaultRuntime(stringField(section, "default_runtime"),
+                    "transcode.default_runtime");
+        }
         if (section.containsKey("max_concurrent")) {
             target.maxConcurrent = intField(section, "max_concurrent");
             if (target.maxConcurrent < 1 || target.maxConcurrent > 8) {
@@ -424,7 +429,8 @@ public final class ServerConfigLoader {
             switch (key) {
                 case "media_root", "ffmpeg_path", "max_concurrent", "max_queue",
                         "failure_policy", "failure_timeout_minutes", "auto_resume",
-                        "ffmpeg_catalog", "binary_mirror", "source_mirror" -> {
+                        "ffmpeg_catalog", "binary_mirror", "source_mirror",
+                        "default_runtime" -> {
                 }
                 default -> throw new ConfigException("transcode: unknown key `" + key + "`");
             }
@@ -440,6 +446,33 @@ public final class ServerConfigLoader {
             default -> throw new ConfigException(label
                     + " must be `ask`, `timeout-auto` or `full-auto`, got `" + value + "`");
         };
+    }
+
+    /// `auto`, `system`, or one installed runtime id.
+    ///
+    /// The id is not checked against the installed list here — that belongs to
+    /// the caller that can see `<data>/transcode/tools/ffmpeg` (the panel API and
+    /// [org.jackhuang.hmcl.web.transcode.runtime.FfmpegLocator]). This method
+    /// only keeps a malformed value out of `server.yaml`.
+    ///
+    /// @param value the raw value, or `null`
+    /// @param label where it came from, for the error
+    /// @return the normalized value
+    public static String defaultRuntime(@Nullable String value, String label) {
+        if (value == null || value.isBlank()) {
+            return "auto";
+        }
+        String trimmed = value.trim();
+        if (trimmed.equalsIgnoreCase("auto")) {
+            return "auto";
+        }
+        if (trimmed.equalsIgnoreCase("system")) {
+            return "system";
+        }
+        if (!trimmed.matches("[A-Za-z0-9._+-]{1,120}")) {
+            throw new ConfigException(label + " must be `auto`, `system`, or a runtime id");
+        }
+        return trimmed;
     }
 
     private static void applyHttps(ServerConfig config, Map<String, Object> https) {
@@ -628,6 +661,10 @@ public final class ServerConfigLoader {
         if (env.containsKey(ENV_FFMPEG_SOURCE_MIRROR)) {
             config.transcode.sourceMirror = mirrorPrefix(env.get(ENV_FFMPEG_SOURCE_MIRROR),
                     ENV_FFMPEG_SOURCE_MIRROR);
+        }
+        if (env.containsKey(ENV_TRANSCODE_DEFAULT_RUNTIME)) {
+            config.transcode.defaultRuntime = defaultRuntime(
+                    env.get(ENV_TRANSCODE_DEFAULT_RUNTIME), ENV_TRANSCODE_DEFAULT_RUNTIME);
         }
         if (env.containsKey(ENV_TRANSCODE_MAX_CONCURRENT)) {
             config.transcode.maxConcurrent = parseInt(env.get(ENV_TRANSCODE_MAX_CONCURRENT),

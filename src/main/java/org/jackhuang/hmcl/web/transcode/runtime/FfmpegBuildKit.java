@@ -156,12 +156,23 @@ public final class FfmpegBuildKit {
                              @Nullable Set<String> requestedFeatures,
                              FfmpegRuntimeManager.Progress progress,
                              BooleanSupplier cancelled) throws IOException {
+        return build(entry, versionDir, buildId, requestedFeatures, progress, cancelled,
+                FfmpegToolchainManager.Preference.AUTO);
+    }
+
+    /// The same, with an explicit compiler choice (`system` / `portable`).
+    public BuildResult build(FfmpegCatalog.Entry entry, Path versionDir, String buildId,
+                             @Nullable Set<String> requestedFeatures,
+                             FfmpegRuntimeManager.Progress progress,
+                             BooleanSupplier cancelled,
+                             FfmpegToolchainManager.Preference preference) throws IOException {
         validateEntry(entry, versionDir);
         Files.createDirectories(toolsDir);
         checkDisk();
 
         FfmpegToolchainManager.Toolchain toolchain = toolchains.resolveForBuild(
-                (message, fraction) -> progress.stage(message, fraction * 0.10), cancelled);
+                (message, fraction) -> progress.stage(message, fraction * 0.10), cancelled,
+                preference);
         if (!toolchain.usable()) {
             throw new IOException(toolchain.missingMessage());
         }

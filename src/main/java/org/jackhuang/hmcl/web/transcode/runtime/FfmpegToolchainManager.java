@@ -58,6 +58,34 @@ import java.util.function.BooleanSupplier;
 @NotNullByDefault
 public final class FfmpegToolchainManager {
 
+    /// Which compiler the caller asked for.
+    public enum Preference {
+        /// System compiler when usable, otherwise the portable bundle.
+        AUTO,
+        /// The host compiler only; unusable is an error, never a download.
+        SYSTEM,
+        /// The pinned portable bundle, installing it when absent.
+        PORTABLE;
+
+        /// Parses the wire value (`auto` / `system` / `portable`).
+        public static Preference parse(@Nullable String value) {
+            if (value == null || value.isBlank() || "auto".equalsIgnoreCase(value)) {
+                return AUTO;
+            }
+            if ("system".equalsIgnoreCase(value)) {
+                return SYSTEM;
+            }
+            if ("portable".equalsIgnoreCase(value)) {
+                return PORTABLE;
+            }
+            throw new IllegalArgumentException("compiler must be auto, system or portable");
+        }
+    }
+
+    /// One choice the settings page can offer.
+    public record CompilerChoice(String id, String label, boolean available, String detail) {
+    }
+
     /// The pinned w64devkit, as the bootstrap catalogue names it.
     public static String windowsPortableVersion() {
         return BuildToolchainManager.windowsPortableVersion();
@@ -275,6 +303,70 @@ public final class FfmpegToolchainManager {
         } catch (IOException e) {
             throw new IOException(ffmpegMessage(e), e);
         }
+    }
+
+    /// The same, honouring an explicit compiler choice.
+    ///
+    /// `SYSTEM` never falls through to a download: a host without a usable
+    /// compiler gets an error the page can show. `PORTABLE` installs the pinned
+    /// bundle when it is absent. `AUTO` keeps the historical system-first
+    /// behaviour.
+    ///
+    /// @param progress   a progress sink
+    /// @param cancelled  whether the caller has given up
+    /// @param preference the compiler choice
+    /// @return the resolved, usable toolchain
+    /// @throws IOException when the chosen compiler cannot be provided
+    public Toolchain resolveForBuild(FfmpegRuntimeManager.Progress progress,
+                                     BooleanSupplier cancelled,
+                                     Preference preference) throws IOException {
+        Preference choice = preference == null ? Preference.AUTO : preference;
+        if (choice == Preference.AUTO) {
+            return resolveForBuild(progress, cancelled);
+        }
+        if (choice == Preference.SYSTEM) {
+            Toolchain system = ffmpegToolchain(builds.systemToolchain());
+            if (!system.usable()) {
+                throw new IOException("ffmpeg_toolchain_unavailable: the system compiler is not"
+                        + " usable: " + system.missingMessage());
+            }
+            return system;
+        }
+        BuildToolchainManager.Toolchain installed = builds.installed();
+        if (installed == null || !installed.usable()) {
+            return installPortable(progress, cancelled);
+        }
+        Toolchain resolved = ffmpegToolchain(installed);
+        if (!resolved.usable()) {
+            throw new IOException("ffmpeg_toolchain_unavailable: the portable compiler is not"
+                    + " usable: " + resolved.missingMessage());
+        }
+        return resolved;
+    }
+
+    /// What the settings page offers in the compiler dropdown.
+    ///
+    /// @return the system and portable choices, with availability and a
+    ///         human-readable detail
+    public List<CompilerChoice> compilers() {
+        List<CompilerChoice> choices = new ArrayList<>();
+        Toolchain system = ffmpegToolchain(builds.systemToolchain());
+        choices.add(new CompilerChoice("system", "系统工具链", system.usable(),
+                system.usable() ? system.describe() : system.missingMessage()));
+        BuildToolchainManager.Toolchain installed = builds.installed();
+        Toolchain portable = installed == null ? null : ffmpegToolchain(installed);
+        boolean portableAvailable = (portable != null && portable.usable())
+                || BuildToolchainManager.portableAvailable();
+        String detail;
+        if (portable != null && portable.usable()) {
+            detail = portable.describe();
+        } else if (BuildToolchainManager.portableAvailable()) {
+            detail = "未安装；开始构建时下载固定版本的便携工具链";
+        } else {
+            detail = "此平台没有便携工具链";
+        }
+        choices.add(new CompilerChoice("portable", "便携工具链", portableAvailable, detail));
+        return choices;
     }
 
     /// Installs the portable build toolchain and returns the ffmpeg view of it.

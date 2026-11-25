@@ -188,6 +188,23 @@ ffmpeg 获取阶梯：
 5. Windows / macOS：只下载静态二进制到 `<data>/tools/ffmpeg/<version>`，SHA256 校验、zip 解压、`ffmpeg`/`ffprobe` 绝对路径写入配置；不自动升级。
 6. 下载源：官方/BtbN、gyan.dev、macOS 对应源、可配置镜像；**自定义 URL 放最后**，需开发者提权 + 必须填 SHA256，拦内网/本机地址；保留上一版可回滚。
 
+### 7.1 安装卡片与默认运行时（2026-11-25 实现）
+
+设置页把“生产一个运行时”和“面板用哪个运行时”拆成两块：
+
+- **安装卡片**：先选类型 `系统 / 下载二进制 / 源码构建`。
+  - `系统`：只检测 `PATH` 里的 ffmpeg/ffprobe，显示版本与路径；不下载。找不到时给出包管理器提示或 `transcode.ffmpeg_path`。
+  - `二进制`：`vendor`（BtbN / gyan.dev / Jellyfin）→ 当前平台（os/arch/libc，只读）→ 大版本 → 具体 build；详情显示许可、特性、minGlibc、大小、SHA-256、镜像数。Jellyfin 的 LZU 镜像就是 catalog 里的 `mirrors`，属于该 vendor，不是独立来源。
+  - `源码构建`：来源（当前为官方 ffmpeg.org）→ 版本 → 编译器（`auto` / `system` / `portable`）→ 构建。`system` 不可用时直接报错，不会偷偷下载；`portable` 未安装时下载固定版本的 Zig/w64devkit。实际编译器写入 runtime.json 的 `toolchain`。
+  - 只有最后的“安装/构建”按钮会下载或编译；切换下拉不触网。
+- **默认运行时**（卡片下方，类似证书默认项）：`transcode.default_runtime: auto | system | <runtime-id>`，也接受 `HDSL_TRANSCODE_DEFAULT_RUNTIME`。
+  - `auto`：托管 `current` 优先，否则 `PATH`；
+  - `system`：只走 `PATH`，即使有托管运行时；
+  - `<id>`：只用该已安装运行时；不存在时报错，**不静默回退**；
+  - `transcode.ffmpeg_path` 仍是运维硬覆盖，优先于这里的默认；
+  - 改动需要开发者提权并记审计（`PUT /api/transcode/runtime/default`）。
+- `GET /api/transcode/runtime` 增加 `default`、`resolved`（kind/id/路径）、`system`（检测结果）与 `compilers`（系统/便携可用性与详情）；旧字段保留。
+
 ### 8. 硬件直通
 
 - `docker-install.sh` 增加 `--hw auto|vaapi|nvidia|none`（默认 auto）：
