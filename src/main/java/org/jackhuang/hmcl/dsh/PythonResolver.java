@@ -307,7 +307,7 @@ public final class PythonResolver {
     /// @return whether a `python3`/`python` is already visible
     static boolean hasInterpreter(Map<String, String> environment,
                                   java.util.function.Predicate<Path> executable) {
-        return !candidates(environment.get("PATH"), OperatingSystem.CURRENT_OS,
+        return !candidates(BootstrapEnvironment.lookup(environment, "PATH"), OperatingSystem.CURRENT_OS,
                 System.getenv("WINDIR") != null ? System.getenv("WINDIR")
                         : System.getenv("SystemRoot"), executable).isEmpty();
     }
@@ -531,7 +531,12 @@ public final class PythonResolver {
         }
         Path executable = python.executable();
         if (python.origin() == Origin.MANAGED) {
-            environment.compute("PATH", (key, existing) -> existing == null || existing.isBlank()
+            // Under the spelling the map already uses: on Windows that is
+            // `Path`, and writing a second key beside it leaves the child with
+            // two search paths and no rule for which one wins.
+            String key = BootstrapEnvironment.keyOf(environment, "PATH");
+            String existing = BootstrapEnvironment.lookup(environment, "PATH");
+            environment.put(key, existing == null || existing.isBlank()
                     ? executable.getParent().toString()
                     : BootstrapEnvironment.prepend(executable.getParent(), existing));
         }
@@ -541,9 +546,9 @@ public final class PythonResolver {
     }
 
     private static void putIfBlank(Map<String, String> environment, String name, String value) {
-        String existing = environment.get(name);
+        String existing = BootstrapEnvironment.lookup(environment, name);
         if (existing == null || existing.isBlank()) {
-            environment.put(name, value);
+            environment.put(BootstrapEnvironment.keyOf(environment, name), value);
         }
     }
 

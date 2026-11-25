@@ -604,12 +604,33 @@ public final class CommandBuilder {
             default -> preset.outputSuffix == null ? "_transcoded" : preset.outputSuffix;
         };
         Path directory = outputDir == null ? input.getParent() : outputDir;
-        Path candidate = directory.resolve(stem + suffix + "." + container).toAbsolutePath().normalize();
+        Path candidate = inside(directory, stem + suffix + "." + container);
         int counter = 1;
         while ((java.nio.file.Files.exists(candidate) || reserved.contains(candidate)) && counter < 10_000) {
-            candidate = directory.resolve(stem + suffix + "_" + counter + "." + container)
-                    .toAbsolutePath().normalize();
+            candidate = inside(directory, stem + suffix + "_" + counter + "." + container);
             counter++;
+        }
+        return candidate;
+    }
+
+    /// Resolves an output file name inside its directory, refusing to leave it.
+    ///
+    /// The directory has already been checked against the media root by the
+    /// time this runs, but the *name* is assembled from preset fields, so a
+    /// separator or a `..` in one of them would move the write somewhere nobody
+    /// validated — and the queue creates those directories as root.
+    /// [TranscodePreset#validate] rejects the same values with a message a user
+    /// can act on; this is the invariant, held at the place that depends on it.
+    ///
+    /// @param directory the validated output directory
+    /// @param name      the assembled file name
+    /// @return the absolute, normalised path inside `directory`
+    private static Path inside(Path directory, String name) {
+        Path base = directory.toAbsolutePath().normalize();
+        Path candidate = base.resolve(name).normalize();
+        if (!candidate.startsWith(base)) {
+            throw new IllegalArgumentException(
+                    "the output name leaves the output directory: " + name);
         }
         return candidate;
     }

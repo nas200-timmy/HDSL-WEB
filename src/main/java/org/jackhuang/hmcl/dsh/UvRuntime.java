@@ -106,10 +106,13 @@ public final class UvRuntime {
 
     /// Whether a wheel file name carries a `uv` build this platform can run.
     ///
-    /// The Linux x86_64 wheel is `manylinux`; the aarch64 wheel is tagged for
-    /// both glibc and musl, which is fine — it carries one binary that runs on
-    /// either loader. A Windows wheel is `win_amd64`, and a macOS one names the
-    /// deployment target and the architecture.
+    /// Linux publishes two families and they are not interchangeable:
+    /// `manylinux` links glibc, `musllinux` links musl. The glibc wheel on
+    /// Alpine passes its digest check and then dies on the loader, which is a
+    /// worse answer than "no wheel" because the digest said it was right. So
+    /// the libc is decided first, by the same probe
+    /// [PythonRuntimeManager#isMusl] uses. A Windows wheel is `win_amd64`, and
+    /// a macOS one names the deployment target and the architecture.
     public static boolean matchesWheel(String filename) {
         if (!filename.startsWith("uv-" + version() + "-") || !filename.endsWith(".whl")) {
             return false;
@@ -118,7 +121,8 @@ public final class UvRuntime {
             case WINDOWS -> filename.contains(isArm() ? "win_arm64" : "win_amd64");
             case MACOS -> filename.contains("macosx")
                     && filename.contains(isArm() ? "arm64" : "x86_64");
-            default -> filename.contains("manylinux")
+            default -> filename.contains(PythonRuntimeManager.isMusl(java.nio.file.Files::exists)
+                    ? "musllinux" : "manylinux")
                     && filename.contains(isArm() ? "aarch64" : "x86_64");
         };
     }

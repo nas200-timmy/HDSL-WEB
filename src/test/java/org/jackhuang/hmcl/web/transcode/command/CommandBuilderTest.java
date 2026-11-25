@@ -113,6 +113,55 @@ class CommandBuilderTest {
         assertEquals("clip_transcoded_1.mkv", second.getFileName().toString());
     }
 
+    /// The output directory is checked against the media root before this runs,
+    /// but the file *name* is assembled from preset fields — so a separator in
+    /// `container` or `outputSuffix` used to move the write out of the share,
+    /// and the queue then created those directories as root.
+    @Test
+    void anOutputNameCannotLeaveTheOutputDirectory(@TempDir Path dir) {
+        Path input = dir.resolve("in").resolve("clip.mp4");
+        Path out = dir.resolve("out");
+
+        TranscodePreset escapingContainer = preset();
+        escapingContainer.container = "/../../escaped";
+        assertThrows(IllegalArgumentException.class,
+                () -> CommandBuilder.outputPath(escapingContainer, input, out));
+
+        TranscodePreset escapingSuffix = preset();
+        escapingSuffix.outputSuffix = "/../../escaped";
+        assertThrows(IllegalArgumentException.class,
+                () -> CommandBuilder.outputPath(escapingSuffix, input, out));
+
+        assertTrue(CommandBuilder.outputPath(preset(), input, out).startsWith(out),
+                "an ordinary name still lands in the directory it was given");
+    }
+
+    /// The same values are refused earlier, where the message can name the
+    /// field a person just typed into.
+    @Test
+    void aPresetRefusesPathShapedFragments() {
+        TranscodePreset container = preset();
+        container.container = "../mkv";
+        IllegalArgumentException thrown =
+                assertThrows(IllegalArgumentException.class, container::validate);
+        assertTrue(thrown.getMessage().contains("container"), thrown.getMessage());
+
+        TranscodePreset suffix = preset();
+        suffix.outputSuffix = "_out/../../x";
+        assertTrue(assertThrows(IllegalArgumentException.class, suffix::validate)
+                .getMessage().contains("outputSuffix"));
+
+        TranscodePreset backslash = preset();
+        backslash.outputSuffix = "..\\..\\escaped";
+        assertTrue(assertThrows(IllegalArgumentException.class, backslash::validate)
+                .getMessage().contains("outputSuffix"));
+
+        TranscodePreset blank = preset();
+        blank.outputSuffix = "";
+        blank.outputNaming = "none";
+        blank.validate();
+    }
+
     @Test
     void burningSubtitlesRefusesACopyVideo(@TempDir Path dir) {
         TranscodePreset preset = preset();

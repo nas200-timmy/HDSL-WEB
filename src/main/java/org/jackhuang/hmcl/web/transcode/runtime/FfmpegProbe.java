@@ -85,12 +85,19 @@ public final class FfmpegProbe {
     }
 
     /// Runs a command to completion and reports both its exit code and output.
+    ///
+    /// As the agent, like every other ffmpeg process the panel starts
+    /// (`TranscodeQueue`, `HardwareProbe`, the build's own one-frame check). A
+    /// source build is compiled by that uid, so the binary it produces is
+    /// agent-written bytes: probing it as root would let an instance run code
+    /// as the panel by winning the race between `make` and the probe.
     public static Result runWithStatus(Path executable, List<String> args)
             throws IOException, InterruptedException {
         List<String> command = new java.util.ArrayList<>(args.size() + 1);
         command.add(executable.toString());
         command.addAll(args);
-        Process process = new ProcessBuilder(command)
+        Process process = new ProcessBuilder(
+                org.jackhuang.hmcl.util.platform.Privileges.asAgent(command))
                 .redirectErrorStream(true)
                 .start();
         java.util.concurrent.ExecutorService reader =

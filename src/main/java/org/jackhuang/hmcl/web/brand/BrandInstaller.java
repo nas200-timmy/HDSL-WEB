@@ -29,6 +29,7 @@ import org.jackhuang.hmcl.dsh.PythonRuntimeManager;
 import org.jackhuang.hmcl.dsh.UvRuntime;
 import org.jackhuang.hmcl.util.io.FileUtils;
 import org.jackhuang.hmcl.util.io.Links;
+import org.jackhuang.hmcl.util.io.SafePaths;
 import org.jackhuang.hmcl.util.platform.Architecture;
 import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.jackhuang.hmcl.util.platform.Privileges;
@@ -1828,18 +1829,49 @@ public final class BrandInstaller {
                 if (cancelled.getAsBoolean()) {
                     throw new BrandException("Install cancelled");
                 }
-                Path target = resolveInside(destination, entry.getName());
+                Path target = SafePaths.resolveArchiveEntry(destination, entry.getName());
                 if (target == null) {
-                    continue;
+                    throw new BrandException("Refusing to unpack `" + entry.getName()
+                            + "`: it does not stay inside " + destination.getFileName());
                 }
                 if (entry.isDirectory()) {
-                    Files.createDirectories(target);
+                    SafePaths.createDirectories(destination, target);
                     continue;
                 }
-                Files.createDirectories(target.getParent());
+                SafePaths.createDirectories(destination, target.getParent());
                 if (entry.isSymbolicLink()) {
+                    // The link target is as untrusted as the name: an absolute or
+                    // `../` target turns every later member that walks through this
+                    // link into a write outside the destination, and this runs as
+                    // root. `PythonRuntimeManager.extractTar` refuses the same two.
+                    String link = entry.getLinkName() == null ? "" : entry.getLinkName().trim();
+                    if (link.isEmpty()) {
+                        throw new BrandException("The archive gives `" + entry.getName() + "` no link target");
+                    }
+                    if (Path.of(link).isAbsolute() || link.contains("..")) {
+                        throw new BrandException("Refusing to link `" + entry.getName() + "` to `" + link
+                                + "`: only a relative link inside the archive is unpacked");
+                    }
+                    Path resolved = target.getParent().resolve(link).normalize();
+                    if (!resolved.startsWith(destination.toAbsolutePath().normalize())) {
+                        throw new BrandException("Refusing to link `" + entry.getName() + "` to `" + link
+                                + "`: it leaves " + destination.getFileName());
+                    }
                     Files.deleteIfExists(target);
-                    Files.createSymbolicLink(target, Path.of(entry.getLinkName()));
+                    Files.createSymbolicLink(target, Path.of(link));
+                    continue;
+                }
+                if (entry.isLink()) {
+                    Path source = SafePaths.resolveArchiveEntry(destination, entry.getLinkName());
+                    if (source == null || !Files.isRegularFile(source)) {
+                        throw new BrandException("The archive hard-links `" + entry.getName()
+                                + "` to a member that is not there");
+                    }
+                    try {
+                        Files.createLink(target, source);
+                    } catch (IOException | UnsupportedOperationException e) {
+                        Files.copy(source, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    }
                     continue;
                 }
                 try (OutputStream out = Files.newOutputStream(target,
@@ -1858,11 +1890,6 @@ public final class BrandInstaller {
         } catch (IOException e) {
             throw new BrandException("Could not unpack " + archive.getFileName() + ": " + e.getMessage(), e);
         }
-    }
-
-    private static @Nullable Path resolveInside(Path root, String name) {
-        Path candidate = root.resolve(name).normalize();
-        return candidate.startsWith(root.normalize()) ? candidate : null;
     }
 
     /// The install itself: eleven stages, each one a step the panel shows.
@@ -2435,24 +2462,13 @@ public final class BrandInstaller {
             }
         }
         try {
-            ProcessBuilder probeBuilder = new ProcessBuilder("uv", "--version");
-            probeBuilder.redirectErrorStream(true);
-            org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(probeBuilder);
-            Process probe = probeBuilder.start();
-            if (probe.waitFor(10, java.util.concurrent.TimeUnit.SECONDS) && probe.exitValue() == 0) {
-                message.accept("using the uv already on PATH (not the pinned copy)");
-                return Path.of("uv");
-            }
-            probe.destroyForcibly();
-        } catch (IOException | InterruptedException ignored) {
-            if (ignored instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
-            }
-        }
-        try {
+            // Root-owned on purpose, and *not* handed to the agent: `uv sync`
+            // below runs as the panel, so an agent-writable `uv` would be an
+            // agent-writable program that root executes. The agent needs to run
+            // it, not to replace it, and 0755 gives it that. Its cache lives
+            // under the brand root (`UV_CACHE_DIR`), which is agent territory.
             Files.createDirectories(binary.getParent());
-            Privileges.prepareAgentDirectory(binary.getParent(),
-                    Privileges.AGENT_SHARED_DIRECTORY);
+            makeRootExecutableDirectory(binary.getParent());
         } catch (IOException e) {
             throw new BrandException("could not create " + binary.getParent() + ": "
                     + e.getMessage(), e);
@@ -2482,7 +2498,7 @@ public final class BrandInstaller {
         // a `.zip` there rather than a tarball, and reaches uv through PyPI.
         String triple = UvRuntime.githubTriple();
         if (triple == null) {
-            throw new BrandException("uv's GitHub fallback is not used on "
+            return lastResortUv(message, "uv's GitHub fallback is not used on "
                     + OperatingSystem.CURRENT_OS + " (the release there is a .zip);"
                     + " PyPI and the configured index are its transports");
         }
@@ -2507,11 +2523,46 @@ public final class BrandInstaller {
                 // Windows: no POSIX mode bits.
             }
             Files.deleteIfExists(archive);
-            Privileges.handTreeToAgent(binary.getParent());
+            makeRootExecutableDirectory(binary.getParent());
             return binary;
         } catch (IOException e) {
-            throw new BrandException("Could not install uv: " + e.getMessage(), e);
+            return lastResortUv(message, "Could not install uv: " + e.getMessage());
         }
+    }
+
+    /// The `uv` on `PATH`, when every pinned transport has failed.
+    ///
+    /// Last rather than first: a host `uv` is outside the panel's pin, so it is
+    /// only better than no build at all. It is resolved to an absolute path
+    /// before it is handed back — the callers build a command line with it, and
+    /// a bare `uv` would be resolved again later against whatever `PATH` that
+    /// child happens to have.
+    ///
+    /// @param message the install log
+    /// @param why     why the pinned copy was not used, reported when there is no host copy either
+    /// @return the absolute path of a `uv` that answers `--version`
+    /// @throws BrandException when the host has no working `uv` either
+    private static Path lastResortUv(Consumer<String> message, String why) throws BrandException {
+        Path found = org.jackhuang.hmcl.util.platform.Executables.resolve(UvRuntime.executableName())
+                .orElse(null);
+        if (found != null) {
+            try {
+                ProcessBuilder probeBuilder = new ProcessBuilder(found.toString(), "--version");
+                probeBuilder.redirectErrorStream(true);
+                org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(probeBuilder);
+                Process probe = probeBuilder.start();
+                if (probe.waitFor(10, java.util.concurrent.TimeUnit.SECONDS) && probe.exitValue() == 0) {
+                    message.accept("using the host's uv at " + found + " (not the pinned copy): " + why);
+                    return found;
+                }
+                probe.destroyForcibly();
+            } catch (IOException e) {
+                message.accept("the host's uv at " + found + " would not run: " + e.getMessage());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        throw new BrandException(why);
     }
 
     /// Unpacks a uv release tarball with the panel's own reader.
@@ -2716,7 +2767,7 @@ public final class BrandInstaller {
             Files.deleteIfExists(wheel);
             message.accept("uv " + uvVersion() + " installed from " + url
                     + " (sha256 " + UvRuntime.binarySha256() + ")");
-            Privileges.handTreeToAgent(binary.getParent());
+            makeRootExecutableDirectory(binary.getParent());
             return binary;
         } catch (IOException e) {
             throw new BrandException("Could not unpack uv from " + url + ": " + e.getMessage(), e);
@@ -3150,6 +3201,24 @@ public final class BrandInstaller {
     /// A no-op outside a container, where the panel and the agent are the same user.
     ///
     /// @param target the release directory
+    /// Keeps a directory the panel itself executes programs from root-owned.
+    ///
+    /// `<toolchains>/uv` is the case: `uv sync` runs as the panel, so a
+    /// directory an instance could write is a directory an instance could put a
+    /// program in for root to run. 0755 leaves it readable and executable by
+    /// the agent, which is all the agent needs — its own scratch space is
+    /// `UV_CACHE_DIR` under the brand root.
+    ///
+    /// @param dir the directory to keep panel-owned
+    private static void makeRootExecutableDirectory(Path dir) {
+        try {
+            Files.setPosixFilePermissions(dir, PosixFilePermissions.fromString("rwxr-xr-x"));
+        } catch (UnsupportedOperationException | IOException ignored) {
+            // Windows has no mode bits, and a directory the panel just created
+            // is already the panel's.
+        }
+    }
+
     private static void handReleaseToAgent(Path target) {
         int handed = Privileges.handTreeToAgent(target);
         if (handed > 0) {

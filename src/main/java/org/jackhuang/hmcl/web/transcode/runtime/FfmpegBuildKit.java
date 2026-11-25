@@ -541,9 +541,15 @@ public final class FfmpegBuildKit {
         }
     }
 
+    /// Runs a short probe and captures its output.
+    ///
+    /// As the agent, like the build itself: both the binary under test and the
+    /// toolchain's `objdump` live in trees the panel handed to that uid, so a
+    /// root run here would execute whatever the agent last wrote. Probing as the
+    /// agent makes the file's owner and the process's uid the same party.
     private static RunResult runCaptured(List<String> command, Path cwd, Duration timeout,
                                          BooleanSupplier cancelled) throws IOException {
-        ProcessBuilder builder = new ProcessBuilder(command)
+        ProcessBuilder builder = new ProcessBuilder(Privileges.asAgent(command))
                 .directory(cwd.toFile())
                 .redirectErrorStream(true);
         Process process = builder.start();

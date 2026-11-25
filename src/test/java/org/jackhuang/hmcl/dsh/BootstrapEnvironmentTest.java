@@ -17,6 +17,7 @@
  */
 package org.jackhuang.hmcl.dsh;
 
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -29,6 +30,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /// The environment a minimal image's children need.
@@ -377,5 +379,28 @@ class BootstrapEnvironmentTest {
         assertFalse(additions.containsKey("npm_config_python"), additions.toString());
         assertFalse(additions.containsKey("UV_PYTHON"), additions.toString());
         assertFalse(additions.containsKey("PATH"), additions.toString());
+    }
+    /// Windows spells the search path `Path`, and the TUIs build their child
+    /// environment with `new HashMap<>(System.getenv())` — an ordinary
+    /// case-sensitive map. Reading `PATH` out of it answered `null`, so the
+    /// panel's directories were prepended to nothing and the child lost every
+    /// program the host had; writing `PATH` back left two keys in one
+    /// environment block and no rule for which one the child would see.
+    @Test
+    void windowsReadsAndAmendsPathUnderTheSpellingItAlreadyHas() {
+        Map<String, String> windows = new HashMap<>();
+        windows.put("Path", "C:\\Windows\\system32");
+
+        assertEquals("C:\\Windows\\system32",
+                BootstrapEnvironment.lookup(windows, "PATH", OperatingSystem.WINDOWS));
+        assertEquals("Path", BootstrapEnvironment.keyOf(windows, "PATH", OperatingSystem.WINDOWS));
+
+        // Linux is case-sensitive on purpose: `Path` and `PATH` are different
+        // variables there, and only the named one is read.
+        assertNull(BootstrapEnvironment.lookup(windows, "PATH", OperatingSystem.LINUX));
+        assertEquals("PATH", BootstrapEnvironment.keyOf(windows, "PATH", OperatingSystem.LINUX));
+
+        // A map with no spelling at all still gets the canonical one.
+        assertEquals("PATH", BootstrapEnvironment.keyOf(new HashMap<>(), "PATH", OperatingSystem.WINDOWS));
     }
 }

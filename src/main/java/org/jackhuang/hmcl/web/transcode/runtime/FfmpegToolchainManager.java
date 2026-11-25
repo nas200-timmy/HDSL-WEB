@@ -255,11 +255,14 @@ public final class FfmpegToolchainManager {
             } else if (!base.portable()
                     && OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS) {
                 // The host has a compiler but ffmpeg's configure also needs a
-                // POSIX shell; w64devkit is the pinned answer.
-                builds.installPortable(
+                // POSIX shell; w64devkit is the pinned answer. Its return value
+                // is the answer: re-detecting would hand back the same system
+                // toolchain, because `detect` prefers a usable host compiler and
+                // the host one *is* usable — it just has no `sh`, so the build
+                // failed on the missing shell forever after a successful install.
+                base = builds.installPortable(
                         (message, fraction) -> progress.stage(message, fraction * 0.10),
                         cancelled);
-                base = builds.detect();
             }
             cache = null;
             Toolchain resolved = ffmpegToolchain(base);

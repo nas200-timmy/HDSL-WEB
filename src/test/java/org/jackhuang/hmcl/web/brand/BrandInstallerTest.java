@@ -33,6 +33,7 @@ import java.util.List;
 import java.util.zip.GZIPOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -120,6 +121,64 @@ class BrandInstallerTest {
 
         assertThrows(BrandException.class,
                 () -> BrandInstaller.extractZip(new java.io.ByteArrayInputStream(zip), target));
+    }
+
+    /// A tar member name is only half of the escape: the link target of a
+    /// symbolic link is the other half, and it is just as untrusted. The panel
+    /// unpacks these as root, so a link to `../../../etc/cron.d/x` followed by
+    /// a member written through it is a root-owned file anywhere on the host.
+    @Test
+    void aTarLinkThatLeavesTheDestinationIsRefused() throws IOException {
+        for (String link : List.of("../../escaped", "/etc/passwd", "inside/../../escaped")) {
+            Path archive = root.resolve("link-" + Math.abs(link.hashCode()) + ".tar.gz");
+            try (OutputStream out = Files.newOutputStream(archive);
+                 GZIPOutputStream gzip = new GZIPOutputStream(out);
+                 TarArchiveOutputStream tar = new TarArchiveOutputStream(gzip)) {
+                TarArchiveEntry entry = new TarArchiveEntry("evil",
+                        kala.compress.archivers.tar.TarConstants.LF_SYMLINK);
+                entry.setLinkName(link);
+                entry.setMode(0777);
+                tar.putArchiveEntry(entry);
+                tar.closeArchiveEntry();
+            }
+            Path target = root.resolve("tar-target-" + Math.abs(link.hashCode()));
+
+            BrandException thrown = assertThrows(BrandException.class,
+                    () -> BrandInstaller.extractTarGz(archive, target, () -> false), link);
+            assertTrue(thrown.getMessage().contains("Refusing"), thrown.getMessage());
+            assertFalse(Files.exists(root.resolve("escaped")), link + " escaped");
+        }
+    }
+
+    /// A link that stays inside is the normal case — CPython's `bin/python3` is
+    /// one — so refusing everything would break every Hermes install.
+    @Test
+    void aTarLinkInsideTheDestinationIsKept() throws IOException, BrandException {
+        Path archive = root.resolve("good-link.tar.gz");
+        try (OutputStream out = Files.newOutputStream(archive);
+             GZIPOutputStream gzip = new GZIPOutputStream(out);
+             TarArchiveOutputStream tar = new TarArchiveOutputStream(gzip)) {
+            byte[] body = "real".getBytes(StandardCharsets.US_ASCII);
+            TarArchiveEntry file = new TarArchiveEntry("python3.12");
+            file.setSize(body.length);
+            file.setMode(0755);
+            tar.putArchiveEntry(file);
+            tar.write(body);
+            tar.closeArchiveEntry();
+
+            TarArchiveEntry link = new TarArchiveEntry("python3",
+                    kala.compress.archivers.tar.TarConstants.LF_SYMLINK);
+            link.setLinkName("python3.12");
+            link.setMode(0777);
+            tar.putArchiveEntry(link);
+            tar.closeArchiveEntry();
+        }
+        Path target = root.resolve("good-link-target");
+
+        BrandInstaller.extractTarGz(archive, target, () -> false);
+
+        assertTrue(Files.isSymbolicLink(target.resolve("python3")));
+        assertEquals("real", Files.readString(target.resolve("python3")));
     }
 
     /// The uv archive is unpacked by the panel's own tar reader, not by a

@@ -18,6 +18,7 @@
 package org.jackhuang.hmcl.dsh;
 
 import org.jackhuang.hmcl.dsh.BootstrapRuntimeManager.Installed;
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -191,7 +192,8 @@ public final class BootstrapEnvironment {
             pathPrefixes.add(buildBin);
         }
         if (buildLib != null && exists.test(buildLib)) {
-            additions.put("LD_LIBRARY_PATH", prepend(buildLib, base.get("LD_LIBRARY_PATH")));
+            additions.put(keyOf(base, "LD_LIBRARY_PATH"),
+                    prepend(buildLib, lookup(base, "LD_LIBRARY_PATH")));
         }
         for (String name : List.of("CC", "CXX", "MAKE", "AR", "LD", "PKG_CONFIG",
                 "ZIG_GLOBAL_CACHE_DIR")) {
@@ -206,8 +208,8 @@ public final class BootstrapEnvironment {
             }
             if (exists.test(lib)) {
                 String existing = additions.get("LD_LIBRARY_PATH");
-                additions.put("LD_LIBRARY_PATH", prepend(lib,
-                        existing != null ? existing : base.get("LD_LIBRARY_PATH")));
+                additions.put(keyOf(base, "LD_LIBRARY_PATH"), prepend(lib,
+                        existing != null ? existing : lookup(base, "LD_LIBRARY_PATH")));
             }
         }
         if (includePython && python != null && python.usable()
@@ -225,11 +227,11 @@ public final class BootstrapEnvironment {
             putIfUnusable(additions, base, "UV_PYTHON", interpreter.toString());
         }
         if (!pathPrefixes.isEmpty()) {
-            String path = base.get("PATH");
+            String path = lookup(base, "PATH");
             for (int i = pathPrefixes.size() - 1; i >= 0; i--) {
                 path = prepend(pathPrefixes.get(i), path);
             }
-            additions.put("PATH", path);
+            additions.put(keyOf(base, "PATH"), path);
         }
         if (caFile != null && exists.test(caFile)) {
             String path = caFile.toString();
@@ -257,14 +259,81 @@ public final class BootstrapEnvironment {
         return additions;
     }
 
+    /// Reads a variable out of an environment map the way Windows would.
+    ///
+    /// `System.getenv()` spells the search path `Path`, and the TUIs build their
+    /// child environment with `new HashMap<>(System.getenv())` — an ordinary
+    /// case-sensitive map holding that spelling. `get("PATH")` on it answered
+    /// `null`, so the panel's directories were prepended to nothing and the
+    /// child got a search path with *only* them in it, losing every program the
+    /// host had.
+    ///
+    /// @param base the environment to read
+    /// @param name the canonical (upper-case) variable name
+    /// @return its value under any spelling, or `null`
+    static @Nullable String lookup(Map<String, String> base, String name) {
+        return lookup(base, name, OperatingSystem.CURRENT_OS);
+    }
+
+    /// The pure form, with the platform named so a test can drive both
+    /// spellings on any machine.
+    ///
+    /// @param base the environment to read
+    /// @param name the canonical (upper-case) variable name
+    /// @param os   the platform whose casing rules apply
+    /// @return its value under any spelling, or `null`
+    static @Nullable String lookup(Map<String, String> base, String name, OperatingSystem os) {
+        String value = base.get(name);
+        if (value != null || os != OperatingSystem.WINDOWS) {
+            return value;
+        }
+        for (Map.Entry<String, String> entry : base.entrySet()) {
+            if (entry.getKey().equalsIgnoreCase(name)) {
+                return entry.getValue();
+            }
+        }
+        return null;
+    }
+
+    /// The spelling `name` is already stored under, so an amendment replaces
+    /// that entry instead of standing beside it.
+    ///
+    /// Two keys differing only in case in one environment block is a coin toss
+    /// about which one the child sees; this is what keeps the block to one.
+    ///
+    /// @param base the environment that will receive the amendment
+    /// @param name the canonical (upper-case) variable name
+    /// @return the key to write under
+    static String keyOf(Map<String, String> base, String name) {
+        return keyOf(base, name, OperatingSystem.CURRENT_OS);
+    }
+
+    /// The pure form of [#keyOf].
+    ///
+    /// @param base the environment that will receive the amendment
+    /// @param name the canonical (upper-case) variable name
+    /// @param os   the platform whose casing rules apply
+    /// @return the key to write under
+    static String keyOf(Map<String, String> base, String name, OperatingSystem os) {
+        if (os != OperatingSystem.WINDOWS) {
+            return name;
+        }
+        for (String key : base.keySet()) {
+            if (key.equalsIgnoreCase(name)) {
+                return key;
+            }
+        }
+        return name;
+    }
+
     private static void putIfUnusable(Map<String, String> additions, Map<String, String> base,
                                       String name, @Nullable String value) {
         if (value == null || value.isBlank()) {
             return;
         }
-        String existing = base.get(name);
+        String existing = lookup(base, name);
         if (existing == null || existing.isBlank()) {
-            additions.put(name, value);
+            additions.put(keyOf(base, name), value);
         }
     }
 

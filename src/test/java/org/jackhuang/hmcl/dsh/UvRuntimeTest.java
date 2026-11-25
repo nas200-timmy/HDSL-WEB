@@ -83,18 +83,29 @@ public class UvRuntimeTest {
     @Test
     public void wheelNamesAreMatchedByPlatform() {
         boolean arm = UvRuntime.platformTag().endsWith("arm64");
+        boolean musl = PythonRuntimeManager.isMusl(java.nio.file.Files::exists);
         String name = switch (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS) {
             case WINDOWS -> "uv-" + UvRuntime.version() + "-py3-none-"
                     + (arm ? "win_arm64" : "win_amd64") + ".whl";
             case MACOS -> "uv-" + UvRuntime.version() + "-py3-none-macosx_11_0_"
                     + (arm ? "arm64" : "x86_64") + ".whl";
-            default -> "uv-" + UvRuntime.version() + "-py3-none-manylinux_2_17_"
-                    + (arm ? "aarch64" : "x86_64") + ".manylinux2014_"
-                    + (arm ? "aarch64" : "x86_64") + ".whl";
+            default -> "uv-" + UvRuntime.version() + "-py3-none-"
+                    + (musl ? "musllinux_1_1_" : "manylinux_2_17_")
+                    + (arm ? "aarch64" : "x86_64")
+                    + (musl ? "" : ".manylinux2014_" + (arm ? "aarch64" : "x86_64")) + ".whl";
         };
         assertTrue(UvRuntime.matchesWheel(name), name);
         assertFalse(UvRuntime.matchesWheel("uv-0.0.1-py3-none-any.whl"));
         assertFalse(UvRuntime.matchesWheel("uv-" + UvRuntime.version() + "-py3-none-any.whl"));
+        if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                == org.jackhuang.hmcl.util.platform.OperatingSystem.LINUX) {
+            // The other libc's wheel is a different binary: its digest would
+            // check out and the loader would then refuse it.
+            String other = "uv-" + UvRuntime.version() + "-py3-none-"
+                    + (musl ? "manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+                            : "musllinux_1_1_x86_64.whl");
+            assertEquals(musl, UvRuntime.matchesWheel(other), other);
+        }
     }
 
     @Test
