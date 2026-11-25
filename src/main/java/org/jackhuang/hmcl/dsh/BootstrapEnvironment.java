@@ -64,21 +64,31 @@ public final class BootstrapEnvironment {
     private BootstrapEnvironment() {
     }
 
-    /// The additions that would be made to the panel's own environment.
+    /// The closure this host's children should get, or `null`.
     ///
-    /// @return the variables to add or replace; never `null`
-    public static Map<String, String> additions() {
+    /// One decision, used by every entry point. A panel that once ran in a
+    /// minimal image keeps the closure on disk; injecting it into a host that
+    /// has its own, newer libstdc++ made a gcc-14 build die on
+    /// `GLIBCXX_3.4.32 not found` — the closure's copy is older, and it was
+    /// winning. The question is "does *this* host need it", not "is one
+    /// installed". Keeping the test here (rather than only in [#additions()])
+    /// is what makes it apply to [#apply] and [#agentProcess] too: those are
+    /// where every child is actually started.
+    private static @Nullable Installed environmentRuntime() {
         Installed runtime = BootstrapRuntimeManager.currentRuntimeClosure();
         if (runtime != null && !closureNeeded(
                 BootstrapRuntimeManager.missingNodeLibraries().isEmpty(),
                 org.jackhuang.hmcl.util.platform.Executables.resolve("setpriv").isPresent())) {
-            // A panel that once ran in a minimal image keeps the closure on disk.
-            // Injecting it into a host that has its own, newer libstdc++ made a
-            // gcc-14 build die on `GLIBCXX_3.4.32 not found`: the closure's copy
-            // is older, and it was winning. The question is "does *this* host
-            // need it", not "is one installed".
-            runtime = null;
+            return null;
         }
+        return runtime;
+    }
+
+    /// The additions that would be made to the panel's own environment.
+    ///
+    /// @return the variables to add or replace; never `null`
+    public static Map<String, String> additions() {
+        Installed runtime = environmentRuntime();
         BootstrapRuntimeManager.CaInstalled ca = BootstrapRuntimeManager.currentCaBundle();
         PythonResolver.Interpreter python = PythonResolver.resolve();
         BuildToolchainManager.Toolchain build = BuildToolchainManager.currentInstalled();
@@ -107,7 +117,7 @@ public final class BootstrapEnvironment {
     /// @param includePython whether to name an interpreter; an app that brings
     ///                      its own passes `false`
     public static void apply(Map<String, String> environment, boolean includePython) {
-        Installed runtime = BootstrapRuntimeManager.currentRuntimeClosure();
+        Installed runtime = environmentRuntime();
         BootstrapRuntimeManager.CaInstalled ca = BootstrapRuntimeManager.currentCaBundle();
         PythonResolver.Interpreter python = PythonResolver.resolve();
         BuildToolchainManager.Toolchain build = BuildToolchainManager.currentInstalled();
@@ -377,6 +387,26 @@ public final class BootstrapEnvironment {
         if (existing == null || existing.isBlank()) {
             additions.put(keyOf(base, name), value);
         }
+    }
+
+    /// The key an environment already uses for `PATH`.
+    ///
+    /// Windows spells it `Path`. Reading or writing the upper-case name beside
+    /// that entry leaves two variables in one block, and which one the child
+    /// sees is then an accident of ordering.
+    ///
+    /// @param environment the map about to be amended
+    /// @return the spelling to write under
+    public static String pathKey(Map<String, String> environment) {
+        return keyOf(environment, "PATH");
+    }
+
+    /// The `PATH` value under either spelling, or `null`.
+    ///
+    /// @param environment the map to read
+    /// @return the value, or `null`
+    public static @Nullable String pathValue(Map<String, String> environment) {
+        return lookup(environment, "PATH");
     }
 
     /// Puts `directory` in front of a path list without duplicating it.

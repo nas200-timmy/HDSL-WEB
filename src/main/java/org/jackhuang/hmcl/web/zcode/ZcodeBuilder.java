@@ -1033,26 +1033,9 @@ public final class ZcodeBuilder {
     private static void run(Step step, Settings settings, Path workingDirectory, List<String> command,
                             Duration timeout, BuildToolchainManager.Toolchain toolchain)
             throws ZcodeException {
-        // The shims come first so a bare `tar` (the build script's own call) resolves
-        // to the system one, then the build toolchain, then the panel's own PATH. The
-        // order matters for the *program name* too: the toolchain's pnpm has to be the
-        // one found, which is why the command is resolved against this PATH rather
-        // than this process's own.
-        String path = System.getenv("PATH");
-        // The separator is a property of the system, not of the variable's name:
-        // hardcoding `:` on Windows makes the whole inherited PATH into one entry
-        // that names nothing.
-        StringBuilder searchPath = new StringBuilder(shimDirectory(settings).toString());
-        if (!settings.buildBin().isBlank()) {
-            searchPath.append(java.io.File.pathSeparator).append(settings.buildBin());
-        }
-        if (path != null && !path.isEmpty()) {
-            searchPath.append(java.io.File.pathSeparator).append(path);
-        }
-        ProcessBuilder builder = new ProcessBuilder(Executables.startable(command, searchPath.toString()));
+        ProcessBuilder builder = new ProcessBuilder();
         builder.directory(workingDirectory.toFile());
         builder.redirectErrorStream(true);
-        builder.environment().put("PATH", searchPath.toString());
         // The build's own Python root, which is the same as the panel's unless a
         // caller named another. node-gyp reads both names; pnpm's install scripts
         // (`cpu-features`, when it has to compile) are the only consumer here.
@@ -1061,10 +1044,33 @@ public final class ZcodeBuilder {
         applyPython(builder.environment(), settings);
         org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(builder);
         // The toolchain the build resolved before the download. `applyTo` prefixes
-        // this build's `bin` ahead of the shims and leaves an operator's CC/CXX
-        // alone; the portable Linux pkgconf also needs its `lib/` on
-        // LD_LIBRARY_PATH, which is part of the same map.
+        // this build's `bin` and leaves an operator's CC/CXX alone; the portable
+        // Linux pkgconf also needs its `lib/` on LD_LIBRARY_PATH, which is part of
+        // the same map.
         toolchain.applyTo(builder.environment());
+        // The shims come first so a bare `tar` (the build script's own call)
+        // resolves to the system one, then the toolchain, then the panel's own
+        // PATH. Composing the list *after* `applyTo` is what makes that true;
+        // before, the toolchain's `bin` was prepended ahead of the shims and the
+        // `tar.bat` this build writes could never win. The command name is
+        // resolved against the same list.
+        String pathKey = org.jackhuang.hmcl.dsh.BootstrapEnvironment
+                .pathKey(builder.environment());
+        String basePath = org.jackhuang.hmcl.dsh.BootstrapEnvironment
+                .pathValue(builder.environment());
+        // The separator is a property of the system, not of the variable's name:
+        // hardcoding `:` on Windows makes the whole inherited PATH into one entry
+        // that names nothing.
+        StringBuilder searchPath = new StringBuilder(shimDirectory(settings).toString());
+        if (!settings.buildBin().isBlank()
+                && (basePath == null || !basePath.contains(settings.buildBin()))) {
+            searchPath.append(java.io.File.pathSeparator).append(settings.buildBin());
+        }
+        if (basePath != null && !basePath.isBlank()) {
+            searchPath.append(java.io.File.pathSeparator).append(basePath);
+        }
+        builder.environment().put(pathKey, searchPath.toString());
+        builder.command(Executables.startable(command, searchPath.toString()));
         // Everything a child of the launcher is given: the proxy the settings describe, the npm
         // registry, and the knobs that keep a native build from fetching from the slow half of the
         // internet. The build runs pnpm, node-gyp and git, and all three read these — the proxy

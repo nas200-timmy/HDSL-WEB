@@ -114,8 +114,14 @@ public record DshNodeRuntime(
         // The bootstrap additions come first: a minimal image's `node` needs the
         // managed closure on LD_LIBRARY_PATH before it can even print `--version`.
         java.util.Map<String, String> env = new java.util.HashMap<>(BootstrapEnvironment.additions());
-        env.put("PATH", bin.toString() + java.io.File.pathSeparator
-                + env.getOrDefault("PATH", java.util.Optional.ofNullable(System.getenv("PATH")).orElse("")));
+        String pathKey = BootstrapEnvironment.pathKey(env);
+        String existingPath = BootstrapEnvironment.pathValue(env);
+        if (existingPath == null || existingPath.isBlank()) {
+            existingPath = BootstrapEnvironment.pathValue(System.getenv());
+        }
+        env.put(pathKey, existingPath == null || existingPath.isBlank()
+                ? bin.toString()
+                : bin + java.io.File.pathSeparator + existingPath);
 
         return new DshNodeRuntime(
                 runtime.node(),
@@ -339,12 +345,13 @@ public record DshNodeRuntime(
     /// @return the environment additions
     public java.util.Map<String, String> pathEnvironment() {
         java.util.Map<String, String> environment = new java.util.HashMap<>(BootstrapEnvironment.additions());
-        String existing = environment.get("PATH");
+        String pathKey = BootstrapEnvironment.pathKey(environment);
+        String existing = BootstrapEnvironment.pathValue(environment);
         if (existing == null || existing.isBlank()) {
-            existing = System.getenv("PATH");
+            existing = BootstrapEnvironment.pathValue(System.getenv());
         }
         String bin = binDirectory().toString();
-        environment.put("PATH", existing == null || existing.isBlank()
+        environment.put(pathKey, existing == null || existing.isBlank()
                 ? bin
                 : bin + java.io.File.pathSeparator + existing);
         return environment;

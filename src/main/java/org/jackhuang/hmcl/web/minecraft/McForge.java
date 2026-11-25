@@ -869,6 +869,9 @@ public final class McForge {
                 installerArgv(javaBin, installer, mirror)));
         builder.directory(directory.toFile());
         builder.redirectErrorStream(true);
+        // Minimal images: the `setpriv` that starts this child comes from the
+        // bootstrap closure and needs its library path.
+        org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(builder, false);
         Process process = builder.start();
         // Drained on its own thread. Reading first and waiting afterwards is how a deadline
         // never fires: an installer that hangs without closing stdout blocks the read forever,
