@@ -74,9 +74,11 @@ public final class FfmpegLocator {
             if (Files.isRegularFile(path)) {
                 return path.toAbsolutePath().normalize();
             }
-            // A bare name is a PATH lookup, not a relative path.
+            // A bare name is a PATH lookup, not a relative path — and it is the
+            // name the operator typed, not the one this method was asked about:
+            // `ffmpeg_path: ffmpeg7` must find ffmpeg7, not plain ffmpeg.
             if (!trimmed.contains("/") && !trimmed.contains("\\")) {
-                return Executables.resolve(name).orElse(null);
+                return Executables.resolve(trimmed).orElse(null);
             }
             return null;
         }

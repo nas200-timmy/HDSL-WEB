@@ -423,7 +423,8 @@ public final class ServerConfigLoader {
         for (String key : section.keySet()) {
             switch (key) {
                 case "media_root", "ffmpeg_path", "max_concurrent", "max_queue",
-                        "failure_policy", "failure_timeout_minutes", "auto_resume" -> {
+                        "failure_policy", "failure_timeout_minutes", "auto_resume",
+                        "ffmpeg_catalog", "binary_mirror", "source_mirror" -> {
                 }
                 default -> throw new ConfigException("transcode: unknown key `" + key + "`");
             }

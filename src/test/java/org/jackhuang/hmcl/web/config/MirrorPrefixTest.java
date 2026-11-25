@@ -17,11 +17,13 @@
  */
 package org.jackhuang.hmcl.web.config;
 
+import org.jackhuang.hmcl.util.logging.Logger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -65,5 +67,22 @@ public class MirrorPrefixTest {
         assertTrue(yaml.contains("binary_mirror"), yaml);
         assertTrue(yaml.contains("https://gh-proxy.com/"), yaml);
         assertTrue(yaml.contains("source_mirror"), yaml);
+    }
+
+    /// Saving the mirrors must not brick the next start-up: what the writer emits
+    /// has to survive the loader's unknown-key check, along with the keys an
+    /// operator already had under `transcode:`.
+    @Test
+    public void theLoaderAcceptsWhatTheWriterSaved(@TempDir Path dir) throws Exception {
+        ServerConfigWriter.setTranscodeSources(dir, "", "");
+        ServerConfigWriter.setTranscodeFailurePolicy(dir, "timeout-auto", 30);
+
+        ServerConfigWriter.setTranscodeSources(dir, "https://gh-proxy.com", "https://src.example.com/");
+
+        ServerConfig config = ServerConfigLoader.load(dir, Map.of(), Logger.LOG);
+        assertEquals("https://gh-proxy.com/", config.transcode.binaryMirror);
+        assertEquals("https://src.example.com/", config.transcode.sourceMirror);
+        assertEquals("timeout-auto", config.transcode.failurePolicy, "a neighbouring key must not be lost");
+        assertEquals(30, config.transcode.failureTimeoutMinutes);
     }
 }
