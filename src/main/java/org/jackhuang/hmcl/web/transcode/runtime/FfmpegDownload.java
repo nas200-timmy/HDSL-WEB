@@ -74,29 +74,83 @@ final class FfmpegDownload {
         return urls.stream().distinct().toList();
     }
 
+    private static final int MAX_REDIRECTS = 5;
+
+    private static boolean isRedirect(int status) {
+        return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+    }
+
+    /// Validates the URL and every address its host resolves to.
+    ///
+    /// A name that resolves to `127.0.0.1` (or a cloud metadata address) is the
+    /// same SSRF as writing the address literally; this closes that half.
+    private static void validateResolved(URI uri) throws IOException {
+        FfmpegInstaller.validateUrl(uri.toString());
+        String host = uri.getHost();
+        if (host == null) {
+            throw new IOException("the URL names no host");
+        }
+        String literal = host.startsWith("[") && host.endsWith("]")
+                ? host.substring(1, host.length() - 1) : host;
+        java.net.InetAddress[] addresses;
+        try {
+            addresses = java.net.InetAddress.getAllByName(literal);
+        } catch (java.net.UnknownHostException e) {
+            throw new IOException("could not resolve " + host, e);
+        }
+        for (java.net.InetAddress address : addresses) {
+            if (FfmpegInstaller.isPrivateAddress(address)) {
+                throw new IOException("private/loopback URLs are refused: "
+                        + address.getHostAddress());
+            }
+        }
+    }
+
     static void download(String url, Path target, Duration timeout,
                          FfmpegRuntimeManager.Progress progress,
                          BooleanSupplier cancelled) throws IOException {
         URI uri = URI.create(url);
-        FfmpegInstaller.validateUrl(url);
+        validateResolved(uri);
+        // Redirects are followed by hand: a `Location:` is a second address
+        // the catalogue did not name, and it has to be checked *before* the
+        // request goes out, not after.
         HttpClient client = HttpClient.newBuilder()
-                .followRedirects(HttpClient.Redirect.NORMAL)
+                .followRedirects(HttpClient.Redirect.NEVER)
                 .connectTimeout(Duration.ofSeconds(20))
                 .build();
-        HttpRequest request = HttpRequest.newBuilder(uri)
-                .timeout(timeout)
-                .GET()
-                .build();
-        HttpResponse<InputStream> response;
-        try {
-            response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("ffmpeg_install_interrupted", e);
+        HttpResponse<InputStream> response = null;
+        for (int hop = 0; hop <= MAX_REDIRECTS; hop++) {
+            if (cancelled.getAsBoolean()) {
+                throw new CancellationException("cancelled");
+            }
+            HttpRequest request = HttpRequest.newBuilder(uri).timeout(timeout).GET().build();
+            try {
+                response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("ffmpeg_install_interrupted", e);
+            }
+            int status = response.statusCode();
+            if (!isRedirect(status)) {
+                break;
+            }
+            String location = response.headers().firstValue("location").orElse(null);
+            try (InputStream ignored = response.body()) {
+                // Closed; a redirect body is not the artifact.
+            }
+            response = null;
+            if (location == null || location.isBlank()) {
+                throw new IOException("redirect without a location");
+            }
+            uri = uri.resolve(location);
+            validateResolved(uri);
+            progress.stage("following a redirect to " + uri.getHost(), 0);
         }
-        FfmpegInstaller.validateUrl(response.uri().toString());
+        if (response == null) {
+            throw new IOException("too many redirects");
+        }
         if (response.statusCode() != 200) {
-            throw new IOException("download returned HTTP " + response.statusCode() + " for " + response.uri());
+            throw new IOException("download returned HTTP " + response.statusCode() + " for " + uri);
         }
         long total = response.headers().firstValueAsLong("content-length").orElse(-1);
         try (InputStream in = new BufferedInputStream(response.body());

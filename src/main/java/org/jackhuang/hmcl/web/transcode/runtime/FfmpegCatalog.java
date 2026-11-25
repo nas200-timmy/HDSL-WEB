@@ -223,7 +223,16 @@ public final class FfmpegCatalog {
     public static Catalog load(@Nullable Path override) {
         if (override != null && Files.isRegularFile(override)) {
             try {
-                return parse(Files.readString(override, StandardCharsets.UTF_8), override.toString());
+                Catalog parsed = parse(Files.readString(override, StandardCharsets.UTF_8),
+                        override.toString());
+                if (!parsed.entries().isEmpty()) {
+                    return parsed;
+                }
+                // A syntactically valid file whose entries were all rejected is
+                // the same dead end as an unreadable one: the page offers
+                // nothing to install while the built-in copy sits in the jar.
+                LOG.warning("The ffmpeg catalogue " + override + " lists no usable entries;"
+                        + " using the built-in catalogue instead");
             } catch (IOException | RuntimeException e) {
                 LOG.warning("Could not read the ffmpeg catalogue " + override + ": " + e.getMessage()
                         + "; using the built-in catalogue instead");

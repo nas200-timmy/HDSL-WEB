@@ -239,6 +239,14 @@ public final class TranscodeApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must be a JSON object");
             return;
         }
+        // A download mirror decides where every later install fetches its
+        // bytes from. The digest still protects integrity, but the choice is
+        // an execution-shaped knob and belongs behind the same door as the
+        // install it feeds.
+        boolean changesMirror = body.has("binaryMirror") || body.has("sourceMirror");
+        if (changesMirror && !requireHumanElevation(request, response)) {
+            return;
+        }
         String policy = stringField(body, "failurePolicy");
         if (policy == null || !List.of("ask", "timeout-auto", "full-auto").contains(policy)) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
@@ -276,8 +284,12 @@ public final class TranscodeApiServlet extends HttpServlet {
             if (body.has("failureTimeoutMinutes")) {
                 config.transcode.failureTimeoutMinutes = timeout;
             }
-            audit("transcode.settings.update", policy + "/"
-                    + config.transcode.failureTimeoutMinutes, "success", request);
+            // The mirror values are part of what changed, so they belong in
+            // the record; "policy/timeout" alone could not answer "was the
+            // download source rewritten?" after the fact.
+            String audited = policy + "/" + config.transcode.failureTimeoutMinutes
+                    + (changesMirror ? " mirrors=" + binaryMirror + "," + sourceMirror : "");
+            audit("transcode.settings.update", audited, "success", request);
             featureJson(response);
         } catch (IOException e) {
             Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());

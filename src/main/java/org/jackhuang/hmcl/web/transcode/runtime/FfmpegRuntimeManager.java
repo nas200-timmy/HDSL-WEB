@@ -25,13 +25,8 @@ import org.jackhuang.hmcl.util.logging.Logger;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
-import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
@@ -182,6 +177,21 @@ public final class FfmpegRuntimeManager {
 
     /// Downloads and installs one catalogue entry, then activates it.
     public Installed install(FfmpegCatalog.Entry entry, Progress progress) throws IOException {
+        return install(entry, progress, () -> false);
+    }
+
+    /// The same, honouring a cancellation flag while the body is arriving.
+    ///
+    /// Without it a hung mirror kept the manager lock — and with it every
+    /// later install and delete — for as long as the socket stayed open.
+    ///
+    /// @param entry     the catalogue entry
+    /// @param progress  progress sink
+    /// @param cancelled polled between reads
+    /// @return the installed runtime
+    /// @throws IOException when the download or install fails
+    public Installed install(FfmpegCatalog.Entry entry, Progress progress,
+                             java.util.function.BooleanSupplier cancelled) throws IOException {
         synchronized (lock) {
             if (!entry.isBinary()) {
                 throw new IOException("ffmpeg_source_unsupported: source builds are not part of this stage");
@@ -210,7 +220,7 @@ public final class FfmpegRuntimeManager {
             try {
                 java.util.List<String> candidates = FfmpegDownload.candidates(
                         binaryMirror.get(), entry.url(), entry.mirrors());
-                String used = downloadFirst(candidates, download, progress);
+                String used = downloadFirst(candidates, download, progress, cancelled);
                 LOG.info("ffmpeg: " + entry.id() + " downloaded from " + used);
                 progress.stage("verifying SHA-256", 0.6);
                 verifySha(download, entry.sha256());
@@ -324,10 +334,14 @@ public final class FfmpegRuntimeManager {
             State state = readState();
             String old = state.current != null ? state.current : currentId();
             writePointer(safe);
-            writeSymlink(directory);
+            String renamedLegacy = writeSymlink(directory);
             state.current = safe;
             if (old != null && !old.equals(safe)) {
-                state.previous = old;
+                // A legacy `current` *directory* is renamed to `legacy-<ts>`
+                // by writeSymlink; remembering the old name "legacy" made the
+                // rollback button point at a directory that no longer exists.
+                state.previous = "legacy".equals(old) && renamedLegacy != null
+                        ? renamedLegacy : old;
             }
             state.updatedAt = Instant.now().toString();
             try {
@@ -474,17 +488,19 @@ public final class FfmpegRuntimeManager {
 
     /// Tries each candidate until one delivers; a failed attempt never leaves a
     /// partial file behind for the SHA check to misread.
-    private String downloadFirst(java.util.List<String> candidates, Path target, Progress progress)
+    private String downloadFirst(java.util.List<String> candidates, Path target, Progress progress,
+                                 java.util.function.BooleanSupplier cancelled)
             throws IOException {
         IOException failure = null;
         for (String candidate : candidates) {
             progress.stage("downloading " + candidate, 0);
             try {
-                download(candidate, target, progress);
+                // One downloader for both this manager and the source build:
+                // a second copy had already drifted on body deadlines and
+                // cancellation, which left a hung mirror holding the lock.
+                FfmpegDownload.download(candidate, target, Duration.ofMinutes(10),
+                        progress, cancelled);
                 return candidate;
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new IOException("ffmpeg_install_interrupted", e);
             } catch (IOException e) {
                 LOG.info("ffmpeg download from " + candidate + " failed: " + e.getMessage());
                 failure = e;
@@ -494,51 +510,6 @@ public final class FfmpegRuntimeManager {
         throw new IOException("ffmpeg_download_failed: every source failed ("
                 + String.join(", ", candidates) + ")"
                 + (failure == null ? "" : ": " + failure.getMessage()), failure);
-    }
-
-    private void download(String url, Path target, Progress progress)
-            throws IOException, InterruptedException {
-        URI uri = URI.create(url);
-        HttpClient client = HttpClient.newBuilder()
-                .followRedirects(HttpClient.Redirect.NORMAL)
-                .connectTimeout(Duration.ofSeconds(20))
-                .build();
-        HttpRequest request = HttpRequest.newBuilder(uri)
-                .timeout(Duration.ofMinutes(10))
-                .GET()
-                .build();
-        HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
-        FfmpegInstaller.validateUrl(response.uri().toString());
-        if (response.statusCode() != 200) {
-            throw new IOException("download returned HTTP " + response.statusCode());
-        }
-        long total = response.headers().firstValueAsLong("content-length").orElse(-1);
-        MessageDigest digest;
-        try {
-            digest = MessageDigest.getInstance("SHA-256");
-        } catch (Exception e) {
-            throw new IOException("SHA-256 is not available", e);
-        }
-        try (InputStream in = new BufferedInputStream(response.body());
-             var out = Files.newOutputStream(target)) {
-            byte[] buffer = new byte[1 << 16];
-            long copied = 0;
-            int lastBucket = -1;
-            int read;
-            while ((read = in.read(buffer)) >= 0) {
-                out.write(buffer, 0, read);
-                digest.update(buffer, 0, read);
-                copied += read;
-                if (total > 0) {
-                    int bucket = (int) (copied * 100 / total);
-                    if (bucket != lastBucket) {
-                        lastBucket = bucket;
-                        progress.stage("downloading " + copied / (1024 * 1024) + " / "
-                                + total / (1024 * 1024) + " MiB", Math.min(0.58, 0.58 * copied / total));
-                    }
-                }
-            }
-        }
     }
 
     private static void verifySha(Path file, String expected) throws IOException {
@@ -639,7 +610,11 @@ public final class FfmpegRuntimeManager {
         }
     }
 
-    private void writeSymlink(Path directory) {
+    /// Points `current` at `directory`.
+    ///
+    /// @return the name a legacy `current` directory was renamed to, or `null`
+    ///         when there was none
+    private @Nullable String writeSymlink(Path directory) {
         Path current = toolsDir.resolve("current");
         Path temporary = toolsDir.resolve(".current-" + UUID.randomUUID());
         try {
@@ -654,10 +629,12 @@ public final class FfmpegRuntimeManager {
                 }
             } else if (Files.exists(current)) {
                 // A legacy `current` directory is kept as history; the pointer
-                // already makes the new runtime authoritative.
+                // already makes the new runtime authoritative. Its new name is
+                // returned so `previous` can point at it.
                 Path legacy = toolsDir.resolve("legacy-" + System.currentTimeMillis());
                 Files.move(current, legacy, StandardCopyOption.ATOMIC_MOVE);
                 Files.move(temporary, current, StandardCopyOption.ATOMIC_MOVE);
+                return legacy.getFileName().toString();
             } else {
                 Files.move(temporary, current, StandardCopyOption.ATOMIC_MOVE);
             }
@@ -671,6 +648,7 @@ public final class FfmpegRuntimeManager {
             LOG.info("ffmpeg: could not create the `current` symlink; using current.json ("
                     + e.getMessage() + ")");
         }
+        return null;
     }
 
     private State readState() {

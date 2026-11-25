@@ -165,7 +165,7 @@ public final class FfmpegInstaller {
                 job.message = message;
                 job.progress = fraction;
                 log(job, message + "\n");
-            });
+            }, () -> job.state == State.CANCELLED);
             if (job.state != State.CANCELLED) {
                 job.state = State.DONE;
                 job.progress = 1;
@@ -449,13 +449,47 @@ public final class FfmpegInstaller {
             throw new IOException("only https URLs are accepted");
         }
         String host = uri.getHost().toLowerCase(java.util.Locale.ROOT);
-        if ("localhost".equals(host) || host.startsWith("127.") || host.startsWith("10.")
-                || host.startsWith("192.168.") || host.startsWith("172.16.")
-                || host.startsWith("172.17.") || host.startsWith("172.18.")
-                || host.startsWith("172.19.") || host.startsWith("172.2")
-                || host.startsWith("172.30.") || host.startsWith("172.31.")) {
+        // IPv6 literals arrive bracketed from URI.getHost().
+        String literal = host.startsWith("[") && host.endsWith("]")
+                ? host.substring(1, host.length() - 1) : host;
+        if ("localhost".equals(literal)) {
             throw new IOException("private/loopback URLs are refused");
         }
+        if (looksLikeLiteral(literal)) {
+            try {
+                if (isPrivateAddress(java.net.InetAddress.getByName(literal))) {
+                    throw new IOException("private/loopback URLs are refused");
+                }
+            } catch (java.net.UnknownHostException e) {
+                throw new IOException("invalid host literal: " + host);
+            }
+        }
+    }
+
+    /// Whether a host is written as an address rather than a name.
+    ///
+    /// IPv6 (`[::1]`), dotted IPv4, the three- and two-part forms
+    /// (`127.1`), and the single-number forms Java also parses
+    /// (`2130706433`) are all literal. A DNS name is left to the downloader,
+    /// which resolves it before the request; this method stays offline so a
+    /// unit test does not need a resolver.
+    private static boolean looksLikeLiteral(String host) {
+        return host.indexOf(':') >= 0
+                || host.matches("\\d+(\\.\\d+){0,3}")
+                || host.matches("0[xX][0-9a-fA-F]+");
+    }
+
+    /// Whether an address is loopback, link-local, site-local, multicast or
+    /// otherwise not on the public internet.
+    static boolean isPrivateAddress(java.net.InetAddress address) {
+        if (address.isAnyLocalAddress() || address.isLoopbackAddress()
+                || address.isLinkLocalAddress() || address.isSiteLocalAddress()
+                || address.isMulticastAddress()) {
+            return true;
+        }
+        byte[] bytes = address.getAddress();
+        // IPv6 unique-local fc00::/7.
+        return bytes.length == 16 && (bytes[0] & 0xfe) == 0xfc;
     }
 
     private static void log(InstallJob job, String text) {
