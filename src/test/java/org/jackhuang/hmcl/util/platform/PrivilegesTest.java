@@ -362,4 +362,23 @@ class PrivilegesTest {
         assertEquals(owner, Privileges.ownerOf(file));
         assertEquals(parentOwner, Privileges.ownerOf(operator));
     }
+
+    @Test
+    void exactlyOneGroupOptionIsEverEmitted() {
+        // setpriv(1): --clear-groups / --keep-groups / --init-groups / --groups
+        // are mutually exclusive. Passing two makes every agent launch fail, and
+        // only a host whose supplementary groups are non-empty reaches the
+        // combination that used to do it.
+        java.util.List<java.util.List<Integer>> cases = java.util.List.of(
+                java.util.List.of(), java.util.List.of(44), java.util.List.of(44, 109));
+        for (java.util.List<Integer> groups : cases) {
+            java.util.List<String> wrapped = Privileges.wrap(
+                    java.util.List.of("true"), true, groups);
+            long options = wrapped.stream().filter(argument ->
+                    argument.equals("--clear-groups") || argument.equals("--keep-groups")
+                            || argument.equals("--init-groups") || argument.startsWith("--groups="))
+                    .count();
+            assertEquals(1, options, groups + " -> " + wrapped);
+        }
+    }
 }
