@@ -527,7 +527,7 @@ HTTP），把"一个人会点到的路径"念一遍——`/api/node` 的字段�
 因此容器里分两段（`util/platform/Privileges.java`）：
 
 - 面板是 PID 1、uid 0，`auth/`、`certs/`、`logs/`、`server.yaml` 归 root `0700/0600`；
-- 每个 agent 进程派生时前置 `setpriv --reuid=<agent> --regid=<agent> --init-groups --`，
+- 每个 agent 进程派生时前置 `setpriv --reuid=<agent> --regid=<agent> --groups=<gid,…> --`（无附加组时 `--clear-groups`），
   跑成镜像里的 `hdsl`。**所有**派生点都要覆盖：dsh 主进程、实例内命令（npm/pnpm）、ACP、
   品牌实例、ZCode 实例、Octop 的口令操作、MC 的 pipe 控制台、以及 PTY 终端
   （`posix_spawn` 那条也要，`setpriv` 是 exec 原地替换，进程组与 PTY 会话都不变）。

@@ -517,7 +517,7 @@ RUN printf '%s\n' \
       '}' \
       'umask 002' \
       'if [ "$(id -u)" = "0" ]; then' \
-      '  # Hardware encoding runs as uid 1000 after setpriv --init-groups; the render' \
+      '  # Hardware encoding runs as uid 1000 after setpriv --groups=…; the render' \
       '  # group must exist in /etc/group for that reset to keep it. Auto-detect the' \
       '  # device GID so a compose file only has to pass the device through.' \
       '  render_gid="${HDSL_RENDER_GID:-}"' \
@@ -559,7 +559,7 @@ RUN printf '%s\n' \
       '  # lets it through 0700. There the split below is only on paper, and a silent' \
       '  # false sense of security is worse than no split — so say it out loud.' \
       '  if command -v setpriv >/dev/null 2>&1; then' \
-      '    if setpriv --reuid=${HDSL_AGENT_UID} --regid=${HDSL_AGENT_UID} --init-groups -- touch "$HDSL_DATA/auth/.hdsl-probe" 2>/dev/null; then' \
+      '    if setpriv --reuid=${HDSL_AGENT_UID} --regid=${HDSL_AGENT_UID} --clear-groups -- touch "$HDSL_DATA/auth/.hdsl-probe" 2>/dev/null; then' \
       '      rm -f "$HDSL_DATA/auth/.hdsl-probe"' \
       '      echo "HDSL-web: WARNING: this filesystem does not enforce mode bits for uid 1000." >&2' \
       '      echo "HDSL-web: auth/, certs/ and logs/ are NOT protected from the agent on this host." >&2' \

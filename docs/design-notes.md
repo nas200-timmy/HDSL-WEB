@@ -201,7 +201,7 @@ Windows 上常见一种情况：杀毒软件、企业网关或 GitHub 加速器�
 容器里因此分两段（`util/platform/Privileges.java`）：
 
 - 面板是 PID 1、uid 0；入口脚本把 `auth/`、`certs/`、`logs/`、`server.yaml` 归 root 0700/0600；
-- 每个 agent 进程派生时前置 `setpriv --reuid=1000 --regid=1000 --init-groups --`，跑成镜像里的 `hdsl`；
+- 每个 agent 进程派生时前置 `setpriv --reuid=1000 --regid=1000 --groups=<gid,…> --`（无附加组时用 `--clear-groups`），跑成镜像里的 `hdsl`。显式数字 gid 列表取代了 `--init-groups`：最小镜像可能没有 `/etc/passwd`/`/etc/group`，而 `--init-groups` 要读它们；列表保留镜像授予的 `render`/`video` 等附加组，且永不继承 root 的组 0；
 - 实例子目录 `1000:1000 2775`（setgid）+ 入口 `umask 002`，所以**面板（root）写进去的文件是
   `root:hdsl 0664`，agent 照样能改**——否则 root 会把 agent 自己的目录写死；
 - 但"setgid 卷 + `umask 002`"是**部署的意外，不是面板能依赖的性质**：普通 bind mount、别的入口

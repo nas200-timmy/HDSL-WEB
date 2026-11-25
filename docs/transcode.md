@@ -177,7 +177,7 @@ HDSL-web 目前是「一个 JVM、一个端口」的控制面：实例、品牌�
 - compose 增加 `- "${HDSL_VIDEO_DIR:-hdsl-video}:/home/hdsl/video"` 与 `hdsl-video` 卷；`docker-install.sh` 增加 `--video <宿主路径|volume:名称|none>`，默认命名卷，摘要明确提示 NAS 用户应指到真实视频目录。
 - Linux 裸部署：`HDSL_MEDIA_ROOT` 环境变量优先；首次启用转码时向导选一次，默认 `<data>/video`；写进 `server.yaml` 的 `transcode.media_root`；UI 显示生效路径、来源、可写性；改根需开发者提权。
 - 所有任务输入/输出、上传/下载、浏览 API 限制在媒体根内；`toRealPath()` + `startsWith`，挡软链逃逸；只读媒体根允许读入但必须另选可写输出目录。
-- 转码子进程复用 `Privileges.asAgent()`（`setpriv --reuid=1000 --regid=1000 --init-groups`），输出文件归 uid 1000。
+- 转码子进程复用 `Privileges.asAgent()`（`setpriv --reuid=1000 --regid=1000 --groups=<gid,…>`，无附加组时 `--clear-groups`），输出文件归 uid 1000。
 
 ffmpeg 获取阶梯：
 
@@ -194,7 +194,7 @@ ffmpeg 获取阶梯：
   - `/dev/dri` 存在 → `--device /dev/dri`，传入宿主 `renderD128` 的 GID。
   - `nvidia-smi` 存在且 nvidia-container-toolkit 可用 → `--gpus all`；没有 toolkit 只给教程，不硬加参数。
   - compose 基础文件不直接写 `devices`（没设备会启动失败），由安装脚本生成 override 或只留注释示例。
-- 入口脚本按 GID 建组并把 `hdsl` 加入：`groupadd -g "$gid" hdsl-render; usermod -aG hdsl-render hdsl`。原因：`setpriv --init-groups` 会按 `/etc/group` 重置附加组，单纯 `--group-add` 会丢。
+- 入口脚本按 GID 建组并把 `hdsl` 加入：`groupadd -g "$gid" hdsl-render; usermod -aG hdsl-render hdsl`。原因：面板派生 agent 时用显式 `--groups=<gid,…>` 保留 `hdsl` 在 `/etc/group` 中的附加组，单纯 `--group-add` 在 `--groups` 整体替换附加组时会丢。
 - 前端明确声明：
   - VAAPI 推荐；
   - QSV 可见、可用，标「实验性」并给出已知问题；
