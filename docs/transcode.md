@@ -65,6 +65,8 @@
   “改 MKV / 丢弃不兼容项 / 取消”三选；编码器参数已做组合校验，但 profile/tune/pix_fmt 的
   逐项枚举仍未全部覆盖；编码器故障探测仍是失败后决策，不是启动探测/任务前检查/stderr 三层自动；
   Agent 写操作确认卡与工具目录、应急上传三重校验仍未做。
+- 全编码源码构建（面板托管依赖栈）：设计稿见文末「附：全编码源码构建」。本版明确不做，默认
+  仍用二进制目录；现在的最小源码构建保持“宿主有什么编什么”。
 
 ## Context
 
@@ -884,6 +886,213 @@ Agent：`transcode` scope 只读 runtime 状态与能力；安装/切换/删除/
   给出精确包名。
 - 安装失败/取消不会留下半套 `current`；旧版本可回滚；未被引用的旧版本可删除；所有操作有审计。
 - 自定义 URL 仍可用，但必须显式哈希 + 提权；同源 sidecar 不再作为唯一信任。
+
+## 附：全编码源码构建（设计稿，暂不实现）
+
+> 状态：设计稿，2026-11-25。**本版线不实现**：二进制目录（BtbN / gyan / Jellyfin）已经覆盖
+> “要一个能用的全编码 ffmpeg”，源码构建继续只做当前的最小 / 宿主依赖模式。本文留给后续版本，
+> 也用来解释为什么“再补一个源码 URL”解决不了全编码问题。
+>
+> 目标：在一台**没有系统 ffmpeg、也没有 libx264-dev 等开发包**的干净宿主机上，由面板自己下载
+> 并编译一套固定版本的依赖库与 FFmpeg，产出一个可托管、可探测、可回滚、可删除的运行时。
+>
+> 非目标：不自动 `sudo`；不追求“所有编码器”（见 §4 的声明矩阵）；不执行目录里的任意构建脚本；
+> 不把 non-free 组件放进默认产物。
+
+### 1. 现状：现在的源码构建是“宿主有什么编什么”
+
+2026-11-25 在 Debian 13 容器里实测 `ffmpeg-source-9.1-gpl-static-v1`：
+
+- 构建成功，但 `External libraries:` 只有 `iconv`；
+- `featuresProbed` 为空，167 个编码器全是 FFmpeg 原生软件编码器；
+- `-hwaccels` 为空；
+- 产物 `runtime.json` 的 `license` 是 `LGPL-2.1-or-later`。
+
+原因不是源码来自官方，而是 `FfmpegBuildKit` 的 `gpl-static-v1` 只启用宿主机上 `pkg-config`
+能发现的 `-dev` 包。没有 `libx264-dev` / `libx265-dev` / `libvpx-dev` / `libaom-dev` /
+`libsvtav1-dev` / `libva-dev` / `libvpl-dev` / `nv-codec-headers` 时，`configure` 自然什么也不带。
+
+因此“全编码源码构建”不是一个下载地址问题，而是**依赖供应链问题**：FFmpeg 官方 tarball 只含
+FFmpeg 自己，H.264/HEVC 软件编码来自 x264/x265，VP9/AV1 来自 libvpx/libaom/libsvtav1，硬件编码
+来自 libva/libvpl/nv-codec-headers。把这些都交给宿主机 `apt`，构建就仍然依赖宿主机；要真正
+自举，就得由面板把依赖也编出来。
+
+### 2. 方案比较
+
+| 方案 | 做法 | 优点 | 缺点 |
+|---|---|---|---|
+| A. 宿主开发包（现状） | 检测 `pkg-config`，有就启用 | 实现简单、构建快、产物小 | 干净宿主只能得到最小构建；用户要自己 `sudo apt` |
+| B. **托管依赖栈（推荐）** | 面板按固定清单下载并编译依赖到临时 prefix，再编 FFmpeg | 真正自举、版本可复现、可声明特性矩阵、可做 GPL/LGPL 两种 profile | 工程量大、构建慢、磁盘与失败面大、要维护依赖版本与哈希 |
+| C. Debian 源码包 | `apt-get source ffmpeg` / `debian/rules` | 带发行版补丁，`debian/rules` 已写全 `--enable-lib*` | 仍然依赖 `Build-Depends`；补丁绑定 Debian 版本；版本通常落后；不是自举 |
+| D. 只发二进制 | 维持 BtbN / gyan / Jellyfin 目录 | 立刻可用、跨机器、无需编译器 | 不能按宿主选补丁/特性；版本受发布方节奏限制；许可证固定 |
+
+结论：C 不解决“干净宿主缺库”，只是把“上游源码”换成“Debian 补丁源码”；D 是当前默认，继续保留。
+B 才是“全编码源码构建”的完整形态，但它是独立产品线，不塞进本版。
+
+### 3. 两种 profile，而不是一个“全编码”开关
+
+| profile | 内容 | 产物许可 | 用途 |
+|---|---|---|---|
+| `lgpl` | 仅宽松许可依赖：libvpx、libaom、libsvtav1、libdav1d、libopus、libmp3lame、libvorbis、libwebp、libtheora、libjxl 等 | LGPL-2.1-or-later | 不想承担 GPL 义务；有 VP9/AV1/Opus 等 |
+| `gpl` | `lgpl` + libx264、libx265、libxvid（以及 GPL-only 滤镜） | GPL-3.0（按实际链接记录） | 需要 H.264/HEVC 软件编码 |
+| `nonfree` | 额外 libfdk_aac / libnpp 等 | 不可再分发 | **默认不提供**，只在文档中说明存在 |
+
+`gpl` 不是“另一种源码”，而是 `--enable-gpl` 加 GPL 库；`lgpl` 里也可以有硬件编码器
+（VAAPI / QSV / NVENC / AMF / Vulkan），它们不是 GPL-only。硬件能否使用仍由运行期探测决定，
+构建成功不等于机器上有驱动。
+
+### 4. “全编码”的声明矩阵
+
+“全编码”必须是一个可验收的列表，不是“所有 codec”。第一版建议固定为：
+
+- 视频编码：`libx264`、`libx265`、`libvpx-vp9`、`libaom-av1`、`libsvtav1`、`librav1e`；
+- 音频编码：原生 `aac`、`libopus`、`libmp3lame`、`libvorbis`；
+- 容器/滤镜：`libwebp`、`libtheora`、`libass`、`libfreetype`（drawtext）、`libvmaf`；
+- 硬件包装（有头文件时）：`vaapi`、`qsv`、`nvenc`、`amf`、`vulkan`；
+- 明确排除：`libfdk_aac`（non-free）、`libnpp`（non-free）、闭源 SDK、平台专属且无法在
+  当前宿主验证的组件。排除项在 UI 与 `runtime.json` 里写明。
+
+`runtime.json` 继续分 `featuresDeclared` / `featuresProbed`：声明是构建计划，探测是安装后
+`-encoders` / `-hwaccels` 的真实结果，两者不一致要在设置页高亮。
+
+### 5. 数据与配方
+
+新增只读资源 `src/main/resources/transcode/ffmpeg-full-builds.json`（随 jar 发布，不支持远程 URL）：
+
+```json
+{
+  "profiles": [
+    {
+      "id": "full-gpl-9.1",
+      "profile": "gpl",
+      "ffmpeg": "9.1",
+      "recipe": "full-static-v1",
+      "ffmpegSource": {"url": "https://ffmpeg.org/releases/ffmpeg-9.1.tar.xz", "sha256": "…"},
+      "dependencies": [
+        {"id": "x264", "version": "…", "url": "https://…", "sha256": "…", "archive": "tar.xz"},
+        {"id": "x265", "version": "…", "url": "https://…", "sha256": "…", "archive": "tar.xz"}
+      ],
+      "features": ["libx264", "libx265", "libvpx-vp9", "libaom-av1", "libsvtav1", "libopus", "libmp3lame", "vaapi", "qsv", "nvenc"],
+      "estimated": {"downloadBytes": 0, "buildMinutes": 0, "diskBytes": 0}
+    }
+  ]
+}
+```
+
+约束：
+
+- JSON 只做**选版与校验**，不携带可执行的 `configure` 参数或 shell 片段；每个依赖的构建方式由
+  Java 里的固定 recipe（`X264Recipe`、`X265Recipe`、`AutotoolsRecipe`…）实现，目录只能引用
+  recipe id。这样目录被替换也不能变成任意代码执行。
+- 每个 URL 必须 https + SHA-256 + 允许镜像列表；镜像只换主机，不换哈希，沿用
+  `DownloadSourcePicker` 与 `FfmpegDownload` 的校验/换源逻辑。
+- 版本与 FFmpeg 大版本绑定；同一 profile 的依赖集合不可在运行时由用户增删。
+
+### 6. 构建流水线
+
+```
+预检（工具链/磁盘/网络）
+  → 下载全部源码到 <tools>/.cache/full-build/<sha256>/
+  → 逐个解包、configure --prefix=<stage>/prefix、make -j、make install
+  → 以 <stage>/prefix 为 PKG_CONFIG_PATH 配置 FFmpeg
+  → make -j、make install 到同一 prefix
+  → 探测 -version / -encoders / -hwaccels + 单帧 lavfi 编码
+  → 写入 runtime.json，原子激活
+```
+
+关键点：
+
+- **不调用系统 tar**：继续用 `FfmpegArchive` 的 Java 解包与路径/软链检查。
+- **构建身份**：所有 `configure` / `make` 通过 `BootstrapEnvironment.agentProcess` 以 agent uid
+  运行，prefix 在 `<data>/transcode/tools` 下；面板不以 root 编译或安装。
+- **环境隔离**：显式设置 `PKG_CONFIG_PATH`、`PKG_CONFIG_LIBDIR`、`CFLAGS`、`LDFLAGS`、
+  `MAKEFLAGS`；清掉继承的 `LD_PRELOAD` / `CC` / `CFLAGS` 之类变量，避免宿主环境污染。
+- **并行**：`make -j` 取 `min(CPU 核数, 内存/2GiB, 4)`；面板同一时间只允许一个全量构建。
+- **磁盘**：预检要求 ≥ 6 GiB 可用；下载缓存与构建目录都算；低于阈值在 configure 前失败。
+- **超时**：单依赖 20 分钟、FFmpeg 30 分钟、总 90 分钟；超时 kill 整个进程组并清理 stage。
+- **取消**：与现有安装任务一致，取消后不产生 `current`，临时目录按 GC 规则清理。
+- **日志**：一个 `build-<job>.log`，按 `== dependency x264 ==`、`== configure ffmpeg ==` 分段；
+  进度阶段为“下载 i/n → 编译依赖 i/n → 配置 FFmpeg → 编译 FFmpeg → 探测”。
+- **缓存**：第一版只缓存下载的源码包（按 SHA-256），不缓存编译产物；跨版本复用的依赖缓存
+  留到 M3，避免“旧对象文件混进新构建”。
+
+### 7. UI
+
+设置页的源码卡片增加“构建方案”下拉：
+
+- `官方源码（宿主依赖）`：现状，最小/宿主有什么编什么；
+- `全编码 LGPL`：列出声明的编码器、依赖下载大小、预计时间、产物许可；
+- `全编码 GPL`：同上，并明确“产物为 GPL-3.0，分发需履行 GPL 义务”。
+
+选中后展示：
+
+- 依赖矩阵：每个依赖的版本、是否将从源码构建、预计下载大小；
+- 预检结果：工具链、nasm、磁盘、网络；不可构建时按钮禁用并说明原因；
+- 许可提示：`lgpl` / `gpl` 的实际含义，不能只写“全编码”；
+- 构建中：阶段、总进度、当前依赖、日志尾部、取消；
+- 完成后：`featuresProbed` 与声明差异、`toolchain`、`runtime.json` 路径、设为默认。
+
+不把“全编码”做成默认项：默认仍是二进制下载；源码构建是高级路径。
+
+### 8. API
+
+- `GET /api/transcode/runtime/full-builds`：返回 profile、依赖清单、预计大小/时间、预检结果；
+  只读，agent 可读与否按现有 `transcode` scope 决定（安装仍需提权）。
+- `POST /api/transcode/runtime/install` 增加
+  `{mode:"full-source", profile:"lgpl"|"gpl", id:"full-gpl-9.1"}`；继续走
+  `requireHumanElevation` + 审计 `transcode.runtime.install`。
+- `TranscodeInstallJob` 增加 `stage`（`download` / `dependency` / `configure` / `make` / `probe`）
+  与 `stageIndex` / `stageTotal`，前端只读展示；旧字段保留。
+- 失败统一返回可行动的原因：`ffmpeg_build_dependency_failed: x265`、`ffmpeg_build_disk_full`、
+  `ffmpeg_build_timeout`、`ffmpeg_build_hash_mismatch`，日志里给最后 40 行。
+
+### 9. 安全与供应链
+
+- 依赖与 FFmpeg 的源码全部 https + SHA-256 固定；镜像只允许同哈希；重定向逐跳校验，拒绝私网/
+  环回/链路本地地址（复用 `FfmpegInstaller.validateUrl` / `FfmpegDownload`）。
+- 构建逻辑是 Java 里的固定 recipe，不接受目录或用户传入的 `configure` 参数；不拼接 shell。
+- 解包必须防路径穿越、绝对路径、越界软链；沿用 `FfmpegArchive` 的检查并补依赖归档的测试。
+- 构建产物由 agent uid 写出，探测与单帧编码也以 agent 身份执行；面板不以 root 运行新二进制。
+- `lgpl` profile 禁止 `--enable-gpl`，也禁止链接 x264/x265/xvid；构建后静态检查
+  `-encoders` 与链接表，发现 GPL 库即失败，而不是悄悄改许可。
+- `nonfree` 不提供 UI；若未来提供，必须单独确认、不可再分发，并在 `runtime.json` 记录。
+- GPL profile 的分发义务：面板应保留对应源码包与构建配方（下载缓存/日志可清理，但配方与版本
+  固定），并在设置页说明；这是产品选择，不只是技术问题。
+- 构建期间限制并发与 `nice`，避免把面板/转码队列拖死；磁盘不足时先失败，不写半套。
+
+### 10. 验收
+
+- 干净 Debian 13（无 ffmpeg、无 `-dev`）：
+  - `lgpl` profile 构建成功，`-encoders` 含 `libvpx-vp9`、`libaom-av1`、`libsvtav1`、`libopus`、
+    `libmp3lame`，不含 `libx264` / `libx265` / `libxvid`；`runtime.json.license=LGPL-2.1-or-later`；
+  - `gpl` profile 构建成功，含 `libx264` / `libx265` / `libxvid`，`license=GPL-3.0`；
+  - 两种 profile 都通过 H.264/HEVC/VP9/AV1 的单帧编码（有对应编码器时）。
+- 依赖归档坏哈希/截断/路径穿越：失败且不产生 `current`。
+- 磁盘不足、超时、取消、断网换源：日志可读，临时目录可回收，旧 `current` 不受影响。
+- 重复构建同一 profile：命中源码缓存仍重新编译；M3 后才评估对象缓存。
+- 探测结果与声明不一致：设置页高亮，不静默当作可用。
+- `lgpl` 产物中静态检查不到 GPL 库；`gpl` 产物许可字段正确。
+- Windows：第一版不做；若后续做，只承诺 MinGW-w64 工具链，不引入 MSVC 全家桶。
+
+### 11. 里程碑（本版不做，仅排期参考）
+
+| 阶段 | 内容 | 验收 |
+|---|---|---|
+| M0 | 配方 JSON、依赖 recipe 骨架、预检、UI 只读展示 | 能列出依赖与预计大小，不下载 |
+| M1 | Linux `lgpl` profile：libvpx/aom/svt-av1/opus/mp3lame 编译链 | 干净宿主构建成功并通过编码测试 |
+| M2 | Linux `gpl` profile：x264/x265/xvid | 同上，许可与特性矩阵正确 |
+| M3 | 源码缓存、镜像、断点/重试、依赖版本升级流程 | 失败可恢复，升级有哈希记录 |
+| M4 | Windows MinGW、硬件头文件矩阵、多 GPU 探测 | 各平台有冒烟；不承诺 macOS 源码构建 |
+
+### 12. 开放问题
+
+1. 第一版依赖集合是否包含 `libdav1d`、`libvmaf`、`libass`/`libfreetype`；它们会显著增加构建面。
+2. 是否静态链接所有依赖（`--enable-static` + `.a`）还是保留共享库；静态更可移植，但 glibc 仍动态。
+3. 依赖版本固定策略：跟 FFmpeg 大版本走，还是各自 latest stable；后者会让同一面板版本产出不同字节。
+4. 源码缓存与 GPL 源码提供义务的生命周期；清理日志/缓存时如何保留合规材料。
+5. 构建产物的可复现性：是否记录 `configure` 全参数、编译器版本、依赖哈希；是否要求 bit-reproducible。
+6. Windows 的 MinGW 与 Linux 的 Zig/系统工具链差异；是否接受“同一 profile 在不同工具链下特性不同”。
+7. 是否把 Debian 源码包作为“补丁来源”而不是“全编码来源”；如果做，需要单独的 patch 应用与冲突处理。
 
 ## 附录 A：设计评审待补清单
 
