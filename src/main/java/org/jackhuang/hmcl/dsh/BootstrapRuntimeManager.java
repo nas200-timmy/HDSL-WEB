@@ -217,6 +217,19 @@ public final class BootstrapRuntimeManager {
         return (parent == null ? DshPaths.ROOT : parent).resolve("toolchains");
     }
 
+    /// Creates `<data>/toolchains` and keeps it out of the agent's reach.
+    ///
+    /// The trees below it hold programs the panel runs as root. Sealing a
+    /// version directory alone would still let the agent replace it, because
+    /// replacing an entry needs write permission on its parent — so the parent
+    /// is sealed in the non-recursive way, while each manager seals its own
+    /// tree after an install.
+    ///
+    /// A no-op outside a container: see [Privileges#keepRootOwnedDirectory].
+    public static void ensureToolchainsRoot() {
+        Privileges.keepRootOwnedDirectory(toolchainsRoot());
+    }
+
     static BootstrapRuntimeManager defaultManager() {
         BootstrapRuntimeManager manager = defaultManager;
         if (manager == null) {
@@ -256,6 +269,9 @@ public final class BootstrapRuntimeManager {
                     }
                     record = legacyRecord(version);
                 }
+                if (!trustedClosure(directory)) {
+                    continue;
+                }
                 result.add(new Installed(version, directory, record, version.equals(current)));
             }
         } catch (IOException e) {
@@ -269,7 +285,7 @@ public final class BootstrapRuntimeManager {
     ///
     /// Best effort: a leftover directory is untidy, not unsafe, and it is
     /// excluded from every listing by its leading dot.
-    private static void deleteStaleStaging(Path root) {
+    public static void deleteStaleStaging(Path root) {
         try (java.util.stream.Stream<Path> entries = Files.list(root)) {
             for (Path entry : entries.toList()) {
                 String name = entry.getFileName().toString();
@@ -342,7 +358,7 @@ public final class BootstrapRuntimeManager {
             if (directory.startsWith(root) && Files.isDirectory(directory)) {
                 RuntimeRecord record = readRuntimeRecord(directory,
                         root.equals(runtimeRoot) ? RUNTIME_RECORD : CA_RECORD);
-                if (record != null) {
+                if (record != null && trustedClosure(directory)) {
                     return new Installed(version, directory, record, true);
                 }
             }
@@ -356,7 +372,7 @@ public final class BootstrapRuntimeManager {
                     Path directory = root.resolve(name).normalize();
                     RuntimeRecord record = readRuntimeRecord(directory,
                             root.equals(runtimeRoot) ? RUNTIME_RECORD : CA_RECORD);
-                    if (record != null) {
+                    if (record != null && trustedClosure(directory)) {
                         return new Installed(name, directory, record, true);
                     }
                 }
@@ -456,7 +472,8 @@ public final class BootstrapRuntimeManager {
             if (Files.isRegularFile(versionDir.resolve(RUNTIME_RECORD))) {
                 throw new IOException("bootstrap_runtime_installed: " + runtime.version());
             }
-            Files.createDirectories(runtimeRoot);
+            ensureToolchainsRoot();
+            Privileges.keepRootOwnedDirectory(runtimeRoot);
             // A previous attempt that was killed mid-download left an
             // `.installing-` tree behind. `installedUnder` ignores those, so
             // nothing else ever removed them and each one held a partial
@@ -470,6 +487,10 @@ public final class BootstrapRuntimeManager {
             boolean activated = false;
             try {
                 Files.createDirectories(staging);
+                // Root-owned while the bytes arrive: a staging tree the agent
+                // can rewrite is a staging tree the agent can tamper with
+                // between the digest check and the move.
+                Privileges.keepRootOwnedDirectory(staging);
                 int index = 0;
                 for (BootstrapCatalog.Artifact artifact : runtime.artifacts()) {
                     index++;
@@ -513,6 +534,9 @@ public final class BootstrapRuntimeManager {
 
                 progress.stage("activating " + runtime.version(), 0.9);
                 move(staging, versionDir);
+                // This tree holds `bin/setpriv`, which the panel execs as root.
+                // Seal it before anything can be started from it.
+                Privileges.keepRootExecutable(versionDir);
                 activate(runtimeRoot, runtime.version(), RUNTIME_RECORD);
                 activated = true;
                 progress.stage("runtime closure " + runtime.version() + " installed", 1);
@@ -559,6 +583,11 @@ public final class BootstrapRuntimeManager {
             return null;
         }
         if (!Files.isRegularFile(file)) {
+            return null;
+        }
+        if (!Privileges.useAsRoot(directory, file)) {
+            LOG.warning("bootstrap: refusing the CA bundle at " + directory
+                    + " because it is not root-owned and sealed; reinstall it");
             return null;
         }
         return new CaInstalled(version, directory, file, record, true);
@@ -610,12 +639,14 @@ public final class BootstrapRuntimeManager {
             if (Files.isRegularFile(versionDir.resolve(CA_RECORD))) {
                 throw new IOException("bootstrap_ca_installed: " + ca.version());
             }
-            Files.createDirectories(caRoot);
+            ensureToolchainsRoot();
+            Privileges.keepRootOwnedDirectory(caRoot);
             deleteTree(versionDir);
             Path staging = caRoot.resolve("." + ca.version() + ".installing-" + UUID.randomUUID());
             boolean activated = false;
             try {
                 Files.createDirectories(staging);
+                Privileges.keepRootOwnedDirectory(staging);
                 Path target = staging.resolve(ca.fileName());
                 progress.stage("downloading the CA bundle", 0);
                 try {
@@ -636,6 +667,9 @@ public final class BootstrapRuntimeManager {
                 writeJson(staging.resolve(CA_RECORD), GSON.toJson(record));
                 progress.stage("activating the CA bundle", 0.9);
                 move(staging, versionDir);
+                // Root-run downloads trust this file; it must not be writable
+                // by the agent those downloads are meant to be separate from.
+                Privileges.keepRootExecutable(versionDir);
                 activate(caRoot, ca.version(), CA_RECORD);
                 activated = true;
                 BootstrapTrace.installed("ca", ca.version(), ca.url(),
@@ -970,20 +1004,40 @@ public final class BootstrapRuntimeManager {
     /// `ProcessBuilder` resolves a bare program name against the panel's own
     /// `PATH`, not the child's, so a minimal image needs the absolute path here.
     /// A registration is cheap and idempotent; it is skipped when the file is
-    /// missing or not executable.
+    /// missing, not executable, or the tree is no longer root-owned.
     private static void registerSetpriv(Installed installed) {
         Path setpriv = installed.directory().resolve("bin").resolve("setpriv");
-        if (Files.isExecutable(setpriv)) {
+        if (Files.isExecutable(setpriv) && trustedClosure(installed.directory())) {
             Privileges.registerBootstrapSetpriv(setpriv);
         }
     }
 
-    /// Registers the closure's `setpriv` at startup.
+    /// Whether an installed tree may still be executed as root.
+    ///
+    /// The version directory and its parent must belong to root and not be
+    /// writable by the agent's group. A tree from before that rule existed is
+    /// repaired once by [Privileges#useAsRoot]; a tree whose parent changed
+    /// hands is refused instead, because that is what a replacement looks like.
+    private static boolean trustedClosure(Path directory) {
+        Path setpriv = directory.resolve("bin").resolve("setpriv");
+        Path probe = Files.isRegularFile(setpriv) ? setpriv : null;
+        if (Privileges.useAsRoot(directory, probe)) {
+            return true;
+        }
+        LOG.warning("bootstrap: refusing " + directory
+                + " because it is not root-owned and sealed; reinstall the bundle");
+        return false;
+    }
+
+    /// Registers the closure's `setpriv` at startup and repairs identity files.
     ///
     /// Called once when the panel boots so the first agent launch does not have
-    /// to wait for something else to ask about the closure.
+    /// to wait for something else to ask about the closure. The identity patch
+    /// runs here too: `/etc` is what a container rebuild discards while `/data`
+    /// survives, so "installed once" is not the same as "present now".
     public static void registerBootstrapTools() {
         currentRuntimeClosure();
+        ensureAgentIdentity();
     }
 
     /// The managed CA bundle, or `null` when none is installed.
@@ -1192,6 +1246,9 @@ public final class BootstrapRuntimeManager {
                 throw new IOException("bootstrap_download_failed: HTTP " + response.statusCode()
                         + " for " + url);
             }
+            // 0600 while the bytes arrive: the digest is checked on this file,
+            // and a group-writable file could be swapped between the two steps.
+            Privileges.createPrivateFile(target);
             try (InputStream in = new BufferedInputStream(response.body());
                  var out = Files.newOutputStream(target)) {
                 byte[] buffer = new byte[1 << 16];

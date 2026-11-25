@@ -2433,12 +2433,18 @@ public final class BrandInstaller {
     private static Path ensureUv(@Nullable Path brandRoot, Consumer<String> message)
             throws BrandException {
         Path binary = UvRuntime.sharedBinary();
+        // The version directory is root-owned (see below), but replacing it
+        // only needs write permission on its parent — so the parent is sealed
+        // too, and a tree that no longer belongs to root is not trusted.
+        org.jackhuang.hmcl.dsh.BootstrapRuntimeManager.ensureToolchainsRoot();
+        Privileges.keepRootOwnedDirectory(UvRuntime.root());
         // A brand's own copy is only adopted when a brand asked: the runtime page
         // provisions the shared one and has no directory of its own to look in.
         Path legacy = brandRoot == null ? null
                 : brandRoot.resolve("toolchain").resolve(UvRuntime.executableName());
         if (Files.isRegularFile(binary)) {
-            if (UvRuntime.verified(binary)) {
+            if (UvRuntime.verified(binary)
+                    && Privileges.useAsRoot(binary.getParent(), binary)) {
                 org.jackhuang.hmcl.dsh.BootstrapTrace.reused("uv", UvRuntime.version(), binary);
                 return binary;
             }

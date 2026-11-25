@@ -21,11 +21,14 @@ import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
 
@@ -319,6 +322,185 @@ public final class Privileges {
             org.jackhuang.hmcl.util.logging.Logger.LOG.warning("Could not walk " + root, e);
         }
         return handed[0];
+    }
+
+    /// Keeps a tree the panel starts programs from out of an agent's reach.
+    ///
+    /// `<data>` is group-writable on purpose: the image's `002` umask and the
+    /// setgid volume are what let an agent maintain its own instance
+    /// directories. The same default also applies to the runtime bundles the
+    /// panel installs and later runs **as root** — the bootstrap closure's
+    /// `setpriv`, the shared CPython, the portable build toolchain, the CA
+    /// bundle root-run downloads trust. That is the one place the shared-group
+    /// rule must not hold.
+    ///
+    /// The walk does not follow links. Every entry goes back to root and loses
+    /// its group/other write bits; read and execute bits are kept, so an agent
+    /// can still run the tools while being unable to rewrite them. A tree that
+    /// already satisfies the rule is left exactly as it is.
+    ///
+    /// A no-op outside a container, where nobody was dropped and there is no
+    /// boundary to keep: see [#handToAgent].
+    ///
+    /// @param root the tree the panel owns and executes from
+    public static void keepRootExecutable(Path root) {
+        if (!DROP_CHILDREN || root == null || !Files.isDirectory(root)) {
+            return;
+        }
+        try (java.util.stream.Stream<Path> entries = Files.walk(root)) {
+            for (Path path : entries.toList()) {
+                if (Files.isSymbolicLink(path)) {
+                    continue;
+                }
+                try {
+                    Files.setAttribute(path, "unix:uid", 0, LinkOption.NOFOLLOW_LINKS);
+                    Files.setAttribute(path, "unix:gid", 0, LinkOption.NOFOLLOW_LINKS);
+                    Set<PosixFilePermission> current =
+                            Files.getPosixFilePermissions(path, LinkOption.NOFOLLOW_LINKS);
+                    Files.setPosixFilePermissions(path, sealed(current, Files.isDirectory(path)));
+                } catch (UnsupportedOperationException | IOException | IllegalArgumentException e) {
+                    org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
+                            "Could not keep " + path + " root-owned: " + e);
+                }
+            }
+        } catch (IOException e) {
+            org.jackhuang.hmcl.util.logging.Logger.LOG.warning("Could not walk " + root, e);
+        }
+    }
+
+    /// Creates `directory` when needed and keeps it root-owned and `0755`.
+    ///
+    /// This is the non-recursive half of [#keepRootExecutable] for the
+    /// directory *holding* a version tree: sealing the version alone would
+    /// still let the agent replace it, because replacing an entry only needs
+    /// write permission on its parent.
+    ///
+    /// @param directory the directory to create and keep
+    public static void keepRootOwnedDirectory(Path directory) {
+        if (!DROP_CHILDREN || directory == null) {
+            return;
+        }
+        try {
+            Files.createDirectories(directory);
+            Files.setAttribute(directory, "unix:uid", 0, LinkOption.NOFOLLOW_LINKS);
+            Files.setAttribute(directory, "unix:gid", 0, LinkOption.NOFOLLOW_LINKS);
+            Files.setPosixFilePermissions(directory, PosixFilePermissions.fromString("rwxr-xr-x"));
+        } catch (UnsupportedOperationException | IOException | IllegalArgumentException e) {
+            org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
+                    "Could not keep " + directory + " root-owned: " + e);
+        }
+    }
+
+    /// Whether `directory` may still be used for programs the panel runs as root.
+    ///
+    /// The check is deliberately cheap: the directory and its parent must still
+    /// belong to root and not be group/other-writable. Replacing a sealed
+    /// version directory needs write permission on that parent, and a
+    /// replacement would carry the writer's uid — so two `stat` calls catch the
+    /// case that matters on every spawn.
+    ///
+    /// A tree installed before this rule existed (root-owned files at `0664`)
+    /// is repaired once, then answered `true`. `probe` names a file the caller
+    /// is about to run; its write bits are what tell the two apart.
+    ///
+    /// @param directory the version directory
+    /// @param probe     a file the caller will execute or trust, or `null`
+    /// @return whether the tree may be used as root
+    public static boolean useAsRoot(Path directory, @Nullable Path probe) {
+        if (!DROP_CHILDREN) {
+            return true;
+        }
+        if (directory == null || !sealedEntry(directory) || !sealedEntry(directory.getParent())) {
+            return false;
+        }
+        if (probe == null) {
+            return true;
+        }
+        // `bin/python3` and `cacert.pem`-style entries may be links. A symlink
+        // always reports 0777 on Linux, so check its target — and only accept
+        // a target that stays inside the sealed tree.
+        Path checked = probe;
+        if (Files.isSymbolicLink(probe)) {
+            try {
+                checked = probe.toRealPath();
+                if (!checked.startsWith(directory.toRealPath())) {
+                    return false;
+                }
+            } catch (IOException e) {
+                return false;
+            }
+        }
+        if (sealedEntry(checked)) {
+            return true;
+        }
+        keepRootExecutable(directory);
+        return sealedEntry(checked);
+    }
+
+    /// Creates a file only the panel can write, before its bytes arrive.
+    ///
+    /// A download that lands at `0664` is one the agent can rewrite between the
+    /// digest check and the archive step; `0600` closes that window. On a
+    /// platform without POSIX modes the file is created normally.
+    ///
+    /// @param file the target
+    /// @throws IOException when the file cannot be created
+    public static void createPrivateFile(Path file) throws IOException {
+        try {
+            Files.createFile(file, PosixFilePermissions.asFileAttribute(AGENT_PRIVATE_FILE));
+        } catch (FileAlreadyExistsException ignored) {
+            // The caller truncates it when it opens the stream.
+        } catch (UnsupportedOperationException e) {
+            if (!Files.exists(file)) {
+                Files.createFile(file);
+            }
+        }
+    }
+
+    /// The modes a sealed entry keeps: everything but group/other write.
+    ///
+    /// Directories are widened to `0755` (owner write/execute plus group/other
+    /// read/execute) so they stay traversable; files keep their execute bit and
+    /// whatever read bits they had.
+    ///
+    /// @param current   the entry's current permissions
+    /// @param directory whether the entry is a directory
+    /// @return the permissions to set
+    static Set<PosixFilePermission> sealed(Set<PosixFilePermission> current, boolean directory) {
+        EnumSet<PosixFilePermission> result = current.isEmpty()
+                ? EnumSet.of(PosixFilePermission.OWNER_READ)
+                : EnumSet.copyOf(current);
+        result.remove(PosixFilePermission.GROUP_WRITE);
+        result.remove(PosixFilePermission.OTHERS_WRITE);
+        if (directory) {
+            result.add(PosixFilePermission.OWNER_READ);
+            result.add(PosixFilePermission.OWNER_WRITE);
+            result.add(PosixFilePermission.OWNER_EXECUTE);
+            result.add(PosixFilePermission.GROUP_READ);
+            result.add(PosixFilePermission.GROUP_EXECUTE);
+            result.add(PosixFilePermission.OTHERS_READ);
+            result.add(PosixFilePermission.OTHERS_EXECUTE);
+        }
+        return result;
+    }
+
+    /// Whether one entry is root-owned and not group/other-writable.
+    static boolean sealedEntry(@Nullable Path path) {
+        if (path == null) {
+            return false;
+        }
+        try {
+            Object uid = Files.getAttribute(path, "unix:uid", LinkOption.NOFOLLOW_LINKS);
+            if (!(uid instanceof Integer) || (Integer) uid != 0) {
+                return false;
+            }
+            Set<PosixFilePermission> permissions =
+                    Files.getPosixFilePermissions(path, LinkOption.NOFOLLOW_LINKS);
+            return !permissions.contains(PosixFilePermission.GROUP_WRITE)
+                    && !permissions.contains(PosixFilePermission.OTHERS_WRITE);
+        } catch (UnsupportedOperationException | IOException | IllegalArgumentException e) {
+            return false;
+        }
     }
 
     /// Hands a file the panel has just written — and the directory holding it — to the agent.

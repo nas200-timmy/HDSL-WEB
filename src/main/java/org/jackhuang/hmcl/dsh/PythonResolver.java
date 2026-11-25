@@ -181,14 +181,29 @@ public final class PythonResolver {
         if (policy() == Policy.MANAGED) {
             return null;
         }
-        Interpreter resolved = resolve();
-        if (!resolved.usable() || resolved.origin() == Origin.MANAGED) {
-            return null;
-        }
         if (majorMinor == null || majorMinor.isBlank()) {
-            return resolved;
+            Interpreter resolved = resolve();
+            return resolved.usable() && resolved.origin() != Origin.MANAGED ? resolved : null;
         }
-        return matchesVersion(resolved.version(), majorMinor) ? resolved : null;
+        // The operator's choice still wins when it matches the pin.
+        String configured = firstNonBlank(System.getenv("HDSL_PYTHON"), System.getenv("PYTHON"));
+        if (configured != null) {
+            Path located = locate(configured);
+            Interpreter probed = located == null ? null : probe(Origin.OPERATOR, located);
+            if (probed != null && matchesVersion(probed.version(), majorMinor)) {
+                return probed;
+            }
+        }
+        // Every candidate, not only the first: PATH may put 3.13 ahead of the
+        // 3.12 a build pinned, and answering `null` there sent it downloading
+        // a 300 MB interpreter the host already had.
+        for (Path candidate : candidates()) {
+            Interpreter probed = probe(Origin.SYSTEM, candidate);
+            if (probed != null && matchesVersion(probed.version(), majorMinor)) {
+                return probed;
+            }
+        }
+        return null;
     }
 
     /// `3.12.16` matches `3.12`; `3.13.5` does not.
@@ -460,10 +475,22 @@ public final class PythonResolver {
             if (object == null || !object.has("v")) {
                 return null;
             }
-            var version = object.getAsJsonArray("v");
-            int major = version.get(0).getAsInt();
-            int minor = version.get(1).getAsInt();
-            int patch = version.get(2).getAsInt();
+            int major;
+            int minor;
+            int patch;
+            try {
+                // A malformed report is "not an interpreter", not a crash in
+                // the middle of a child-process launch.
+                var version = object.getAsJsonArray("v");
+                if (version == null || version.size() < 3) {
+                    return null;
+                }
+                major = version.get(0).getAsInt();
+                minor = version.get(1).getAsInt();
+                patch = version.get(2).getAsInt();
+            } catch (RuntimeException e) {
+                return null;
+            }
             if (major < MIN_MAJOR || (major == MIN_MAJOR && minor < MIN_MINOR)) {
                 LOG.info("python: " + executable + " is " + major + "." + minor
                         + ", older than " + MIN_MAJOR + "." + MIN_MINOR);

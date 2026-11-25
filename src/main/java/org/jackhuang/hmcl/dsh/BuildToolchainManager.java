@@ -709,7 +709,8 @@ public final class BuildToolchainManager {
         if (!Files.isRegularFile(version.resolve("zig/zig"))
                 || !Files.isRegularFile(bin.resolve("cc"))
                 || !Files.isRegularFile(bin.resolve("c++"))
-                || !Files.isRegularFile(bin.resolve("make"))) {
+                || !Files.isRegularFile(bin.resolve("make"))
+                || !Privileges.useAsRoot(version, bin.resolve("cc"))) {
             return null;
         }
         List<Tool> tools = new ArrayList<>();
@@ -734,8 +735,8 @@ public final class BuildToolchainManager {
             BootstrapTrace.reused("toolchain", windowsVersion(), existing.directory());
             return existing;
         }
-        Files.createDirectories(root);
-        Privileges.prepareAgentDirectory(root, Privileges.AGENT_SHARED_DIRECTORY);
+        BootstrapRuntimeManager.ensureToolchainsRoot();
+        Privileges.keepRootOwnedDirectory(root);
 
         Path target = root.resolve(windowsVersion());
         Path download = root.resolve(".w64devkit-" + UUID.randomUUID() + ".7z.exe");
@@ -743,7 +744,7 @@ public final class BuildToolchainManager {
         boolean installed = false;
         try {
             Files.createDirectories(extract);
-            Privileges.prepareAgentDirectory(extract, Privileges.AGENT_SHARED_DIRECTORY);
+            Privileges.keepRootOwnedDirectory(extract);
             progress.stage("downloading portable w64devkit " + windowsPortableVersion(), 0.05);
             fetch(windowsPortableUrl(), download, windowsPortableSha256(), 0, cancelled);
             progress.stage("extracting portable w64devkit", 0.6);
@@ -790,19 +791,26 @@ public final class BuildToolchainManager {
             BootstrapTrace.reused("toolchain", linuxVersion(), existing.directory());
             return existing;
         }
-        Files.createDirectories(root);
-        Privileges.prepareAgentDirectory(root, Privileges.AGENT_SHARED_DIRECTORY);
+        BootstrapRuntimeManager.ensureToolchainsRoot();
+        Privileges.keepRootOwnedDirectory(root);
 
         Path target = root.resolve(linuxVersion());
         Path staging = root.resolve("." + linuxVersion() + ".installing-" + UUID.randomUUID());
         Path downloads = staging.resolve(".downloads");
         boolean installed = false;
         try {
+            Files.createDirectories(staging);
+            Privileges.keepRootOwnedDirectory(staging);
             Files.createDirectories(downloads);
+            Privileges.keepRootOwnedDirectory(downloads);
+            // Only Zig's cache is the agent's scratch space. The toolchain's
+            // own `bin/` stays root-owned: the panel runs `cc`, `make` and the
+            // Zig wrappers as root during a brand source install, so a tree an
+            // instance could rewrite is a tree an instance could put a program
+            // in for root to run.
             Files.createDirectories(root.resolve("cache/zig"));
             Privileges.prepareAgentDirectory(root.resolve("cache/zig"),
                     Privileges.AGENT_SHARED_DIRECTORY);
-            Privileges.prepareAgentDirectory(staging, Privileges.AGENT_SHARED_DIRECTORY);
             List<ArtifactRecord> records = new ArrayList<>();
             double fraction = 0.05;
             for (Artifact artifact : artifacts) {
@@ -1074,7 +1082,10 @@ public final class BuildToolchainManager {
             copyTree(tree, target);
             BootstrapRuntimeManager.deleteTree(tree);
         }
-        Privileges.handTreeToAgent(target);
+        // Root executes `cc`, `make` and the Zig wrappers from here during a
+        // brand source install. Keep the tree out of the agent's reach; only
+        // `cache/zig` is shared, and it lives outside this directory.
+        Privileges.keepRootExecutable(target);
         activate(version);
         detectCache = null;
         for (ArtifactRecord artifact : record.artifacts) {
@@ -1171,6 +1182,7 @@ public final class BuildToolchainManager {
                 throw new IOException("build_toolchain_download_failed: HTTP "
                         + response.statusCode() + " for " + url);
             }
+            Privileges.createPrivateFile(target);
             try (InputStream in = new BufferedInputStream(response.body());
                  OutputStream out = Files.newOutputStream(target)) {
                 byte[] buffer = new byte[1 << 16];
@@ -1424,6 +1436,9 @@ public final class BuildToolchainManager {
         ProcessBuilder builder = new ProcessBuilder(Privileges.asAgent(command))
                 .redirectErrorStream(true);
         builder.environment().putAll(environment);
+        // The probe is started through `setpriv`; on a minimal image that is
+        // the closure's copy, which needs the closure's library path.
+        BootstrapEnvironment.apply(builder, false);
         Process process = builder.start();
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         Thread reader = new Thread(() -> {
@@ -1476,8 +1491,8 @@ public final class BuildToolchainManager {
                                BootstrapRuntimeManager.Progress progress,
                                BooleanSupplier cancelled) throws IOException {
         synchronized (lock) {
-            Files.createDirectories(root);
-            Privileges.prepareAgentDirectory(root, Privileges.AGENT_SHARED_DIRECTORY);
+            BootstrapRuntimeManager.ensureToolchainsRoot();
+            Privileges.keepRootOwnedDirectory(root);
             installLinux(artifacts, progress, cancelled);
         }
     }

@@ -24,6 +24,7 @@ import com.google.gson.JsonParser;
 import org.jackhuang.hmcl.util.logging.Logger;
 import org.jackhuang.hmcl.util.platform.Architecture;
 import org.jackhuang.hmcl.util.platform.OperatingSystem;
+import org.jackhuang.hmcl.util.platform.Privileges;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
@@ -202,8 +203,20 @@ public final class PythonRuntimeManager {
     private static final Object DEFAULT_LOCK = new Object();
     private static volatile @Nullable PythonRuntimeManager defaultManager;
 
+    /// One install lock per root, not per manager instance.
+    ///
+    /// A second `PythonRuntimeManager` for the same directory is created on
+    /// purpose (a ZCode build may name its own shared root). Two instance-level
+    /// locks let both installs run at once; the loser's cleanup then deleted
+    /// the tree the winner had just published.
+    private static final java.util.concurrent.ConcurrentHashMap<Path, Object> ROOT_LOCKS =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
     private final Path root;
-    private final Object lock = new Object();
+
+    private Object installLock() {
+        return ROOT_LOCKS.computeIfAbsent(root, ignored -> new Object());
+    }
 
     /// @param root the `<data>/toolchains/python` directory
     public PythonRuntimeManager(Path root) {
@@ -373,6 +386,11 @@ public final class PythonRuntimeManager {
         if (interpreter == null) {
             return null;
         }
+        if (!Privileges.useAsRoot(directory, interpreter)) {
+            LOG.warning("python: refusing " + directory
+                    + " because it is not root-owned and sealed; reinstall it");
+            return null;
+        }
         PythonRecord record = readRecord(directory);
         if (record == null) {
             record = legacyRecord(version, directory, interpreter);
@@ -464,22 +482,32 @@ public final class PythonRuntimeManager {
         if (!usableSegment(version)) {
             throw new IOException("python_runtime_invalid: '" + version + "' is not a usable version name");
         }
-        synchronized (lock) {
+        synchronized (installLock()) {
             Installed existing = find(version);
             if (existing != null) {
+                if (artifact.sha256() != null && existing.record().sha256 != null
+                        && !artifact.sha256().equalsIgnoreCase(existing.record().sha256)) {
+                    BootstrapTrace.note("python", "reusing " + version + " although this caller"
+                            + " pinned a different digest; the bytes already on disk win");
+                }
                 activate(version);
                 BootstrapTrace.reused("python", version, existing.directory());
                 return new Installed(existing.version(), existing.directory(),
                         existing.interpreter(), existing.record(), true);
             }
             Path versionDir = safeChild(root, version);
-            Files.createDirectories(root);
+            BootstrapRuntimeManager.ensureToolchainsRoot();
+            Privileges.keepRootOwnedDirectory(root);
             // A previous interrupted attempt is not an interpreter.
+            BootstrapRuntimeManager.deleteStaleStaging(root);
             BootstrapRuntimeManager.deleteTree(versionDir);
             Path staging = root.resolve("." + version + ".installing-" + UUID.randomUUID());
             boolean activated = false;
             try {
                 Files.createDirectories(staging);
+                // Root-owned while the bytes arrive: a staging tree the agent
+                // can rewrite is one it can tamper with before the move.
+                Privileges.keepRootOwnedDirectory(staging);
                 progress.stage("downloading CPython " + version, 0.05);
                 Path download = staging.resolve(".python.download");
                 try {
@@ -515,7 +543,28 @@ public final class PythonRuntimeManager {
                 writeJson(staging.resolve(RECORD), GSON.toJson(record));
 
                 progress.stage("activating CPython " + version, 0.9);
-                move(staging, versionDir);
+                try {
+                    move(staging, versionDir);
+                } catch (IOException e) {
+                    // Another manager for the same directory may have
+                    // published while this one downloaded. A complete tree is
+                    // the outcome the caller asked for; deleting it here was
+                    // how the loser used to erase the winner's install.
+                    Installed raced = e.getMessage() != null
+                            && e.getMessage().startsWith("target already exists")
+                            ? find(version) : null;
+                    if (raced != null) {
+                        activate(version);
+                        activated = true;
+                        BootstrapTrace.reused("python", version, raced.directory());
+                        return new Installed(raced.version(), raced.directory(),
+                                raced.interpreter(), raced.record(), true);
+                    }
+                    throw e;
+                }
+                // The panel runs this interpreter as root (probe, `uv sync`,
+                // node-gyp); the agent must not be able to replace its files.
+                Privileges.keepRootExecutable(versionDir);
                 activate(version);
                 activated = true;
                 progress.stage("CPython " + version + " installed", 1);
@@ -1112,6 +1161,7 @@ public final class PythonRuntimeManager {
                 throw new IOException("python_download_failed: HTTP " + response.statusCode()
                         + " for " + url);
             }
+            Privileges.createPrivateFile(target);
             try (InputStream in = new BufferedInputStream(response.body());
                  OutputStream out = Files.newOutputStream(target)) {
                 byte[] buffer = new byte[1 << 16];

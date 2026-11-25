@@ -381,4 +381,30 @@ class PrivilegesTest {
             assertEquals(1, options, groups + " -> " + wrapped);
         }
     }
+
+    /// The mode transform behind [Privileges#keepRootExecutable]: the agent may
+    /// still read and run a sealed tool, but never rewrite it.
+    @Test
+    void sealingKeepsToolsUsableButNotRewritable() {
+        assertEquals(
+                java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"),
+                Privileges.sealed(java.nio.file.attribute.PosixFilePermissions
+                        .fromString("rwxrwxrwx"), false),
+                "an executable stays executable, group/other write goes");
+        assertEquals(
+                java.nio.file.attribute.PosixFilePermissions.fromString("rw-r--r--"),
+                Privileges.sealed(java.nio.file.attribute.PosixFilePermissions
+                        .fromString("rw-rw-r--"), false),
+                "a readable file stays readable");
+        assertEquals(
+                java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"),
+                Privileges.sealed(java.nio.file.attribute.PosixFilePermissions
+                        .fromString("rwxrwxr-x"), true),
+                "a directory stays traversable");
+        assertEquals(
+                java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"),
+                Privileges.sealed(java.nio.file.attribute.PosixFilePermissions
+                        .fromString("rw-------"), false),
+                "an owner-only file is not widened");
+    }
 }
