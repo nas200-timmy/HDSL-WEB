@@ -23,6 +23,8 @@ import org.jackhuang.hmcl.web.transcode.TranscodeModule;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
@@ -397,17 +399,31 @@ public final class FfmpegInstaller {
         }
         Process process = builder.start();
         job.process = process;
-        try (InputStream in = process.getInputStream()) {
-            byte[] buffer = new byte[4096];
-            int read;
-            while ((read = in.read(buffer)) >= 0) {
-                log(job, new String(buffer, 0, read, StandardCharsets.UTF_8));
+        // Read on another thread. Reading to EOF and only then asking whether the
+        // process is still alive means the timeout can never fire: a configure
+        // script waiting for input, or a make that wedged, holds the pipe open
+        // and the read never returns. It also meant no line reached the page
+        // while it happened, so a build that was working looked like a hang.
+        Thread reader = new Thread(() -> {
+            try (BufferedReader lines = new BufferedReader(
+                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = lines.readLine()) != null) {
+                    log(job, line + "\n");
+                }
+            } catch (IOException ignored) {
+                // The child ended and closed the pipe; that is the normal exit.
             }
-        }
+        }, "ffmpeg-install-reader");
+        reader.setDaemon(true);
+        reader.start();
         if (!process.waitFor(30, TimeUnit.MINUTES)) {
             process.destroyForcibly();
             throw new IOException("command timed out: " + String.join(" ", command));
         }
+        // Give the reader a moment to drain what the child wrote last, so the
+        // log the page shows ends with the build's own words, not mid-line.
+        reader.join(5_000);
         job.process = null;
         if (job.state == State.CANCELLED) {
             throw new IOException("cancelled");
