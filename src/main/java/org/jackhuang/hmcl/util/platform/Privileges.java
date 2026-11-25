@@ -410,7 +410,22 @@ public final class Privileges {
         if (!DROP_CHILDREN) {
             return true;
         }
-        if (directory == null || !sealedEntry(directory) || !sealedEntry(directory.getParent())) {
+        if (directory == null || directory.getParent() == null) {
+            return false;
+        }
+        Path parent = directory.getParent();
+        // Root-owned but group-writable is what every tree installed before
+        // this rule looks like (the image's 002 umask); repair it once instead
+        // of refusing the deployment's own working runtime. A tree owned by
+        // somebody else is a replacement and is refused.
+        if (!rootOwned(directory) || !rootOwned(parent)) {
+            return false;
+        }
+        if (!sealedEntry(directory) || !sealedEntry(parent)) {
+            keepRootExecutable(directory);
+            keepRootOwnedDirectory(parent);
+        }
+        if (!sealedEntry(directory) || !sealedEntry(parent)) {
             return false;
         }
         if (probe == null) {
@@ -482,6 +497,19 @@ public final class Privileges {
             result.add(PosixFilePermission.OTHERS_EXECUTE);
         }
         return result;
+    }
+
+    /// Whether one entry belongs to root, without judging its mode.
+    static boolean rootOwned(@Nullable Path path) {
+        if (path == null || Files.isSymbolicLink(path)) {
+            return false;
+        }
+        try {
+            Object uid = Files.getAttribute(path, "unix:uid", LinkOption.NOFOLLOW_LINKS);
+            return uid instanceof Integer && (Integer) uid == 0;
+        } catch (UnsupportedOperationException | IOException | IllegalArgumentException e) {
+            return false;
+        }
     }
 
     /// Whether one entry is root-owned and not group/other-writable.
