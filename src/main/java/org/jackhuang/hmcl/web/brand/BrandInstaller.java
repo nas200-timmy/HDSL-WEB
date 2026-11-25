@@ -24,6 +24,7 @@ import org.jackhuang.hmcl.dsh.NodeRuntime;
 import org.jackhuang.hmcl.dsh.NodeRuntimeManager;
 import org.jackhuang.hmcl.dsh.NodeSemver;
 import org.jackhuang.hmcl.dsh.NpmRegistry;
+import org.jackhuang.hmcl.dsh.PythonResolver;
 import org.jackhuang.hmcl.dsh.PythonRuntimeManager;
 import org.jackhuang.hmcl.dsh.UvRuntime;
 import org.jackhuang.hmcl.util.io.FileUtils;
@@ -1603,15 +1604,13 @@ public final class BrandInstaller {
             pythonEnv.put("UV_PYTHON_INSTALL_MIRROR", pythonMirror.url());
         }
         stage(message, 5, total, "安装 Python 依赖（uv sync + 共享 CPython 3.12）", 0.65, 0.30, 300, () -> {
-            PythonRuntimeManager.Installed python = ensureSharedPython(message);
-            message.accept("共享 CPython " + PythonRuntimeManager.defaultVersion() + "："
-                    + python.interpreter() + "（缓存于 " + python.directory() + "）");
-            pythonEnv.put("PYTHON", python.interpreter().toString());
+            Path pythonInterpreter = buildPython(PythonRuntimeManager.defaultVersion(), message);
+            pythonEnv.put("PYTHON", pythonInterpreter.toString());
             UvWatcher uvProgress = new UvWatcher(message, brandRoot,
                     target.resolve(".venv"), brandRoot.resolve("cache/uv/archive-v0"));
             try (uvProgress) {
                 runChecked(List.of(uv.toString(), "sync", "--frozen", "--no-dev",
-                                "--python", python.interpreter().toString()),
+                                "--python", pythonInterpreter.toString()),
                         target, pythonEnv, log, uvProgress, "installing the Python environment");
             }
         });
@@ -1962,6 +1961,22 @@ public final class BrandInstaller {
                         throw new BrandException("python_runtime_missing: the release pins no usable CPython"
                                 + " artifact (" + e.getMessage() + ")", e);
                     }
+                    PythonResolver.Interpreter host = PythonResolver.forVersion(
+                            PythonResolver.majorMinor(lock.pythonVersion()));
+                    if (host != null) {
+                        message.accept("使用系统 Python " + host.version()
+                                + "（不下载锁定的 CPython）：" + host.executable());
+                        pythonHolder[0] = host.executable();
+                        return;
+                    }
+                    if (!PythonResolver.managedAllowed()) {
+                        throw new BrandException("python_runtime_unavailable: no system Python "
+                                + PythonResolver.majorMinor(lock.pythonVersion())
+                                + " and HDSL_PYTHON_POLICY=" + PythonResolver.policy().name()
+                                .toLowerCase(java.util.Locale.ROOT)
+                                + " forbids downloading the locked CPython; install it or set"
+                                + " HDSL_PYTHON");
+                    }
                     try {
                         PythonRuntimeManager.Installed installed = PythonRuntimeManager.ensure(
                                 lock.pythonVersion(), artifact,
@@ -2164,6 +2179,35 @@ public final class BrandInstaller {
     /// @return the installed interpreter
     /// @throws BrandException when the platform has no pinned archive or the
     ///                          download fails
+    /// The interpreter a source build should use: a host Python of the same
+    /// `major.minor` first, the shared line only when the host has none.
+    ///
+    /// The policy decides what happens when neither exists: `system-only` fails
+    /// with the command that would fix it, `auto` downloads the pinned line.
+    ///
+    /// @param requiredVersion the build's pinned version, e.g. `3.12.16`
+    /// @param message progress sink
+    /// @return the interpreter to put in `PYTHON` and pass to uv
+    /// @throws BrandException `python_runtime_unavailable` when policy forbids
+    ///                        the download and the host has no match
+    static Path buildPython(String requiredVersion, Consumer<String> message) throws BrandException {
+        String majorMinor = PythonResolver.majorMinor(requiredVersion);
+        PythonResolver.Interpreter host = PythonResolver.forVersion(majorMinor);
+        if (host != null) {
+            message.accept("使用系统 Python " + host.version() + "（不下载共享 CPython）："
+                    + host.executable());
+            return host.executable();
+        }
+        if (!PythonResolver.managedAllowed()) {
+            throw new BrandException("python_runtime_unavailable: no system Python " + majorMinor
+                    + " and HDSL_PYTHON_POLICY="
+                    + PythonResolver.policy().name().toLowerCase(java.util.Locale.ROOT)
+                    + " forbids downloading the shared CPython; install python" + majorMinor
+                    + " or set HDSL_PYTHON");
+        }
+        return ensureSharedPython(message).interpreter();
+    }
+
     static PythonRuntimeManager.Installed ensureSharedPython(Consumer<String> message)
             throws BrandException {
         PythonRuntimeManager.Artifact artifact = PythonRuntimeManager.defaultArtifact();

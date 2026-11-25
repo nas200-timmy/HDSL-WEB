@@ -24,6 +24,7 @@ import org.jackhuang.hmcl.dsh.DshException;
 import org.jackhuang.hmcl.dsh.DshNodeRuntime;
 import org.jackhuang.hmcl.dsh.NodeRuntimeManager;
 import org.jackhuang.hmcl.dsh.NodeSource;
+import org.jackhuang.hmcl.dsh.PythonResolver;
 import org.jackhuang.hmcl.dsh.PythonRuntimeManager;
 import org.jackhuang.hmcl.util.io.Links;
 import org.jackhuang.hmcl.util.platform.Executables;
@@ -47,6 +48,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.jackhuang.hmcl.util.logging.Logger.LOG;
@@ -643,7 +645,34 @@ public final class ZcodeBuilder {
     /// @param settings the build settings, naming the shared root
     /// @param step the build step, for the log
     /// @throws ZcodeException with `python_runtime_missing` when it cannot be installed
+    /// Names the interpreter for a build child.
+    ///
+    /// The panel's own root means "whatever the policy chose" — a host
+    /// interpreter when one matches, the shared line otherwise. A caller-named
+    /// root is an explicit choice and wins over the policy.
+    ///
+    /// @param environment the child's environment
+    /// @param settings    the build settings
+    private static void applyPython(Map<String, String> environment, Settings settings) {
+        if (settings.pythonRoot().equals(PythonRuntimeManager.defaultRoot())) {
+            PythonResolver.applyTo(environment);
+        } else {
+            PythonRuntimeManager.applyTo(environment, settings.pythonRoot());
+        }
+    }
+
     private static void ensurePython(Settings settings, Step step) throws ZcodeException {
+        PythonResolver.Interpreter host = PythonResolver.resolve();
+        if (host.usable() && host.origin() != PythonResolver.Origin.MANAGED) {
+            step.log("=== 使用系统 Python " + host.version() + "：" + host.executable()
+                    + "（node-gyp 用；不下载共享运行时）");
+            return;
+        }
+        if (!PythonResolver.managedAllowed()) {
+            throw new ZcodeException("python_runtime_unavailable: 构建需要 Python 给 node-gyp，"
+                    + "但没有可用的系统解释器，且 HDSL_PYTHON_POLICY=system-only；"
+                    + "请安装 python3 或设置 HDSL_PYTHON");
+        }
         try {
             PythonRuntimeManager.Installed python =
                     new PythonRuntimeManager(settings.pythonRoot()).ensureDefault();
@@ -931,7 +960,7 @@ public final class ZcodeBuilder {
             // The build's own Python root goes first: the resolver and the build
             // toolchain only fill a blank name, so applying it first is what makes
             // node-gyp receive this build's interpreter rather than the host's.
-            PythonRuntimeManager.applyTo(pnpmBuilder.environment(), settings.pythonRoot());
+            applyPython(pnpmBuilder.environment(), settings);
             org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(pnpmBuilder);
             Process process = pnpmBuilder.start();
             try (var reader = new java.io.BufferedReader(
@@ -1029,7 +1058,7 @@ public final class ZcodeBuilder {
         // (`cpu-features`, when it has to compile) are the only consumer here.
         // It is applied before the resolver and the toolchain because both only
         // fill a blank name — this build's choice has to win over the host's.
-        PythonRuntimeManager.applyTo(builder.environment(), settings.pythonRoot());
+        applyPython(builder.environment(), settings);
         org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(builder);
         // The toolchain the build resolved before the download. `applyTo` prefixes
         // this build's `bin` ahead of the shims and leaves an operator's CC/CXX

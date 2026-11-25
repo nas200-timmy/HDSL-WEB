@@ -548,6 +548,8 @@ export interface BootstrapBundle {
 export interface BootstrapReport {
   /// embedded 或 operator <path>：现在生效的是哪份目录
   catalog: string;
+  /// auto / system-only / managed：Python 的解析策略
+  pythonPolicy: string;
   bundles: BootstrapBundle[];
   generatedAt: string;
 }

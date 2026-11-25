@@ -76,6 +76,20 @@ public final class PythonResolver {
         NONE
     }
 
+    /// What a build may do when no host interpreter satisfies it.
+    ///
+    /// - `auto` — use a host interpreter that matches, download the shared line
+    ///   only when none does (the default);
+    /// - `system-only` — never download; a build without a matching host
+    ///   interpreter fails with the command that would fix it;
+    /// - `managed` — use the panel's shared line even when a host interpreter
+    ///   exists, for deployments that pin one interpreter for everything.
+    ///
+    /// The value comes from `HDSL_PYTHON_POLICY`.
+    public enum Policy {
+        AUTO, SYSTEM_ONLY, MANAGED
+    }
+
     /// One interpreter, with the capabilities the callers actually need.
     ///
     /// @param origin           where it came from
@@ -127,6 +141,73 @@ public final class PythonResolver {
     private PythonResolver() {
     }
 
+    /// The policy named by `HDSL_PYTHON_POLICY`, `auto` when absent or unknown.
+    public static Policy policy() {
+        return parsePolicy(System.getenv("HDSL_PYTHON_POLICY"));
+    }
+
+    /// Parses a policy value, `auto` when absent or unknown.
+    static Policy parsePolicy(@Nullable String value) {
+        if (value == null || value.isBlank()) {
+            return Policy.AUTO;
+        }
+        String normalized = value.trim().toLowerCase(Locale.ROOT).replace('_', '-');
+        return switch (normalized) {
+            case "system-only", "system", "host" -> Policy.SYSTEM_ONLY;
+            case "managed", "panel" -> Policy.MANAGED;
+            case "auto", "" -> Policy.AUTO;
+            default -> {
+                LOG.warning("HDSL_PYTHON_POLICY='" + value + "' is not auto/system-only/managed;"
+                        + " using auto");
+                yield Policy.AUTO;
+            }
+        };
+    }
+
+    /// Whether a build may download the shared CPython line.
+    public static boolean managedAllowed() {
+        return policy() != Policy.SYSTEM_ONLY;
+    }
+
+    /// A host interpreter whose `major.minor` matches, or `null`.
+    ///
+    /// A build that pins `3.12` must not be answered by a host `3.13`: the
+    /// interpreter decides the stdlib and the wheel ABI. `managed` policy returns
+    /// `null` here, because that policy says the shared line is the answer.
+    ///
+    /// @param majorMinor e.g. `3.12`; `null` accepts any usable host interpreter
+    /// @return the interpreter, or `null` when the host has none that matches
+    public static @Nullable Interpreter forVersion(@Nullable String majorMinor) {
+        if (policy() == Policy.MANAGED) {
+            return null;
+        }
+        Interpreter resolved = resolve();
+        if (!resolved.usable() || resolved.origin() == Origin.MANAGED) {
+            return null;
+        }
+        if (majorMinor == null || majorMinor.isBlank()) {
+            return resolved;
+        }
+        return matchesVersion(resolved.version(), majorMinor) ? resolved : null;
+    }
+
+    /// `3.12.16` matches `3.12`; `3.13.5` does not.
+    static boolean matchesVersion(@Nullable String version, String majorMinor) {
+        if (version == null || version.isBlank()) {
+            return false;
+        }
+        return version.equals(majorMinor) || version.startsWith(majorMinor + ".");
+    }
+
+    /// `3.12.16` → `3.12`, `3.12` → `3.12`.
+    public static String majorMinor(@Nullable String version) {
+        if (version == null) {
+            return "";
+        }
+        String[] parts = version.trim().split("\\.");
+        return parts.length >= 2 ? parts[0] + "." + parts[1] : version.trim();
+    }
+
     /// The current choice, recomputed at most once a minute.
     ///
     /// Cached because [BootstrapEnvironment] asks on every child process and a
@@ -170,6 +251,15 @@ public final class PythonResolver {
             LOG.warning(operatorDetail + "; looking for another one");
         }
 
+        // `managed` says the shared line wins even over a host interpreter;
+        // every other policy prefers what the host already has.
+        if (policy() == Policy.MANAGED) {
+            Interpreter managedFirst = fromManaged();
+            if (managedFirst != null) {
+                return managedFirst;
+            }
+        }
+
         String rejected = "";
         for (Path candidate : candidates()) {
             Interpreter probed = probe(Origin.SYSTEM, candidate);
@@ -179,17 +269,30 @@ public final class PythonResolver {
         }
         rejected = "no usable python3/python on PATH";
 
-        PythonRuntimeManager.Installed managed = PythonRuntimeManager.currentShared();
-        if (managed != null) {
-            Interpreter probed = probe(Origin.MANAGED, managed.interpreter());
-            if (probed != null) {
-                return probed;
+        if (policy() != Policy.MANAGED) {
+            Interpreter managed = fromManaged();
+            if (managed != null) {
+                return managed;
             }
-            rejected = "the panel-managed CPython " + managed.version() + " does not run";
+            rejected = managedDetail();
         }
 
         return new Interpreter(Origin.NONE, null, "", false, false,
                 operatorDetail.isEmpty() ? rejected : operatorDetail);
+    }
+
+    private static @Nullable Interpreter fromManaged() {
+        PythonRuntimeManager.Installed managed = PythonRuntimeManager.currentShared();
+        if (managed == null) {
+            return null;
+        }
+        return probe(Origin.MANAGED, managed.interpreter());
+    }
+
+    private static String managedDetail() {
+        PythonRuntimeManager.Installed managed = PythonRuntimeManager.currentShared();
+        return managed == null ? "no panel-managed CPython is installed"
+                : "the panel-managed CPython " + managed.version() + " does not run";
     }
 
     /// Every `python3`/`python` on `PATH`, in `PATH` order, stubs excluded.

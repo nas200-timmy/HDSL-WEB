@@ -136,4 +136,30 @@ public class PythonResolverTest {
         }
         return scratchDirectory;
     }
+
+    @Test
+    public void policyValuesAreParsedAndUnknownMeansAuto() {
+        assertEquals(PythonResolver.Policy.SYSTEM_ONLY,
+                PythonResolver.parsePolicy("system-only"));
+        assertEquals(PythonResolver.Policy.SYSTEM_ONLY, PythonResolver.parsePolicy("host"));
+        assertEquals(PythonResolver.Policy.MANAGED, PythonResolver.parsePolicy("managed"));
+        assertEquals(PythonResolver.Policy.AUTO, PythonResolver.parsePolicy("auto"));
+        assertEquals(PythonResolver.Policy.AUTO, PythonResolver.parsePolicy(null));
+        assertEquals(PythonResolver.Policy.AUTO, PythonResolver.parsePolicy("whatever"));
+    }
+
+    @Test
+    public void aVersionIsMatchedByMajorAndMinorOnly() {
+        assertTrue(PythonResolver.matchesVersion("3.12.16", "3.12"));
+        assertTrue(PythonResolver.matchesVersion("3.12", "3.12"));
+        assertTrue(!PythonResolver.matchesVersion("3.13.5", "3.12"));
+        assertTrue(!PythonResolver.matchesVersion("", "3.12"));
+    }
+
+    @Test
+    public void aPinnedVersionKeepsItsMajorMinor() {
+        assertEquals("3.12", PythonResolver.majorMinor("3.12.16"));
+        assertEquals("3.12", PythonResolver.majorMinor("3.12"));
+        assertEquals("3.14", PythonResolver.majorMinor("3.14.0"));
+    }
 }

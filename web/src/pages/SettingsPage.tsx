@@ -4739,7 +4739,7 @@ function BootstrapCard() {
         <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
           {data && (
             <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-              目录：{data.catalog}
+              目录：{data.catalog} · Python 策略：{data.pythonPolicy}
             </span>
           )}
           <button className="btn btn-outline ripple-host" onClick={() => void load()}>

@@ -80,6 +80,14 @@ public final class BootstrapApiServlet extends HttpServlet {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "unknown_bundle: " + bundle);
             return;
         }
+        if ("python".equals(bundle) && !PythonResolver.managedAllowed()) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "python_runtime_disabled: HDSL_PYTHON_POLICY=" + PythonResolver.policy().name()
+                            .toLowerCase(java.util.Locale.ROOT)
+                            + " forbids downloading a shared CPython; install python3 or set"
+                            + " HDSL_PYTHON");
+            return;
+        }
         TaskService.Task task = submit(bundle);
         AuditLog.log(AuditLog.Channel.WEB, "bootstrap.install", bundle, "submitted",
                 actorOf(request), request.getRemoteAddr());
@@ -126,6 +134,8 @@ public final class BootstrapApiServlet extends HttpServlet {
     public static JsonObject report() {
         JsonObject body = new JsonObject();
         body.addProperty("catalog", BootstrapCatalog.origin().describe());
+        body.addProperty("pythonPolicy",
+                PythonResolver.policy().name().toLowerCase(java.util.Locale.ROOT));
         JsonArray bundles = new JsonArray();
         bundles.add(closure());
         bundles.add(ca());
@@ -179,20 +189,27 @@ public final class BootstrapApiServlet extends HttpServlet {
 
     static JsonObject python() {
         String why = "品牌源码安装、node-gyp 编译原生模块时需要解释器。";
+        String policy = PythonResolver.policy().name().toLowerCase(java.util.Locale.ROOT);
         PythonResolver.Interpreter python = PythonResolver.resolve();
         if (python.usable()) {
-            return bundle("python", "Python", "ready",
-                    python.version() + " · " + originLabel(python.origin()),
+            String detail = python.version() + " · " + originLabel(python.origin())
+                    + (python.origin() == PythonResolver.Origin.SYSTEM ? "（不下载共享 CPython）" : "")
+                    + " · 策略 " + policy;
+            return bundle("python", "Python", "ready", detail,
                     why, null, null, python.executable(), false);
         }
         PythonRuntimeManager.Artifact pinned = PythonRuntimeManager.defaultArtifact();
-        return bundle("python", "Python", "missing",
-                "没有可用的解释器（面板可提供 CPython "
-                        + PythonRuntimeManager.defaultVersion() + "）", why,
-                pinned == null ? null : pinned.url(),
-                pinned == null ? null : pinned.sha256(),
+        boolean canInstall = pinned != null && PythonResolver.managedAllowed();
+        String detail = canInstall
+                ? "没有可用的解释器（面板可提供 CPython "
+                + PythonRuntimeManager.defaultVersion() + "，策略 " + policy + "）"
+                : "没有可用的解释器；策略为 " + policy
+                + "，请安装 python3 或设置 HDSL_PYTHON";
+        return bundle("python", "Python", "missing", detail, why,
+                canInstall ? pinned.url() : null,
+                canInstall ? pinned.sha256() : null,
                 PythonRuntimeManager.defaultRoot().resolve(PythonRuntimeManager.defaultVersion()),
-                pinned != null);
+                canInstall);
     }
 
     static JsonObject toolchain() {
