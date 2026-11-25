@@ -361,4 +361,21 @@ class BootstrapEnvironmentTest {
         assertFalse(additions.containsKey("UV_PYTHON"), additions.toString());
         assertFalse(additions.containsKey("PATH"), additions.toString());
     }
+
+    @Test
+    void anAppThatBringsItsPythonGetsNoInterpreterInjected() throws Exception {
+        Path python = temp.resolve("python-own").resolve("3.12.16");
+        Files.createDirectories(python.resolve("bin"));
+        Path interpreter = python.resolve("bin").resolve("python3");
+        Files.writeString(interpreter, "#!/bin/sh\n");
+
+        Map<String, String> additions = BootstrapEnvironment.additions(null, null,
+                managed(interpreter), null, null, Map.of(),
+                Map.of("PATH", "/nonexistent"), Files::exists, false);
+
+        assertFalse(additions.containsKey("PYTHON"), additions.toString());
+        assertFalse(additions.containsKey("npm_config_python"), additions.toString());
+        assertFalse(additions.containsKey("UV_PYTHON"), additions.toString());
+        assertFalse(additions.containsKey("PATH"), additions.toString());
+    }
 }

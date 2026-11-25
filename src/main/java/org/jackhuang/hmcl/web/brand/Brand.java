@@ -476,6 +476,18 @@ public enum Brand {
         return this == HERMES;
     }
 
+    /// Whether this brand runs on a Python it brings itself.
+    ///
+    /// Octop's portable archive carries `runtime/bin/python3.12` and its source
+    /// build runs `.venv/bin/octop`; Hermes is a uv-built Python application
+    /// with `.venv`. Their children use `sys.executable`, so the panel's own
+    /// interpreter must not be injected over it — the instance decides.
+    ///
+    /// @return whether the launch owns its interpreter
+    public boolean providesPython() {
+        return this == OCTOP || this == HERMES;
+    }
+
     /// Whether the brand runs as two supervised processes behind one wrapper
     /// script — the gateway and its dashboard.
     public boolean companionProcess() {

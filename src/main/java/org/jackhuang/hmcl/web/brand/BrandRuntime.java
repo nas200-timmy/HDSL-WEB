@@ -437,7 +437,10 @@ public final class BrandRuntime {
                             + " without a usable Node.js (" + node.reason()
                             + "); the tool may fail to start — Settings -> Node.js installs one");
                 }
-                org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(builder);
+                // Octop and Hermes ship their own interpreter (portable archive
+                // or `.venv`); naming the panel's would shadow it for any child
+                // that reads PYTHON.
+                org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(builder, !brand.providesPython());
                 process = builder.start();
             } catch (IOException e) {
                 STATES.put(id, State.ERROR);
@@ -905,7 +908,7 @@ public final class BrandRuntime {
                 == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
             builder.environment().put("USERPROFILE", home.toString());
         }
-        org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(builder);
+        org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(builder, false);
         Process process = builder.start();
         // Drain on a side thread with a bounded buffer: the old code read the
         // whole stream before waiting, so a wedged `octop init` blocked for

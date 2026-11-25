@@ -77,7 +77,7 @@ public final class BootstrapEnvironment {
                 build == null ? null : build.binDir(),
                 build == null || build.directory() == null ? null : build.directory().resolve("lib"),
                 build == null ? Map.of() : build.environment(),
-                System.getenv(), Files::exists);
+                System.getenv(), Files::exists, true);
     }
 
     /// Applies the additions to a mutable environment map.
@@ -87,6 +87,15 @@ public final class BootstrapEnvironment {
     ///
     /// @param environment the map to amend
     public static void apply(Map<String, String> environment) {
+        apply(environment, true);
+    }
+
+    /// Applies the additions, optionally leaving Python alone.
+    ///
+    /// @param environment   the map to amend
+    /// @param includePython whether to name an interpreter; an app that brings
+    ///                      its own passes `false`
+    public static void apply(Map<String, String> environment, boolean includePython) {
         Installed runtime = BootstrapRuntimeManager.currentRuntimeClosure();
         BootstrapRuntimeManager.CaInstalled ca = BootstrapRuntimeManager.currentCaBundle();
         PythonResolver.Interpreter python = PythonResolver.resolve();
@@ -97,14 +106,22 @@ public final class BootstrapEnvironment {
                 build == null ? null : build.binDir(),
                 build == null || build.directory() == null ? null : build.directory().resolve("lib"),
                 build == null ? Map.of() : build.environment(),
-                environment, Files::exists));
+                environment, Files::exists, includePython));
     }
 
     /// Applies the additions to a child process.
     ///
     /// @param builder the process builder
     public static void apply(ProcessBuilder builder) {
-        apply(builder.environment());
+        apply(builder.environment(), true);
+    }
+
+    /// The same, with Python left to the child.
+    ///
+    /// @param builder       the child process
+    /// @param includePython whether to name an interpreter
+    public static void apply(ProcessBuilder builder, boolean includePython) {
+        apply(builder.environment(), includePython);
     }
 
     /// The pure form, with the bundle directories and the filesystem test named
@@ -155,6 +172,19 @@ public final class BootstrapEnvironment {
                                          @Nullable Path buildBin, @Nullable Path buildLib,
                                          Map<String, String> buildVariables,
                                          Map<String, String> base, Predicate<Path> exists) {
+        return additions(runtimeDirectory, caFile, python, buildBin, buildLib, buildVariables,
+                base, exists, true);
+    }
+
+    /// The same, with Python included or not.
+    ///
+    /// @param includePython whether to name an interpreter at all
+    static Map<String, String> additions(@Nullable Path runtimeDirectory, @Nullable Path caFile,
+                                         @Nullable PythonResolver.Interpreter python,
+                                         @Nullable Path buildBin, @Nullable Path buildLib,
+                                         Map<String, String> buildVariables,
+                                         Map<String, String> base, Predicate<Path> exists,
+                                         boolean includePython) {
         Map<String, String> additions = new LinkedHashMap<>();
         List<Path> pathPrefixes = new ArrayList<>();
         if (buildBin != null && exists.test(buildBin)) {
@@ -180,7 +210,7 @@ public final class BootstrapEnvironment {
                         existing != null ? existing : base.get("LD_LIBRARY_PATH")));
             }
         }
-        if (python != null && python.usable()
+        if (includePython && python != null && python.usable()
                 && python.origin() != PythonResolver.Origin.OPERATOR
                 && !PythonResolver.hasInterpreter(base, exists)) {
             Path interpreter = python.executable();
