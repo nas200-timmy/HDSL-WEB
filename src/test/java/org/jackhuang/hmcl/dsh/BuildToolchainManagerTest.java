@@ -45,8 +45,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /// The build toolchain without a network or a real compiler.
 ///
@@ -379,5 +381,44 @@ class BuildToolchainManagerTest {
         }
         assertTrue(names.stream().noneMatch(name -> name.startsWith(".")),
                 "no staging directory may survive: " + names);
+    }
+    /// Unpacking and matching a digest is not the same as running.
+    ///
+    /// The pinned Linux `make`/`pkgconf` are Debian 11 executables needing
+    /// GLIBC 2.27 and Zig needs 2.14; on an older host (or musl) they unpack
+    /// cleanly, verify, and then die in the loader. That used to be an install
+    /// reported as finished, with the broken toolchain injected into every
+    /// build. The three programs a build cannot start without are now run once
+    /// before the bundle is accepted.
+    @Test
+    void aBundleThatUnpacksButCannotStartIsRefused(@TempDir java.nio.file.Path dir) throws Exception {
+        assumeTrue(OperatingSystem.CURRENT_OS != OperatingSystem.WINDOWS,
+                "the fixture is a shell script");
+        java.nio.file.Path good = dir.resolve("cc");
+        java.nio.file.Files.writeString(good, "#!/bin/sh\necho 'cc 1.0'\n");
+        assertTrue(good.toFile().setExecutable(true), "the fixture has to be executable");
+        java.nio.file.Path broken = dir.resolve("make");
+        java.nio.file.Files.writeString(broken, "#!/bin/sh\n"
+                + "echo 'make: /lib64/libc.so.6: version `GLIBC_2.27` not found' >&2\n"
+                + "exit 127\n");
+        assertTrue(broken.toFile().setExecutable(true), "the fixture has to be executable");
+
+        assertNull(BuildToolchainManager.smoke(toolchain(good, good, good)),
+                "a bundle where every program answers is accepted");
+
+        String failure = BuildToolchainManager.smoke(toolchain(good, good, broken));
+        assertNotNull(failure, "a program that cannot start must be reported");
+        assertTrue(failure.contains("make"), failure);
+        assertTrue(failure.contains("127"), failure);
+    }
+
+    private static BuildToolchainManager.Toolchain toolchain(java.nio.file.Path cc,
+                                                             java.nio.file.Path cxx,
+                                                             java.nio.file.Path make) {
+        return new BuildToolchainManager.Toolchain("linux", "x64", null, null, true, true,
+                List.of(new BuildToolchainManager.Tool("cc", cc.toString(), "1.0"),
+                        new BuildToolchainManager.Tool("c++", cxx.toString(), "1.0"),
+                        new BuildToolchainManager.Tool("make", make.toString(), "4.3")),
+                List.of(), Map.of(), "");
     }
 }

@@ -767,6 +767,11 @@ public final class BuildToolchainManager {
                 throw new IOException("build_toolchain_missing: w64devkit was extracted but no"
                         + " usable gcc/g++/make/ar/ld was found under " + target);
             }
+            String failure = smoke(toolchain);
+            if (failure != null) {
+                throw new IOException("build_toolchain_install_failed: w64devkit was extracted"
+                        + " and matched its digest but does not run on this host (" + failure + ")");
+            }
             installed = true;
             return toolchain;
         } finally {
@@ -826,6 +831,12 @@ public final class BuildToolchainManager {
             if (toolchain == null) {
                 throw new IOException("build_toolchain_missing: the portable Linux toolchain was"
                         + " unpacked but cc/c++/make are not startable under " + target);
+            }
+            String failure = smoke(toolchain);
+            if (failure != null) {
+                throw new IOException("build_toolchain_install_failed: the portable Linux toolchain"
+                        + " unpacked and matched its digests but does not run on this host ("
+                        + failure + "); these binaries need a newer glibc than this system has");
             }
             installed = true;
             return toolchain;
@@ -1368,6 +1379,41 @@ public final class BuildToolchainManager {
     }
 
     private record RunResult(int exitCode, String output) {
+    }
+
+    /// Runs the installed toolchain once, so a bundle that verified but cannot
+    /// start is refused at install time.
+    ///
+    /// Being present and being runnable are different questions, and only the
+    /// first one was asked. The pinned Linux bundle's `make` and `pkgconf` are
+    /// Debian 11 executables needing GLIBC 2.27, and Zig needs 2.14: on an
+    /// older glibc — or on musl — they unpack cleanly, match their digests, and
+    /// then die in the loader. The panel called that a finished install and
+    /// injected the result into every build, so the failure surfaced later as
+    /// "the build script is broken" with nothing pointing at the toolchain.
+    ///
+    /// Only `cc`, `c++` and `make` are asked: they are the three a source build
+    /// cannot proceed without, and each answers `--version` in milliseconds.
+    ///
+    /// @param toolchain the toolchain just published
+    /// @return the first program that would not run, or `null` when all answered
+    static @Nullable String smoke(Toolchain toolchain) {
+        for (String name : List.of("cc", "c++", "make")) {
+            String program = toolchain.pathOf(name);
+            if (program == null) {
+                return name + " is not in the bundle";
+            }
+            try {
+                RunResult result = run(List.of(program, "--version"), Map.of(),
+                        Duration.ofSeconds(20), () -> false);
+                if (result.exitCode() != 0) {
+                    return name + " exited " + result.exitCode() + ": " + tail(result.output());
+                }
+            } catch (IOException e) {
+                return name + " could not be started: " + e.getMessage();
+            }
+        }
+        return null;
     }
 
     private static RunResult run(List<String> command, Map<String, String> environment,
