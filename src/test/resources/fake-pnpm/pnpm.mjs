@@ -120,6 +120,23 @@ for (const entry of (process.env.PATH ?? "").split(windows ? ";" : ":")) {
         if (!isFile) {
             continue;
         }
+        if (windows && /\.(cmd|bat)$/i.test(candidate)) {
+            // Node 22+ refuses to spawn a batch file without a shell (the
+            // CVE-2024-27980 hardening). Run pnpm's JS entry with the same
+            // node that runs this stub; a shell join would have to re-quote
+            // every path we pass, and one of them is a directory from --dir.
+            const entryPoint = join(entry, "node_modules", "pnpm", "bin", "pnpm.cjs");
+            if (existsSync(entryPoint)) {
+                const result = spawnSync(process.execPath, [entryPoint, ...args],
+                    { stdio: "inherit" });
+                process.exit(result.status ?? 1);
+            }
+            const result = spawnSync(candidate, args, { stdio: "inherit", shell: true });
+            if (result.error) {
+                continue;
+            }
+            process.exit(result.status ?? 1);
+        }
         const result = spawnSync(candidate, args, { stdio: "inherit" });
         if (result.error) {
             // Try the next candidate rather than pretending the command ran.
