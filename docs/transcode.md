@@ -204,6 +204,9 @@ ffmpeg 获取阶梯：
   - `transcode.ffmpeg_path` 仍是运维硬覆盖，优先于这里的默认；
   - 改动需要开发者提权并记审计（`PUT /api/transcode/runtime/default`）。
 - `GET /api/transcode/runtime` 增加 `default`、`resolved`（kind/id/路径）、`system`（检测结果）与 `compilers`（系统/便携可用性与详情）；旧字段保留。
+- 设置页只保留这一套安装入口；旧的“在线安装”折叠块（静态包 / 自定义 URL / 重复的安装状态）已移除。`mode=custom` 仍留在后端接口，页面不再暴露第二套路径。
+- 源码版本下拉写的是**源码包**的许可（LGPL-2.1+），不是产物许可：构建启用 libx264/libx265 后产物按 GPL-3.0 记录，否则是最小编码集（LGPL）。页面从 `/api/transcode/runtime/source` 读缺失的 Debian/Ubuntu 开发包并给出安装命令；要全编码就装包后重建，或直接选 BtbN / gyan.dev 的 GPL 二进制。
+- 已安装的二进制/源码版本在下拉和按钮上标记，重复安装按钮禁用；“任务状态”只由安装卡片显示。
 - **队列快照带运行时**：`GET /api/transcode/queue` 的 `runtime` 块（`default/kind/id/path/version/available/error`）表示“现在开跑会用哪个 ffmpeg”，只读 agent 票也能看到；每个任务在**第一次启动时**把实际使用的二进制写进 `job.ffmpeg`（`kind/id/path/version/error`），任务结束后仍保留。之后切换默认运行时不会改写已完成任务的记录。队列详情接口 `GET /queue/jobs/{id}` 同样带 `ffmpeg`。
 
 ### 8. 硬件直通

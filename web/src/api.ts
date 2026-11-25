@@ -1308,8 +1308,6 @@ export const api = {
       sourceMirror?: string;
     }) =>
       request<TranscodeFeature>("/api/transcode/settings", jsonInit("PUT", body)),
-    runtimeInstall: (body: { kind: "static" | "package" | "compile"; url?: string; sha256?: string; version?: string }) =>
-      request<TranscodeInstallJob>("/api/transcode/runtime/install", jsonInit("POST", body)),
     runtime: (major?: string) => request<TranscodeRuntime>(
       `/api/transcode/runtime${major ? `?major=${encodeURIComponent(major)}` : ""}`),
     runtimeCatalog: () => request<{ entries: TranscodeCatalogEntry[] }>("/api/transcode/runtime/catalog"),

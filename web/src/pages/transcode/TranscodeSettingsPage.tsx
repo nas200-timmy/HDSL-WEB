@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { api, type TranscodeCapabilities, type TranscodeInstallJob, type TranscodeRuntime } from "../../api";
+import { api, type TranscodeCapabilities, type TranscodeInstallJob, type TranscodeRuntime,
+  type TranscodeSourceStatus } from "../../api";
 import { refreshTranscodeFeature, setTranscodeFeature, useTranscodeFeature } from "../../transcodeFeature";
 import { errMsg } from "../../utils";
 import { toast } from "../../store";
@@ -11,6 +12,7 @@ export function TranscodeSettingsPage() {
   const feature = useTranscodeFeature();
   const [capabilities, setCapabilities] = useState<TranscodeCapabilities | null>(null);
   const [runtime, setRuntime] = useState<TranscodeRuntime | null>(null);
+  const [sourceStatus, setSourceStatus] = useState<TranscodeSourceStatus | null>(null);
   const [runtimeMode, setRuntimeMode] = useState<"system" | "binary" | "source">("binary");
   const [binaryVendor, setBinaryVendor] = useState("");
   const [binaryMajor, setBinaryMajor] = useState("");
@@ -23,10 +25,6 @@ export function TranscodeSettingsPage() {
   const [policy, setPolicy] = useState("ask");
   const [timeoutMinutes, setTimeoutMinutes] = useState(10);
   const [saving, setSaving] = useState(false);
-  const [installKind, setInstallKind] = useState<"static" | "package">("package");
-  const [installUrl, setInstallUrl] = useState("");
-  const [installSha, setInstallSha] = useState("");
-  const [installVersion, setInstallVersion] = useState("");
   const [installJob, setInstallJob] = useState<TranscodeInstallJob | null>(null);
   const [probeEncoderName, setProbeEncoderName] = useState("libx264");
   const [probeResult, setProbeResult] = useState<{ ok: boolean; encoder: string; exitCode: number; output: string } | null>(null);
@@ -36,12 +34,14 @@ export function TranscodeSettingsPage() {
     setBusy(true);
     setError(null);
     try {
-      const [nextCapabilities, nextRuntime] = await Promise.all([
+      const [nextCapabilities, nextRuntime, nextSource] = await Promise.all([
         api.transcode.capabilities(),
         api.transcode.runtime(),
+        api.transcode.runtimeSource().catch(() => null),
       ]);
       setCapabilities(nextCapabilities);
       setRuntime(nextRuntime);
+      setSourceStatus(nextSource);
       await refreshTranscodeFeature();
     } catch (e) {
       setError(errMsg(e));
@@ -74,21 +74,8 @@ export function TranscodeSettingsPage() {
     return () => window.clearInterval(timer);
   }, [installJob]);
 
-  const startInstall = async () => {
-    try {
-      setInstallJob(await api.transcode.runtimeInstall({
-        kind: installKind,
-        url: installKind === "package" ? undefined : installUrl,
-        sha256: installKind === "package" ? undefined : installSha,
-        version: installVersion || undefined,
-      }));
-    } catch (e) {
-      toast("error", errMsg(e));
-    }
-  };
-
   const startRuntimeInstall = async (body: {
-    mode: "auto" | "artifact" | "source";
+    mode: "auto" | "artifact" | "package" | "source";
     id?: string;
     major?: string;
     features?: string[];
@@ -195,12 +182,21 @@ export function TranscodeSettingsPage() {
   const majorBinaries = platformBinaries.filter((entry) => entry.major === effectiveMajor);
   const effectiveBinary = majorBinaries.find((entry) => entry.id === binaryId)
     ?? majorBinaries[0] ?? null;
+  const installedIds = new Set((runtime?.installed ?? []).map((item) => item.id));
+  const binaryInstalled = effectiveBinary ? installedIds.has(effectiveBinary.id) : false;
   const originIds = [...new Set(sources.map((entry) => entry.vendor))];
   const effectiveOrigin = originIds.includes(sourceOrigin) ? sourceOrigin : originIds[0] ?? "";
   const originSources = sources.filter((entry) => entry.vendor === effectiveOrigin);
   const sourceVersions = originSources;
   const effectiveSource = sourceVersions.find((entry) => entry.id === sourceId)
     ?? sourceVersions[0] ?? null;
+  const sourceInstalled = effectiveSource
+    ? (runtime?.installed ?? []).some((item) => item.catalogId === effectiveSource.id)
+    : false;
+  const sourceToolchain = sourceStatus?.toolchain;
+  const missingCodecDeps = sourceToolchain?.dependencies.filter((dep) => !dep.present) ?? [];
+  const presentCodecDeps = sourceToolchain?.dependencies.filter((dep) => dep.present) ?? [];
+  const missingDebianPackages = missingCodecDeps.map((dep) => dep.package);
   const compilers = runtime?.compilers ?? [];
   const effectiveCompiler = compilerId === "auto"
     ? compilers.find((entry) => entry.id === "system" && entry.available)
@@ -279,14 +275,12 @@ export function TranscodeSettingsPage() {
                 重新检测
               </button>
               <button className="btn btn-text" disabled={installJob?.state === "running"}
-                      onClick={() => void api.transcode.runtimeInstall({ kind: "package" })
-                        .then(setInstallJob)
-                        .catch((e) => toast("error", errMsg(e)))}>
+                      onClick={() => void startRuntimeInstall({ mode: "package" })}>
                 通过包管理器安装
               </button>
             </div>
             <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
-              只检测 PATH，不下载任何东西。找不到时可以用下面的包管理器，或填写 transcode.ffmpeg_path。
+              只检测 PATH，不下载任何东西。找不到时可以点“通过包管理器安装”，或填写 transcode.ffmpeg_path。
             </span>
           </div>
         )}
@@ -328,6 +322,7 @@ export function TranscodeSettingsPage() {
                   {majorBinaries.map((entry) => (
                     <option key={entry.id} value={entry.id}>
                       {entry.ffmpegVersion} · {entry.license} · {entry.features.length} 特性
+                      {installedIds.has(entry.id) ? " · 已安装" : ""}
                     </option>
                   ))}
                 </select>
@@ -345,13 +340,15 @@ export function TranscodeSettingsPage() {
             )}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <button className="btn btn-raised"
-                      disabled={!effectiveBinary || installJob?.state === "running"}
+                      disabled={!effectiveBinary || binaryInstalled || installJob?.state === "running"}
                       onClick={() => effectiveBinary
                         && void startRuntimeInstall({ mode: "artifact", id: effectiveBinary.id })}>
-                安装二进制
+                {binaryInstalled ? "已安装" : "安装二进制"}
               </button>
               <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", alignSelf: "center" }}>
-                只有点这里才会下载；哈希按 catalog 校验。
+                {binaryInstalled
+                  ? "这个构建已在数据目录里；可在下方设为默认，重装前先删除。"
+                  : "只有点这里才会下载；哈希按 catalog 校验。"}
               </span>
             </div>
           </div>
@@ -377,7 +374,9 @@ export function TranscodeSettingsPage() {
                         onChange={(e) => setSourceId(e.target.value)}>
                   {sourceVersions.map((entry) => (
                     <option key={entry.id} value={entry.id}>
-                      {entry.ffmpegVersion} · {entry.license}
+                      {entry.ffmpegVersion} · 源码包 {entry.license}
+                      {(runtime?.installed ?? []).some((item) => item.catalogId === entry.id)
+                        ? " · 已构建" : ""}
                     </option>
                   ))}
                 </select>
@@ -405,25 +404,54 @@ export function TranscodeSettingsPage() {
             )}
             {effectiveSource && (
               <div style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", lineHeight: 1.6 }}>
-                {effectiveSource.ffmpegVersion} · {effectiveSource.license}
+                {effectiveSource.ffmpegVersion} · 源码包 {effectiveSource.license}
                 {effectiveSource.features.length > 0
                   ? ` · 声明特性 ${effectiveSource.features.length} 项` : ""}
+                <br />
+                源码包本身是 LGPL-2.1+；构建启用 libx264/libx265 后，产物按 GPL-3.0 记录，
+                但没有这些外部编码库时就是最小 LGPL 构建。
                 <br />
                 <span className="mono" style={{ overflowWrap: "anywhere" }}>{effectiveSource.url}</span>
               </div>
             )}
+            {sourceToolchain && (
+              <div style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", lineHeight: 1.6 }}>
+                构建预检：{sourceToolchain.usable ? "系统工具链可用" : "系统工具链不可用"}
+                {" · "}{sourceToolchain.x86asm ? "x86 汇编优化开启" : "无 nasm，x86 汇编关闭"}
+                <br />
+                {missingCodecDeps.length === 0 ? (
+                  <>
+                    外部编码库齐全：{presentCodecDeps.map((dep) => dep.feature).join("、")}；
+                    构建会链接它们，产物按 GPL-3.0 记录。
+                  </>
+                ) : (
+                  <>
+                    未检测到：{missingCodecDeps.map((dep) => dep.feature).join("、")}。
+                    configure 会跳过它们，产物是最小编码集（LGPL），不含 libx264/libx265 等。
+                    <br />
+                    要全编码：在宿主用 root 装 Debian/Ubuntu 开发包
+                    <span className="mono" style={{ overflowWrap: "anywhere" }}>
+                      {" "}{["build-essential", "pkg-config", "nasm", ...missingDebianPackages].join(" ")}
+                    </span>
+                    ，或切到「下载二进制」选 BtbN / gyan.dev 的 GPL 构建。面板不会替你 sudo。
+                  </>
+                )}
+              </div>
+            )}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <button className="btn btn-raised"
-                      disabled={!effectiveSource || installJob?.state === "running"
+                      disabled={!effectiveSource || sourceInstalled || installJob?.state === "running"
                         || (compilerId !== "auto" && !effectiveCompiler?.available)}
                       onClick={() => effectiveSource && void startRuntimeInstall({
                         mode: "source", id: effectiveSource.id,
                         compiler: compilerId as "auto" | "system" | "portable",
                       })}>
-                开始构建
+                {sourceInstalled ? "已构建" : "开始构建"}
               </button>
               <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", alignSelf: "center" }}>
-                只有点这里才会下载源码并编译。
+                {sourceInstalled
+                  ? "这个版本已经构建过；要重编先删除已安装的运行时。"
+                  : "只有点这里才会下载源码并编译。"}
               </span>
             </div>
           </div>
@@ -557,70 +585,7 @@ export function TranscodeSettingsPage() {
             也可以手动配置 `transcode.ffmpeg_path` / `HDSL_FFMPEG_PATH`。
           </span>
         </div>
-        <div style={{ display: "grid", gap: 6, padding: "0 8px 8px", borderTop: "1px solid var(--monet-outline-variant)" }}>
-          <label style={{ fontSize: 12, paddingTop: 8 }}>在线安装</label>
-          <select className="input" value={installKind}
-                  onChange={(e) => setInstallKind(e.target.value as typeof installKind)}>
-            <option value="package">包管理器（apt-get / dnf / zypper）</option>
-            <option value="static">下载静态包（Windows/macOS/Linux）</option>
-          </select>
-          {installKind !== "package" && (
-            <>
-              <input className="input"
-                     placeholder="https://…/ffmpeg-release-essentials.zip 或 .tar.xz"
-                     value={installUrl} onChange={(e) => setInstallUrl(e.target.value)} />
-              <input className="input" placeholder="SHA-256（必填；64 位十六进制）"
-                     value={installSha} onChange={(e) => setInstallSha(e.target.value)} />
-              <input className="input" placeholder="安装目录名（可选，例如 7.1.5）"
-                     value={installVersion} onChange={(e) => setInstallVersion(e.target.value)} />
-            </>
-          )}
-          <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn btn-raised" disabled={installJob?.state === "running"
-              || (installKind !== "package" && (!installUrl || !/^[0-9a-fA-F]{64}$/.test(installSha)))}
-                    onClick={() => void startInstall()}>
-              {installKind === "package" ? "开始安装" : "下载并安装"}
-            </button>
-            {installJob?.state === "running" && (
-              <button className="btn btn-text danger"
-                      onClick={() => void api.transcode.runtimeCancel(installJob.id).then(setInstallJob)}>
-                取消
-              </button>
-            )}
-          </div>
-          <p style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", lineHeight: 1.6 }}>
-            自定义下载必须填写 SHA-256（面板不再把同源 sidecar 当作唯一信任）。源码构建在运行时卡片里，
-            需要 make/gcc/pkg-config 与可选的 libx264/libx265/libva 开发包；包管理器安装只对当前容器有效，
-            重建后需重装；静态包与源码构建结果都在数据卷里。
-          </p>
-          {installJob && (
-            <>
-              <div className="comp-row">
-                <span className="comp-label">安装状态</span>
-                <span className="comp-value">
-                  <span className={`tag ${installJob.state === "done" ? "running" : "plain"}`}>
-                    {installJob.state === "done" ? "完成" : installJob.state === "failed" ? "失败"
-                      : installJob.state === "cancelled" ? "已取消" : installJob.message || "运行中"}
-                  </span>
-                </span>
-              </div>
-              <ProgressBar fraction={installJob.progress} />
-              {installJob.logPath && (
-                <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
-                  构建日志：<span className="mono">{installJob.logPath}</span>
-                </span>
-              )}
-              {installJob.error && (
-                <span style={{ fontSize: 12, color: "var(--monet-error)" }}>{installJob.error}</span>
-              )}
-              <pre style={{ margin: 0, padding: 8, maxHeight: 180, overflow: "auto", fontSize: 10,
-                            background: "var(--monet-surface-container-low)", whiteSpace: "pre-wrap" }}>
-                {installJob.log || "（暂无输出）"}
-              </pre>
-            </>
-          )}
         </div>
-      </div>
 
       <div className="card">
         <div className="comp-row">
