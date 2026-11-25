@@ -610,6 +610,16 @@ public final class Privileges {
     ///
     /// @return the program to exec
     private static String setpriv() {
+        // The system's own `setpriv` first, the closure's only as a fallback.
+        //
+        // Both work; this order is the safer one. A native binary is the one
+        // whose libc is the host's by definition, while the bundled copy is a
+        // Debian build that needs the closure's loader — and `setpriv` is the
+        // program every agent launch depends on, so failing to start it fails
+        // everything. The argument for the other order is that the bundled copy
+        // is the pinned, tested one; it loses to "must start at all" because the
+        // flags in use here (`--reuid`/`--regid`/`--clear-groups`) have been in
+        // util-linux for years.
         return Executables.resolve("setpriv").map(Path::toString)
                 .orElseGet(() -> {
                     Path bundled = bootstrapSetpriv;

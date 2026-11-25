@@ -261,8 +261,73 @@ public final class BootstrapRuntimeManager {
         } catch (IOException e) {
             LOG.warning("Failed to list bootstrap bundles in " + root, e);
         }
-        result.sort(Comparator.comparing(Installed::version).reversed());
+        result.sort(Comparator.comparing(Installed::version, versionOrder()).reversed());
         return result;
+    }
+
+    /// Removes staging trees a killed install left behind.
+    ///
+    /// Best effort: a leftover directory is untidy, not unsafe, and it is
+    /// excluded from every listing by its leading dot.
+    private static void deleteStaleStaging(Path root) {
+        try (java.util.stream.Stream<Path> entries = Files.list(root)) {
+            for (Path entry : entries.toList()) {
+                String name = entry.getFileName().toString();
+                if (name.startsWith(".") && name.contains(".installing-")) {
+                    deleteTree(entry);
+                }
+            }
+        } catch (IOException ignored) {
+            // Nothing to sweep, or no permission to look.
+        }
+    }
+
+    /// Orders version directory names the way a person reads them.
+    ///
+    /// `Comparator.comparing(String)` is lexicographic, so `3.9.18` sorted above
+    /// `3.12.16` and `debian9-...` above `debian11-...`. That decided which
+    /// bundle `current()` fell back to when its pointer was lost, and the order
+    /// the settings page drew. Digit runs compare as numbers; every other run
+    /// compares as text, so `debian11-gcc10-x64` keeps its own shape.
+    ///
+    /// @return ascending order, oldest first
+    static Comparator<String> versionOrder() {
+        return (left, right) -> {
+            int i = 0;
+            int j = 0;
+            while (i < left.length() && j < right.length()) {
+                char a = left.charAt(i);
+                char b = right.charAt(j);
+                if (Character.isDigit(a) && Character.isDigit(b)) {
+                    int endLeft = i;
+                    int endRight = j;
+                    while (endLeft < left.length() && Character.isDigit(left.charAt(endLeft))) {
+                        endLeft++;
+                    }
+                    while (endRight < right.length() && Character.isDigit(right.charAt(endRight))) {
+                        endRight++;
+                    }
+                    String numberLeft = left.substring(i, endLeft).replaceFirst("^0+(?=.)", "");
+                    String numberRight = right.substring(j, endRight).replaceFirst("^0+(?=.)", "");
+                    if (numberLeft.length() != numberRight.length()) {
+                        return Integer.compare(numberLeft.length(), numberRight.length());
+                    }
+                    int compared = numberLeft.compareTo(numberRight);
+                    if (compared != 0) {
+                        return compared;
+                    }
+                    i = endLeft;
+                    j = endRight;
+                    continue;
+                }
+                if (a != b) {
+                    return Character.compare(a, b);
+                }
+                i++;
+                j++;
+            }
+            return Integer.compare(left.length() - i, right.length() - j);
+        };
     }
 
     /// The active runtime bundle, or `null` when none is installed.
@@ -392,6 +457,12 @@ public final class BootstrapRuntimeManager {
                 throw new IOException("bootstrap_runtime_installed: " + runtime.version());
             }
             Files.createDirectories(runtimeRoot);
+            // A previous attempt that was killed mid-download left an
+            // `.installing-` tree behind. `installedUnder` ignores those, so
+            // nothing else ever removed them and each one held a partial
+            // closure. Safe here because staging is created inside this lock,
+            // so no live install owns one.
+            deleteStaleStaging(runtimeRoot);
             // A previous interrupted attempt is not a usable bundle.
             deleteTree(versionDir);
             Path staging = runtimeRoot.resolve("." + runtime.version() + ".installing-"

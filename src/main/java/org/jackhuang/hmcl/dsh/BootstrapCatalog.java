@@ -603,6 +603,16 @@ public final class BootstrapCatalog {
         if (catalog.toolchain() == null) {
             missing.add("toolchain");
         }
+        // The two that were missing from this check: a catalogue without a CA
+        // pin or without a runtime closure is accepted, and the gap only turns
+        // up later as "bootstrap_runtime_unavailable" at install time — after
+        // the operator believes the override worked.
+        if (catalog.ca() == null) {
+            missing.add("ca");
+        }
+        if (catalog.runtimes() == null || catalog.runtimes().isEmpty()) {
+            missing.add("runtimes");
+        }
         if (!missing.isEmpty()) {
             throw new IllegalArgumentException("the catalogue at " + source
                     + " pins no " + String.join(", ", missing)

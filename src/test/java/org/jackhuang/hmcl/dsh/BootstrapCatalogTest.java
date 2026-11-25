@@ -27,6 +27,7 @@ import java.nio.file.Path;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class BootstrapCatalogTest {
@@ -127,16 +128,29 @@ public class BootstrapCatalogTest {
     }
 
     /// A catalogue that pins every section, so only the values under test vary.
-    private static String completeCatalog(String uvVersion, String uvSha) {
-        return "{\"schema\":2,\"updatedAt\":\"2026-01-01\","
-                + "\"uv\":{\"version\":\"" + uvVersion + "\",\"binaries\":["
-                + "{\"platform\":\"linux-x64\",\"sha256\":\"" + uvSha + "\"}]},"
-                + "\"python\":{\"version\":\"3.12.16\",\"build\":\"20260101\","
-                + "\"releaseBase\":\"https://example.invalid/py\",\"artifacts\":[]},"
-                + "\"toolchain\":{\"linux\":{\"version\":\"0.14.1\",\"artifacts\":["
-                + "{\"name\":\"zig\",\"archive\":\"tar.xz\","
-                + "\"url\":\"https://example.invalid/z.tar.xz\",\"sha256\":\""
-                + "e".repeat(64) + "\",\"size\":0,\"includes\":[]}]}}}";
+    /// A complete override: the embedded catalogue with its `uv` section
+    /// replaced. Built this way rather than spelled out by hand so that a
+    /// section added to the real catalogue is required here too — the sibling
+    /// test is named "half-filled override rejected", and a fixture that quietly
+    /// omits a section was the thing that let the check miss `ca` and `runtimes`.
+    private static String completeCatalog(String uvVersion, String uvSha) throws Exception {
+        String json;
+        try (java.io.InputStream in =
+                     BootstrapCatalog.class.getResourceAsStream("/bootstrap/bootstrap.json")) {
+            json = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
+        com.google.gson.JsonObject root =
+                com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+        com.google.gson.JsonObject uv = new com.google.gson.JsonObject();
+        uv.addProperty("version", uvVersion);
+        com.google.gson.JsonArray binaries = new com.google.gson.JsonArray();
+        com.google.gson.JsonObject binary = new com.google.gson.JsonObject();
+        binary.addProperty("platform", "linux-x64");
+        binary.addProperty("sha256", uvSha);
+        binaries.add(binary);
+        uv.add("binaries", binaries);
+        root.add("uv", uv);
+        return root.toString();
     }
 
     private static boolean throwsOn(String json) {
@@ -146,5 +160,25 @@ public class BootstrapCatalogTest {
         } catch (IllegalArgumentException e) {
             return true;
         }
+    }
+    /// An override that drops a whole section used to pass: only uv, python and
+    /// toolchain were required, so a catalogue with no CA pin or no runtime
+    /// closure was accepted and failed later at install time, after the operator
+    /// believed the override had worked.
+    @Test
+    void anOverrideMissingACaOrRuntimePinIsRejected() throws Exception {
+        String json;
+        try (java.io.InputStream in =
+                     BootstrapCatalog.class.getResourceAsStream("/bootstrap/bootstrap.json")) {
+            json = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
+        com.google.gson.JsonObject root =
+                com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+        root.remove("ca");
+
+        IllegalArgumentException thrown = assertThrows(IllegalArgumentException.class,
+                () -> BootstrapCatalog.requireComplete(
+                        BootstrapCatalog.Catalog.parse(root.toString(), "test"), "test"));
+        assertTrue(thrown.getMessage().contains("ca"), thrown.getMessage());
     }
 }

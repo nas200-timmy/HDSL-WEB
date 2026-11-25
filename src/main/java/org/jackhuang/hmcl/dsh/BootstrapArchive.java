@@ -129,6 +129,7 @@ final class BootstrapArchive {
                                          List<BootstrapCatalog.Include> includes,
                                          Path root, int[] matched) throws IOException {
         List<Link> links = new ArrayList<>();
+        List<Link> hardLinks = new ArrayList<>();
         try (TarArchiveInputStream tar = new TarArchiveInputStream(stream)) {
             TarArchiveEntry entry;
             while ((entry = tar.getNextEntry()) != null) {
@@ -145,13 +146,28 @@ final class BootstrapArchive {
                 if (entry.isDirectory()) {
                     SafePaths.createDirectories(root, destination);
                     matched[include]++;
-                } else if (entry.isSymbolicLink() || entry.isLink()) {
+                } else if (entry.isSymbolicLink()) {
                     String link = entry.getLinkName();
                     if (link == null || link.isBlank()) {
                         continue;
                     }
                     links.add(new Link(destination, Path.of(link)));
                     matched[include]++;
+                } else if (entry.isLink()) {
+                    // A tar hard link names another *member* of the same archive,
+                    // not a path relative to this entry's directory. Treating the
+                    // two the same built a path that only resolved by accident and
+                    // then failed the existence check with "links ... to a missing
+                    // ..." on an archive that was perfectly valid.
+                    String member = normalize(entry.getLinkName());
+                    int target = member == null ? -1 : match(member, includes);
+                    if (target >= 0) {
+                        hardLinks.add(new Link(destination,
+                                destination(root, includes.get(target), member)));
+                        matched[include]++;
+                    }
+                    // A target outside the whitelist is not extracted: the
+                    // includes say which files are wanted, and that is not one.
                 } else if (entry.isFile()) {
                     SafePaths.createDirectories(root, destination.getParent());
                     Files.copy(tar, destination, StandardCopyOption.REPLACE_EXISTING);
@@ -177,6 +193,16 @@ final class BootstrapArchive {
                         + target);
             }
             Links.createOrCopy(link.path(), target);
+        }
+        for (Link link : hardLinks) {
+            SafePaths.createDirectories(root, link.path().getParent());
+            try {
+                Files.createLink(link.path(), link.target());
+            } catch (IOException | UnsupportedOperationException e) {
+                // Another filesystem, or a platform without hard links: a copy
+                // is the same file content, which is all a bundle needs.
+                Files.copy(link.target(), link.path(), StandardCopyOption.REPLACE_EXISTING);
+            }
         }
     }
 

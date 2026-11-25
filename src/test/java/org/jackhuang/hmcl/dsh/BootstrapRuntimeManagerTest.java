@@ -398,4 +398,19 @@ class BootstrapRuntimeManagerTest {
         }
         return deb;
     }
+    /// Version directory names are read, not diffed as bytes: lexicographic
+    /// order put `3.9.18` above `3.12.16`, which decided the bundle `current()`
+    /// fell back to and the order the settings page drew.
+    @Test
+    void versionsSortTheWayAPersonReadsThem() {
+        java.util.List<String> pythons = new java.util.ArrayList<>(
+                java.util.List.of("3.9.18", "3.12.16", "3.10.1"));
+        pythons.sort(BootstrapRuntimeManager.versionOrder());
+        assertEquals(java.util.List.of("3.9.18", "3.10.1", "3.12.16"), pythons);
+
+        java.util.List<String> closures = new java.util.ArrayList<>(
+                java.util.List.of("debian11-gcc10-x64", "debian9-gcc10-x64"));
+        closures.sort(BootstrapRuntimeManager.versionOrder());
+        assertEquals(java.util.List.of("debian9-gcc10-x64", "debian11-gcc10-x64"), closures);
+    }
 }

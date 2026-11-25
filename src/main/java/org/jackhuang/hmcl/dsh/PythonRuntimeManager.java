@@ -403,7 +403,8 @@ public final class PythonRuntimeManager {
         } catch (IOException e) {
             LOG.warning("Failed to list Python runtimes in " + root, e);
         }
-        result.sort(Comparator.comparing(Installed::version).reversed());
+        result.sort(Comparator.comparing(Installed::version,
+                BootstrapRuntimeManager.versionOrder()).reversed());
         return result;
     }
 

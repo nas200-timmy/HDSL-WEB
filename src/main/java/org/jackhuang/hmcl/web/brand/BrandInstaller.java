@@ -2515,6 +2515,9 @@ public final class BrandInstaller {
             // name `uv`, so a mismatched download can never be executed later.
             UvRuntime.verify(extracted, url);
             Files.move(extracted, binary, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            // The tarball's `uv-<triple>/` wrapper is now empty; leaving it made
+            // the toolchain directory list a folder that holds nothing.
+            FileUtils.deleteDirectoryQuietly(binary.getParent().resolve("uv-" + triple));
             org.jackhuang.hmcl.dsh.BootstrapTrace.installed("uv", "brand-build", url,
                     "pinned-sha256:" + UvRuntime.binarySha256(), binary);
             try {
