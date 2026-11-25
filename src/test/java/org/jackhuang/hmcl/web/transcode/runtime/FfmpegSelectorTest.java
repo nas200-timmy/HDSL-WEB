@@ -27,6 +27,18 @@ class FfmpegSelectorTest {
     }
 
     @Test
+    void arm64HostNeverGetsAnX64Binary() throws Exception {
+        FfmpegCatalog.Catalog catalog = FfmpegCatalog.load(null);
+
+        FfmpegSelector.Recommendation selected = FfmpegSelector.select(
+                catalog, new FfmpegCapabilities.Host("linux", "arm64", "glibc", "2.36"), Set.of());
+
+        assertEquals("linux", selected.entry().os());
+        assertEquals("arm64", selected.entry().arch());
+        assertTrue(selected.entry().id().contains("linux-arm64"), selected.entry().id());
+    }
+
+    @Test
     void autoPrefersTheHighestSatisfiableMajor() throws Exception {
         FfmpegCatalog.Catalog catalog = catalog(
                 entry("seven", "7.1.5", "2.28", "libx264"),

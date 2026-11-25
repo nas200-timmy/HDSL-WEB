@@ -268,7 +268,7 @@ public final class FfmpegToolchainManager {
 
     /// The toolchain a build should use. A missing system toolchain triggers
     /// the portable install — w64devkit on Windows, Zig + make + pkgconf on
-    /// Linux x64 — and the caller gets the resolved answer.
+    /// Linux x64/arm64 — and the caller gets the resolved answer.
     public Toolchain resolveForBuild(FfmpegRuntimeManager.Progress progress,
                                      BooleanSupplier cancelled) throws IOException {
         Toolchain current = detect();

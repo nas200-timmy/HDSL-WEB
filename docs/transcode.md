@@ -564,7 +564,14 @@ enable transcode
 - **`sha256` 必须来自目录，不随下载源走**。镜像只改 `url`，不改哈希；自定义 URL 才允许“操作员显式填哈希”。
 - **禁止 `latest`**。目录条目是某个确定版本；升级目录 = 发版，不是运行时解析“最新”。
 - **许可证是字段**。GPL 构建与 LGPL 构建在 UI 上分开；默认推荐能覆盖预设的 GPL 构建，并显示许可证说明。
-- 第一阶段只收录**已经人工验证过**的条目；没有验证过的平台宁可不列，也不要“看起来能装”。arm64 / musl / Windows arm64 在验证前不承诺。
+- 第一阶段只收录**已经人工验证过**的条目；没有验证过的平台宁可不列，也不要“看起来能装”。
+  当前平台覆盖：Linux x64/glibc（BtbN、Jellyfin）、Linux arm64/glibc（仅 BtbN 7.1/8.1；
+  BtbN 的 arm64 构建不含 VAAPI/QSV，保留 NVENC）、Windows x64（BtbN、gyan、Jellyfin）。
+  Linux musl、Windows arm64、macOS arm64 暂无二进制条目；源码条目是 `any/any/any`，但能否
+  源码构建取决于该平台有没有可用工具链（Linux arm64 有 Zig 便携工具链；Windows 只有 x64
+  w64devkit；macOS 不承诺）。
+- 前端只列出**当前宿主 os/arch/libc 有制品**的 vendor。否则在 Linux 上选中 gyan.dev
+  （Windows 专属）会得到两个空下拉框，看起来像源坏了。
 
 ### 6. 宿主能力 `FfmpegCapabilities`
 
@@ -865,9 +872,9 @@ Agent：`transcode` scope 只读 runtime 状态与能力；安装/切换/删除/
 
 ### 17. 开放问题
 
-1. **第一批目录条目收哪些**：BtbN（Linux x64/arm64？）、gyan.dev（Windows x64）、evermeet.cx（macOS x64/arm64？）、
-   johnvansickle（Linux 全静态，但硬件加速可能没有）。每个条目必须人工验证 arch/libc/features/SHA-256 后再收录，
-   不凭名字推断。
+1. **第一批目录条目收哪些**：BtbN（Linux x64 + arm64 的 glibc GPL）、gyan.dev（Windows x64）、
+   Jellyfin（Linux x64/Windows x64）、evermeet.cx（macOS x64/arm64？）、johnvansickle（Linux 全静态，
+   但硬件加速可能没有）。每个条目必须人工验证 arch/libc/features/SHA-256 后再收录，不凭名字推断。
 2. **默认许可证**：预设需要 x264/x265，默认只能是 GPL 构建；LGPL 作为“不要 GPL 编码器”的可选项。
 3. **源码构建是否产品化**：建议产品化但仅 Linux；Windows/macOS 只做静态制品，不承诺源码构建。
 4. **是否自动安装构建依赖**：第一阶段不做（只给精确包名）；第二阶段接未来的 `ToolchainManager`/BootstrapKit。

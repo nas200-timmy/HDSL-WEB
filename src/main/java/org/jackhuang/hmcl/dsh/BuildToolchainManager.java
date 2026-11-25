@@ -526,8 +526,8 @@ public final class BuildToolchainManager {
 
     /// Downloads and publishes the pinned portable toolchain.
     ///
-    /// Windows gets w64devkit; Linux gets the Zig/make/pkgconf/nasm
-    /// combination. Both are x64-only, and both are installed atomically: the
+    /// Windows gets w64devkit (x64 only); Linux gets the Zig/make/pkgconf/nasm
+    /// combination for x64 and arm64. Both are installed atomically: the
     /// directory a build could pick never contains a half-written tree.
     ///
     /// @param progress  a progress sink
