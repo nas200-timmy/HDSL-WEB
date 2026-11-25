@@ -970,6 +970,11 @@ public final class PythonRuntimeManager {
         pointer.addProperty("version", version);
         writeJson(root.resolve(POINTER), pointer.toString());
         writeSymlink(directory);
+        // Every caller of `activate` has just made a different interpreter the
+        // answer, and `PythonResolver` caches its choice for a minute. Without
+        // this, a fresh install reported "no Python" for up to 60s — long
+        // enough for the task that triggered it to fail on its own success.
+        PythonResolver.resetCache();
     }
 
     private void writeSymlink(Path directory) {

@@ -314,6 +314,13 @@ public final class BootstrapRuntimeManager {
     public Installed ensureRuntime() throws IOException {
         Installed current = current();
         if (current != null) {
+            // Not only on the first install: /etc is exactly what a container
+            // rebuild discards, while /data survives. Repairing the passwd/group
+            // entries once, at install time, left a rebuilt container without
+            // them — `setpriv --init-groups` then had no entry to resolve and
+            // instances failed to start over something the panel had already
+            // fixed once. The check is three early returns plus a file read.
+            ensureIdentity();
             return current;
         }
         Platform platform = Platform.SYSTEM_PLATFORM;
@@ -329,15 +336,38 @@ public final class BootstrapRuntimeManager {
                     + " is marked unavailable" + (runtime.notes().isBlank()
                     ? "" : " (" + runtime.notes() + ")"));
         }
-        Installed installed = installRuntime(runtime, new HttpSource(), Progress.NONE);
+        Installed installed;
+        try {
+            installed = installRuntime(runtime, new HttpSource(), Progress.NONE);
+        } catch (IOException e) {
+            // Two requests can both find `current()` empty and race into the
+            // install; the record check inside the lock catches the loser, and
+            // "somebody else already installed it" is success. Reporting it as
+            // a failure made a healthy install show up as a failed task.
+            Installed raced = current();
+            if (raced != null && e.getMessage() != null
+                    && e.getMessage().startsWith("bootstrap_runtime_installed")) {
+                ensureIdentity();
+                return raced;
+            }
+            throw e;
+        }
         registerSetpriv(installed);
         // The closure install is the one moment the panel owns the filesystem
         // it can also use to give `setpriv` a passwd entry to resolve.
+        ensureIdentity();
+        return installed;
+    }
+
+    /// Fills in the passwd/group entries `setpriv` and `getpwuid` want.
+    ///
+    /// Never throws and never repairs anything that is already right, so it is
+    /// safe on the hot path as well as after an install.
+    private void ensureIdentity() {
         IdentityResult identity = ensureAgentIdentity();
         if (identity.applicable() && !identity.changed()) {
             LOG.info("bootstrap: " + identity.detail());
         }
-        return installed;
     }
 
     /// Installs one runtime bundle.
