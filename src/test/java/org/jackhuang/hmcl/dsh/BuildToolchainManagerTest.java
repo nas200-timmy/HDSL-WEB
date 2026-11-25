@@ -412,6 +412,37 @@ class BuildToolchainManagerTest {
         assertTrue(failure.contains("127"), failure);
     }
 
+    /// The two large downloads (Zig and w64devkit) must carry alternates: the
+    /// upstream is one slow host, and the speed picker only has something to
+    /// choose between when the catalogue names alternatives.
+    @Test
+    void theEmbeddedToolchainPinsMirrorsForTheLargeArchives() {
+        BootstrapCatalog.Toolchain toolchain = BootstrapCatalog.current().toolchain();
+        assertNotNull(toolchain);
+        for (String arch : List.of("x64", "arm64")) {
+            BootstrapCatalog.ToolchainArtifact zig = toolchain.linux().artifacts(arch).stream()
+                    .filter(artifact -> artifact.name().equals("zig"))
+                    .findFirst().orElseThrow();
+            assertFalse(zig.mirrors().isEmpty(), "no Zig mirror for " + arch);
+            for (String mirror : zig.mirrors()) {
+                assertTrue(mirror.startsWith("https://"), mirror);
+            }
+            String fileArch = arch.equals("arm64") ? "aarch64" : "x86_64";
+            assertEquals("https://ziglang.org/download/0.14.1/"
+                    + "zig-" + fileArch + "-linux-0.14.1.tar.xz", zig.url());
+        }
+        assertNotNull(toolchain.windows());
+        assertFalse(toolchain.windows().mirrors().isEmpty());
+    }
+
+    @Test
+    void aNonHttpsMirrorIsRejectedWithTheCatalogue() {
+        assertThrows(IllegalArgumentException.class, () ->
+                new BootstrapCatalog.ToolchainArtifact("zig", "tar.xz",
+                        "https://official.example/zig.tar.xz", "0".repeat(64), 1,
+                        List.of(), List.of("http://mirror.example/zig.tar.xz")));
+    }
+
     private static BuildToolchainManager.Toolchain toolchain(java.nio.file.Path cc,
                                                              java.nio.file.Path cxx,
                                                              java.nio.file.Path make) {

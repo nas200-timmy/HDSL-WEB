@@ -18,6 +18,7 @@
 package org.jackhuang.hmcl.dsh;
 
 import org.jackhuang.hmcl.util.ProcessTree;
+import org.jackhuang.hmcl.util.io.DownloadSourcePicker;
 import org.jackhuang.hmcl.util.logging.Logger;
 import org.jackhuang.hmcl.util.platform.Architecture;
 import org.jackhuang.hmcl.util.platform.Executables;
@@ -190,6 +191,12 @@ public final class BuildToolchainManager {
     private static final long CACHE_MILLIS = 60_000;
     private static final Duration PROBE_TIMEOUT = Duration.ofSeconds(4);
     private static final Duration EXTRACT_TIMEOUT = Duration.ofMinutes(10);
+    /// A source that sends nothing for this long is abandoned for the next
+    /// candidate. The speed probe only sees the first 512 KB; a connection
+    /// that stalls after that would otherwise hold the install for the full
+    /// request timeout (20 minutes). The window is deliberately generous:
+    /// a slow CDN can pause for tens of seconds without being dead.
+    private static final Duration DOWNLOAD_STALL = Duration.ofSeconds(90);
 
     private static final HttpClient HTTP = HttpClient.newBuilder()
             .followRedirects(HttpClient.Redirect.NORMAL)
@@ -198,6 +205,10 @@ public final class BuildToolchainManager {
 
     private static final Object DEFAULT_LOCK = new Object();
     private static volatile @Nullable BuildToolchainManager defaultManager;
+
+    /// Samples the catalogue's mirrors before each artifact download and
+    /// remembers the winner; see [DownloadSourcePicker].
+    private final DownloadSourcePicker sourcePicker = new DownloadSourcePicker();
 
     /// One program of a resolved toolchain.
     public record Tool(String name, @Nullable String path, String version) {
@@ -214,11 +225,19 @@ public final class BuildToolchainManager {
     /// @param size     the expected size, or `0` when it is not stated
     /// @param archive  `deb`, `tar.xz`, `tar.gz`, `tar` or `zip`
     /// @param includes the `.deb` members to extract, empty for a full archive
+    /// @param mirrors  alternative origins for the same pinned bytes
     record Artifact(String name, String url, String sha256, long size, String archive,
-                    List<BootstrapCatalog.Include> includes) {
+                    List<BootstrapCatalog.Include> includes, List<String> mirrors) {
         Artifact {
             BootstrapCatalog.validateHttps(url);
             includes = List.copyOf(includes);
+            mirrors = BootstrapCatalog.validateMirrors(mirrors);
+        }
+
+        /// The pre-mirror shape, for callers that only have the official URL.
+        Artifact(String name, String url, String sha256, long size, String archive,
+                 List<BootstrapCatalog.Include> includes) {
+            this(name, url, sha256, size, archive, includes, List.of());
         }
     }
 
@@ -746,7 +765,9 @@ public final class BuildToolchainManager {
             Files.createDirectories(extract);
             Privileges.keepRootOwnedDirectory(extract);
             progress.stage("downloading portable w64devkit " + windowsPortableVersion(), 0.05);
-            fetch(windowsPortableUrl(), download, windowsPortableSha256(), 0, cancelled);
+            BootstrapCatalog.Windows windows = windowsCatalog();
+            fetch(new Artifact("w64devkit", windows.url(), windows.sha256(), 0, "7z.exe",
+                    List.of(), windows.mirrors()), download, cancelled);
             progress.stage("extracting portable w64devkit", 0.6);
             RunResult result = run(List.of(download.toString(), "-y", "-o" + extract),
                     Map.of(), EXTRACT_TIMEOUT, cancelled);
@@ -816,7 +837,7 @@ public final class BuildToolchainManager {
             for (Artifact artifact : artifacts) {
                 progress.stage("downloading " + artifact.name(), fraction);
                 Path file = downloads.resolve(artifact.name() + suffix(artifact.archive()));
-                fetch(artifact.url(), file, artifact.sha256(), artifact.size(), cancelled);
+                fetch(artifact, file, cancelled);
                 records.add(artifactRecord(artifact.name(), artifact.url(), artifact.sha256(),
                         artifact.size(), artifact.archive()));
                 fraction = Math.min(0.75, fraction + 0.12);
@@ -861,7 +882,7 @@ public final class BuildToolchainManager {
         List<Artifact> artifacts = new ArrayList<>();
         for (BootstrapCatalog.ToolchainArtifact pinned : linuxCatalog().artifacts(hostArch())) {
             artifacts.add(new Artifact(pinned.name(), pinned.url(), pinned.sha256(),
-                    pinned.size(), pinned.archive(), pinned.includes()));
+                    pinned.size(), pinned.archive(), pinned.includes(), pinned.mirrors()));
         }
         return artifacts;
     }
@@ -1133,8 +1154,62 @@ public final class BuildToolchainManager {
 
     // -------------------------------------------------------------- download --
 
-    private void fetch(String url, Path target, String sha256, long size,
-                       BooleanSupplier cancelled) throws IOException {
+    /// Downloads one pinned artifact, trying the fastest usable origin first.
+    ///
+    /// The catalogue's digest is the trust anchor: a mirror can be slower or
+    /// broken, but it cannot be accepted with different bytes. The probe only
+    /// decides which URL is attempted first; every attempt is size- and
+    /// SHA-256-checked, and a failed one is deleted before the next.
+    ///
+    /// @param artifact the pinned artifact
+    /// @param target   where the bytes land
+    /// @param cancelled polled between steps
+    /// @throws IOException when every candidate fails
+    private void fetch(Artifact artifact, Path target, BooleanSupplier cancelled)
+            throws IOException {
+        DownloadSourcePicker.Choice choice = sourcePicker.choose(
+                artifact.url(), artifact.mirrors(), artifact.size(), magicOf(artifact.archive()));
+        BootstrapTrace.note("toolchain", artifact.name() + " source: " + hostOf(choice.url())
+                + " (" + choice.reason() + ")");
+        if (choice.probes().size() > 1) {
+            for (DownloadSourcePicker.Probe probe : choice.probes()) {
+                LOG.info("build toolchain: " + artifact.name() + " " + probe.url() + " -> "
+                        + (probe.ok() ? probe.speedKBps() + " KB/s" : probe.error()));
+            }
+        }
+        IOException failure = null;
+        for (String url : candidates(artifact.url(), artifact.mirrors(), choice.url())) {
+            try {
+                fetchOne(url, target, artifact.sha256(), artifact.size(), cancelled);
+                sourcePicker.recordOutcome(url, true, null);
+                return;
+            } catch (CancellationException e) {
+                throw e;
+            } catch (IOException e) {
+                Files.deleteIfExists(target);
+                sourcePicker.recordOutcome(url, false, e.getMessage());
+                LOG.info("build toolchain: " + artifact.name() + " from " + url
+                        + " failed: " + e.getMessage());
+                failure = e;
+            }
+        }
+        throw new IOException("build_toolchain_download_failed: every source for "
+                + artifact.name() + " failed"
+                + (failure == null ? "" : ": " + failure.getMessage()), failure);
+    }
+
+    /// The candidate order for the download: the chosen source first, then the
+    /// rest of the catalogue's list (mirrors, then official), without duplicates.
+    private static List<String> candidates(String official, List<String> mirrors,
+                                           String chosen) {
+        java.util.LinkedHashSet<String> ordered = new java.util.LinkedHashSet<>();
+        ordered.add(chosen);
+        ordered.addAll(DownloadSourcePicker.candidates(official, mirrors));
+        return List.copyOf(ordered);
+    }
+
+    private void fetchOne(String url, Path target, String sha256, long size,
+                          BooleanSupplier cancelled) throws IOException {
         BootstrapCatalog.validateHttps(url);
         if (cancelled.getAsBoolean()) {
             throw new CancellationException("cancelled");
@@ -1163,6 +1238,30 @@ public final class BuildToolchainManager {
         }
     }
 
+    /// The first bytes every candidate for this archive type must serve.
+    ///
+    /// This is what rejects a mirror that answers an HTML portal page with
+    /// HTTP 200 — the failure mode a speed probe alone would reward.
+    private static byte @Nullable [] magicOf(String archive) {
+        return switch (archive == null ? "" : archive.toLowerCase(java.util.Locale.ROOT)) {
+            case "tar.xz", "txz" -> new byte[]{(byte) 0xFD, '7', 'z', 'X', 'Z', 0};
+            case "tar.gz", "tgz" -> new byte[]{0x1F, (byte) 0x8B};
+            case "deb" -> new byte[]{'!', '<', 'a', 'r', 'c', 'h', '>', '\n'};
+            case "zip" -> new byte[]{'P', 'K', 3, 4};
+            case "7z.exe" -> new byte[]{'M', 'Z'};
+            default -> null;
+        };
+    }
+
+    private static String hostOf(String url) {
+        try {
+            String host = java.net.URI.create(url).getHost();
+            return host == null || host.isBlank() ? url : host;
+        } catch (RuntimeException e) {
+            return url;
+        }
+    }
+
     /// Streams one pinned artifact over https.
     private static final class HttpSource implements BootstrapRuntimeManager.ArtifactSource {
         @Override
@@ -1183,13 +1282,67 @@ public final class BuildToolchainManager {
                         + response.statusCode() + " for " + url);
             }
             Privileges.createPrivateFile(target);
+            java.util.concurrent.atomic.AtomicBoolean finished =
+                    new java.util.concurrent.atomic.AtomicBoolean();
+            java.util.concurrent.atomic.AtomicBoolean stalled =
+                    new java.util.concurrent.atomic.AtomicBoolean();
+            java.util.concurrent.atomic.AtomicReference<InputStream> stream =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            Thread watchdog = new Thread(() -> {
+                long lastSize = -1;
+                long lastChange = System.nanoTime();
+                try {
+                    while (!finished.get()) {
+                        Thread.sleep(2000);
+                        if (finished.get()) {
+                            return;
+                        }
+                        long size;
+                        try {
+                            size = Files.exists(target) ? Files.size(target) : 0;
+                        } catch (IOException e) {
+                            size = lastSize;
+                        }
+                        long now = System.nanoTime();
+                        if (size > lastSize) {
+                            lastSize = size;
+                            lastChange = now;
+                        } else if (now - lastChange > DOWNLOAD_STALL.toNanos()) {
+                            stalled.set(true);
+                            InputStream in = stream.get();
+                            if (in != null) {
+                                try {
+                                    in.close();
+                                } catch (IOException ignored) {
+                                    // The read loop reports the stall anyway.
+                                }
+                            }
+                            return;
+                        }
+                    }
+                } catch (InterruptedException ignored) {
+                    // The fetch finished and interrupted us.
+                }
+            }, "build-toolchain-download-watchdog");
+            watchdog.setDaemon(true);
+            watchdog.start();
             try (InputStream in = new BufferedInputStream(response.body());
                  OutputStream out = Files.newOutputStream(target)) {
+                stream.set(in);
                 byte[] buffer = new byte[1 << 16];
                 int read;
                 while ((read = in.read(buffer)) >= 0) {
                     out.write(buffer, 0, read);
                 }
+            } catch (IOException e) {
+                if (stalled.get()) {
+                    throw new IOException("build_toolchain_download_stalled: " + url
+                            + " sent no bytes for " + DOWNLOAD_STALL.toSeconds() + " s", e);
+                }
+                throw e;
+            } finally {
+                finished.set(true);
+                watchdog.interrupt();
             }
         }
     }

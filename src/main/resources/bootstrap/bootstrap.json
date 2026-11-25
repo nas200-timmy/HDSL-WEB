@@ -221,7 +221,11 @@
     "windows": {
       "version": "2.11.0",
       "url": "https://github.com/skeeto/w64devkit/releases/download/v2.11.0/w64devkit-x64-2.11.0.7z.exe",
-      "sha256": "54c2bb9962e8a30c8270e34c5efc3d5fee579f53087fa7d435b95fbba2af7b2b"
+      "sha256": "54c2bb9962e8a30c8270e34c5efc3d5fee579f53087fa7d435b95fbba2af7b2b",
+      "mirrors": [
+        "https://gh-proxy.com/https://github.com/skeeto/w64devkit/releases/download/v2.11.0/w64devkit-x64-2.11.0.7z.exe",
+        "https://ghfast.top/https://github.com/skeeto/w64devkit/releases/download/v2.11.0/w64devkit-x64-2.11.0.7z.exe"
+      ]
     },
     "linux": {
       "version": "0.14.1",
@@ -233,7 +237,15 @@
             "url": "https://ziglang.org/download/0.14.1/zig-x86_64-linux-0.14.1.tar.xz",
             "sha256": "24aeeec8af16c381934a6cd7d95c807a8cb2cf7df9fa40d359aa884195c4716c",
             "size": 49086504,
-            "includes": []
+            "includes": [],
+            "mirrors": [
+              "https://zig.linus.dev/zig/0.14.1/zig-x86_64-linux-0.14.1.tar.xz",
+              "https://zig.chainsafe.dev/zig-x86_64-linux-0.14.1.tar.xz",
+              "https://zig.squirl.dev/download/0.14.1/zig-x86_64-linux-0.14.1.tar.xz",
+              "https://zig.savalione.com/zig-x86_64-linux-0.14.1.tar.xz",
+              "https://pkg.alexrp.com/zig/0.14.1/zig-x86_64-linux-0.14.1.tar.xz",
+              "https://zig.mirror.mschae23.de/zig/0.14.1/zig-x86_64-linux-0.14.1.tar.xz"
+            ]
           },
           {
             "name": "make",
@@ -295,7 +307,15 @@
             "url": "https://ziglang.org/download/0.14.1/zig-aarch64-linux-0.14.1.tar.xz",
             "sha256": "f7a654acc967864f7a050ddacfaa778c7504a0eca8d2b678839c21eea47c992b",
             "size": 44954692,
-            "includes": []
+            "includes": [],
+            "mirrors": [
+              "https://zig.linus.dev/zig/0.14.1/zig-aarch64-linux-0.14.1.tar.xz",
+              "https://zig.chainsafe.dev/zig-aarch64-linux-0.14.1.tar.xz",
+              "https://zig.squirl.dev/download/0.14.1/zig-aarch64-linux-0.14.1.tar.xz",
+              "https://zig.savalione.com/zig-aarch64-linux-0.14.1.tar.xz",
+              "https://pkg.alexrp.com/zig/0.14.1/zig-aarch64-linux-0.14.1.tar.xz",
+              "https://zig.mirror.mschae23.de/zig/0.14.1/zig-aarch64-linux-0.14.1.tar.xz"
+            ]
           },
           {
             "name": "make",

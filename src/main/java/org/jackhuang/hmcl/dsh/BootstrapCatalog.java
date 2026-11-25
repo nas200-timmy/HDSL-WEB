@@ -273,13 +273,24 @@ public final class BootstrapCatalog {
     }
 
     /// The portable MinGW build.
-    public record Windows(String version, String url, String sha256) {
+    ///
+    /// `mirrors` are alternative origins for the same pinned bytes. They are
+    /// sampled before an install and the fastest usable one is chosen; the
+    /// digest is unchanged, so a mirror can fail but cannot be trusted with
+    /// different bytes.
+    public record Windows(String version, String url, String sha256, List<String> mirrors) {
         public Windows {
             if (version == null || !version.matches("[A-Za-z0-9._-]{1,40}")) {
                 throw new IllegalArgumentException("invalid w64devkit version: " + version);
             }
             validateHttps(url);
             validateSha256(sha256, "w64devkit " + version);
+            mirrors = validateMirrors(mirrors);
+        }
+
+        /// The pre-mirror shape, for callers that only have the official URL.
+        public Windows(String version, String url, String sha256) {
+            this(version, url, sha256, List.of());
         }
     }
 
@@ -321,7 +332,7 @@ public final class BootstrapCatalog {
     /// One toolchain archive. Unlike [Artifact], `includes` may be empty: Zig is
     /// unpacked whole rather than having named members pulled out.
     public record ToolchainArtifact(String name, String archive, String url, String sha256,
-                                    long size, List<Include> includes) {
+                                    long size, List<Include> includes, List<String> mirrors) {
         public ToolchainArtifact {
             if (name == null || name.isBlank()) {
                 throw new IllegalArgumentException("a toolchain artifact needs a name");
@@ -333,6 +344,13 @@ public final class BootstrapCatalog {
             }
             validateArchive(name, archive);
             includes = includes == null ? List.of() : List.copyOf(includes);
+            mirrors = validateMirrors(mirrors);
+        }
+
+        /// The pre-mirror shape, for callers that only have the official URL.
+        public ToolchainArtifact(String name, String archive, String url, String sha256,
+                                 long size, List<Include> includes) {
+            this(name, archive, url, sha256, size, includes, List.of());
         }
     }
 
@@ -471,7 +489,7 @@ public final class BootstrapCatalog {
             if (object.has("windows") && object.get("windows").isJsonObject()) {
                 JsonObject value = object.getAsJsonObject("windows");
                 windows = new Windows(string(value, "version"), string(value, "url"),
-                        string(value, "sha256"));
+                        string(value, "sha256"), parseMirrors(value));
             }
             Linux linux = null;
             if (object.has("linux") && object.get("linux").isJsonObject()) {
@@ -534,9 +552,22 @@ public final class BootstrapCatalog {
                         string(artifact, "archive"), string(artifact, "url"),
                         string(artifact, "sha256"),
                         artifact.has("size") ? artifact.get("size").getAsLong() : 0,
-                        includes));
+                        includes, parseMirrors(artifact)));
             }
             return artifacts;
+        }
+
+        /// The optional `mirrors` array of one artifact.
+        private static List<String> parseMirrors(JsonObject object) {
+            List<String> mirrors = new ArrayList<>();
+            if (object.has("mirrors") && object.get("mirrors").isJsonArray()) {
+                for (JsonElement element : object.getAsJsonArray("mirrors")) {
+                    if (element.isJsonPrimitive()) {
+                        mirrors.add(element.getAsString());
+                    }
+                }
+            }
+            return mirrors;
         }
 
         private static String string(JsonObject object, String name) {
@@ -684,6 +715,29 @@ public final class BootstrapCatalog {
         if (url.toLowerCase(Locale.ROOT).contains("latest")) {
             throw new IllegalArgumentException("artifact URLs must be pinned, not moving: " + url);
         }
+    }
+
+    /// Validates a mirror list: every entry is an https URL, without duplicates.
+    ///
+    /// A mirror is an alternative origin for the *same* pinned bytes, so the
+    /// rules are the official URL's rules. Order is kept: it is the fallback
+    /// order when a speed probe does not settle the choice.
+    ///
+    /// @param mirrors the entries, or `null`
+    /// @return the normalized list
+    static List<String> validateMirrors(@Nullable List<String> mirrors) {
+        if (mirrors == null || mirrors.isEmpty()) {
+            return List.of();
+        }
+        List<String> copy = new ArrayList<>();
+        for (String mirror : mirrors) {
+            validateHttps(mirror);
+            String normalized = mirror.trim();
+            if (!copy.contains(normalized)) {
+                copy.add(normalized);
+            }
+        }
+        return List.copyOf(copy);
     }
 
     /// An architecture key such as `x64` or `arm64`.

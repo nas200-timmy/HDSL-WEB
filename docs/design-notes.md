@@ -49,6 +49,11 @@ README 只保留「用户需要知道的」。这里记录为什么这样做—�
   - corepack 下载 pnpm 本体时用它自己的 `COREPACK_NPM_REGISTRY`。
 - 镜像入口脚本每次启动都会生成这份 `config.yaml`；绕开入口脚本直接 `--entrypoint java`
   时，镜像里预置了只含 `storeDir` 的同名文件作兜底。
+- 构建工具链（Windows 的 w64devkit、Linux 的 Zig）在 catalog 里带 `mirrors`。安装前对官方源和
+  每个镜像采样 512 KB（6 秒上限），校验首字节（xz/deb/zip/PE）与 `Content-Range` 总大小，选
+  最快可用者；镜像在最快速度的 85% 以内时优先镜像，避免把上游打满。哈希仍是唯一信任锚：镜像
+  只能失败，不能换字节。下载中 90 秒没有新字节也会放弃当前源、换下一个；失败的源在后续安装里
+  按退避窗口跳过。
 
 ## 4. 实例生命周期
 
