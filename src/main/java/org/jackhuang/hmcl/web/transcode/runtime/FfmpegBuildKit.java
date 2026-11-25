@@ -21,6 +21,7 @@ import org.jackhuang.hmcl.util.ProcessTree;
 import org.jackhuang.hmcl.util.logging.Logger;
 import org.jackhuang.hmcl.util.platform.Executables;
 import org.jackhuang.hmcl.util.platform.OperatingSystem;
+import org.jackhuang.hmcl.dsh.BootstrapEnvironment;
 import org.jackhuang.hmcl.util.platform.Privileges;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
@@ -460,7 +461,7 @@ public final class FfmpegBuildKit {
                 argv = niced;
             }
         }
-        ProcessBuilder builder = new ProcessBuilder(Privileges.asAgent(argv))
+        ProcessBuilder builder = BootstrapEnvironment.agentProcess(argv)
                 .directory(cwd.toFile())
                 .redirectErrorStream(true);
         Map<String, String> env = builder.environment();
@@ -549,7 +550,7 @@ public final class FfmpegBuildKit {
     /// agent makes the file's owner and the process's uid the same party.
     private static RunResult runCaptured(List<String> command, Path cwd, Duration timeout,
                                          BooleanSupplier cancelled) throws IOException {
-        ProcessBuilder builder = new ProcessBuilder(Privileges.asAgent(command))
+        ProcessBuilder builder = BootstrapEnvironment.agentProcess(command)
                 .directory(cwd.toFile())
                 .redirectErrorStream(true);
         Process process = builder.start();

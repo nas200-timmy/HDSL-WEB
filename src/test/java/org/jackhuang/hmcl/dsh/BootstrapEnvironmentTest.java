@@ -403,4 +403,17 @@ class BootstrapEnvironmentTest {
         // A map with no spelling at all still gets the canonical one.
         assertEquals("PATH", BootstrapEnvironment.keyOf(new HashMap<>(), "PATH", OperatingSystem.WINDOWS));
     }
+    /// The closure goes into a child's environment only when this host still
+    /// needs it. A panel that once ran in a minimal image keeps the closure on
+    /// disk; prepending it to a host with its own, newer libstdc++ made a gcc-14
+    /// build die on `GLIBCXX_3.4.32 not found`, because the closure's copy won.
+    @Test
+    void theClosureIsInjectedOnlyWhenThisHostNeedsIt() {
+        assertTrue(BootstrapEnvironment.closureNeeded(false, true),
+                "the host cannot find the libraries: inject");
+        assertTrue(BootstrapEnvironment.closureNeeded(true, false),
+                "the host has no setpriv of its own: inject");
+        assertFalse(BootstrapEnvironment.closureNeeded(true, true),
+                "a complete host gets nothing prepended");
+    }
 }

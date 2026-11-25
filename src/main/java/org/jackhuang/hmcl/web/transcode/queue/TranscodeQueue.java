@@ -24,6 +24,7 @@ import com.google.gson.annotations.SerializedName;
 import org.jackhuang.hmcl.util.ProcessTree;
 import org.jackhuang.hmcl.util.gson.JsonUtils;
 import org.jackhuang.hmcl.util.platform.OperatingSystem;
+import org.jackhuang.hmcl.dsh.BootstrapEnvironment;
 import org.jackhuang.hmcl.util.platform.Privileges;
 import org.jackhuang.hmcl.util.logging.Logger;
 import org.jackhuang.hmcl.web.event.EventBus;
@@ -938,7 +939,7 @@ public final class TranscodeQueue {
                 }
                 Files.writeString(log, "# " + passLabel + CommandBuilder.display(command) + "\n",
                         StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-                ProcessBuilder builder = new ProcessBuilder(Privileges.asAgent(command));
+                ProcessBuilder builder = BootstrapEnvironment.agentProcess(command);
                 builder.redirectError(ProcessBuilder.Redirect.appendTo(log.toFile()));
                 Process process = builder.start();
                 // cancel/stopAll 在锁内读 job.process 并 terminate：赋值必须同锁，且

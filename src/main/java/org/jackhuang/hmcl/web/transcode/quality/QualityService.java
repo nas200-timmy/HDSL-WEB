@@ -22,6 +22,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.jackhuang.hmcl.util.ProcessTree;
+import org.jackhuang.hmcl.dsh.BootstrapEnvironment;
 import org.jackhuang.hmcl.util.platform.Privileges;
 import org.jackhuang.hmcl.web.transcode.TranscodeModule;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegProbe;
@@ -137,7 +138,7 @@ public final class QualityService {
                 command.add(info.ffmpeg().toString());
                 command.addAll(args);
                 Path log = workDir.resolve(job.id + "-" + metric + "-stderr.log");
-                ProcessBuilder builder = new ProcessBuilder(Privileges.asAgent(command));
+                ProcessBuilder builder = BootstrapEnvironment.agentProcess(command);
                 builder.redirectError(ProcessBuilder.Redirect.to(log.toFile()));
                 Process process = builder.start();
                 job.process = process;

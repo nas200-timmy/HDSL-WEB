@@ -96,8 +96,7 @@ public final class FfmpegProbe {
         List<String> command = new java.util.ArrayList<>(args.size() + 1);
         command.add(executable.toString());
         command.addAll(args);
-        Process process = new ProcessBuilder(
-                org.jackhuang.hmcl.util.platform.Privileges.asAgent(command))
+        Process process = org.jackhuang.hmcl.dsh.BootstrapEnvironment.agentProcess(command)
                 .redirectErrorStream(true)
                 .start();
         java.util.concurrent.ExecutorService reader =

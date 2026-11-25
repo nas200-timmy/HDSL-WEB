@@ -69,6 +69,16 @@ public final class BootstrapEnvironment {
     /// @return the variables to add or replace; never `null`
     public static Map<String, String> additions() {
         Installed runtime = BootstrapRuntimeManager.currentRuntimeClosure();
+        if (runtime != null && !closureNeeded(
+                BootstrapRuntimeManager.missingNodeLibraries().isEmpty(),
+                org.jackhuang.hmcl.util.platform.Executables.resolve("setpriv").isPresent())) {
+            // A panel that once ran in a minimal image keeps the closure on disk.
+            // Injecting it into a host that has its own, newer libstdc++ made a
+            // gcc-14 build die on `GLIBCXX_3.4.32 not found`: the closure's copy
+            // is older, and it was winning. The question is "does *this* host
+            // need it", not "is one installed".
+            runtime = null;
+        }
         BootstrapRuntimeManager.CaInstalled ca = BootstrapRuntimeManager.currentCaBundle();
         PythonResolver.Interpreter python = PythonResolver.resolve();
         BuildToolchainManager.Toolchain build = BuildToolchainManager.currentInstalled();
@@ -108,6 +118,24 @@ public final class BootstrapEnvironment {
                 build == null || build.directory() == null ? null : build.directory().resolve("lib"),
                 build == null ? Map.of() : build.environment(),
                 environment, Files::exists, includePython));
+    }
+
+    /// A process builder for a child that has to run as the agent.
+    ///
+    /// [org.jackhuang.hmcl.util.platform.Privileges#asAgent] only rewrites the
+    /// argv. The `setpriv` it prefixes is itself a program, and the copy in the
+    /// bootstrap closure links against the closure's `libcap-ng` — so without
+    /// the closure's `LD_LIBRARY_PATH` in the builder, `setpriv` dies before the
+    /// child ever starts. In a minimal image that is every transcode and every
+    /// source build, with nothing in the log to say why.
+    ///
+    /// @param command the program and its arguments
+    /// @return a builder with the argv wrapped and the bootstrap variables applied
+    public static ProcessBuilder agentProcess(java.util.List<String> command) {
+        ProcessBuilder builder = new ProcessBuilder(
+                org.jackhuang.hmcl.util.platform.Privileges.asAgent(command));
+        apply(builder, false);
+        return builder;
     }
 
     /// Applies the additions to a child process.
@@ -257,6 +285,20 @@ public final class BootstrapEnvironment {
             }
         }
         return additions;
+    }
+
+    /// Whether a host still needs the bootstrap closure in its child environment.
+    ///
+    /// Two reasons to keep it: the host's loader cannot find the libraries the
+    /// closure carries (`libstdc++`, `libgcc_s`, `libatomic`), or the host has no
+    /// `setpriv` of its own and the closure's is the only one that can do the
+    /// drop.
+    ///
+    /// @param librariesPresent whether the host already provides every one of them
+    /// @param setprivPresent  whether the host has a `setpriv` on `PATH`
+    /// @return whether the closure should be prepended
+    static boolean closureNeeded(boolean librariesPresent, boolean setprivPresent) {
+        return !librariesPresent || !setprivPresent;
     }
 
     /// Reads a variable out of an environment map the way Windows would.

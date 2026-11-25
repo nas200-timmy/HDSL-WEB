@@ -22,6 +22,7 @@ import org.jackhuang.hmcl.util.ProcessTree;
 import org.jackhuang.hmcl.util.platform.Architecture;
 import org.jackhuang.hmcl.util.platform.Executables;
 import org.jackhuang.hmcl.util.platform.OperatingSystem;
+import org.jackhuang.hmcl.dsh.BootstrapEnvironment;
 import org.jackhuang.hmcl.util.platform.Privileges;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
@@ -516,7 +517,7 @@ public final class FfmpegToolchainManager {
         if (cancelled.getAsBoolean()) {
             throw new CancellationException("cancelled");
         }
-        ProcessBuilder builder = new ProcessBuilder(Privileges.asAgent(command)).redirectErrorStream(true);
+        ProcessBuilder builder = BootstrapEnvironment.agentProcess(command).redirectErrorStream(true);
         builder.environment().putAll(environment);
         Process process = builder.start();
         ByteArrayOutputStream output = new ByteArrayOutputStream();
