@@ -4707,7 +4707,7 @@ function BootstrapCard() {
     setBusy(bundle);
     setTaskMsg("正在提交…");
     try {
-      const r = await api.bootstrapInstall(bundle);
+      const r = await withElevation(() => api.bootstrapInstall(bundle));
       setBusy(r.taskId);
     } catch (e) {
       setBusy(null);

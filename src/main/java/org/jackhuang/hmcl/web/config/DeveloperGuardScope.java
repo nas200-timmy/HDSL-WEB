@@ -123,6 +123,7 @@ public enum DeveloperGuardScope {
                 || path.startsWith("/api/packs/")
                 || path.startsWith("/api/settings/")
                 || path.startsWith("/api/node/")
+                || path.startsWith("/api/bootstrap/")
                 || path.startsWith("/api/versions");
     }
 

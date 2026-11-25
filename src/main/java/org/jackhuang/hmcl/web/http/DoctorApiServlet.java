@@ -139,10 +139,16 @@ public final class DoctorApiServlet extends HttpServlet {
     /// @return `fail`, `warn` or `ok`
     static String statusOf(String body) {
         String lower = body.toLowerCase(Locale.ROOT);
-        if (lower.contains("failed") || lower.contains("not found") || lower.contains("[unsupported]")) {
+        // `MISSING` is matched case-sensitively: it is the bootstrap report's own
+        // shout (a library or a toolchain program that is not there), and the
+        // lower-case word turns up in prose that means no such thing.
+        if (lower.contains("failed") || lower.contains("not found") || lower.contains("[unsupported]")
+                || body.contains("MISSING")) {
             return "fail";
         }
-        if (lower.contains("[incomplete]") || lower.contains("[shortage]")
+        // `[incomplete` without its closing bracket: the bootstrap rows list what
+        // is missing inside the marker (`[INCOMPLETE: cc, make]`).
+        if (lower.contains("[incomplete") || lower.contains("[shortage]")
                 || lower.contains("skipped") || lower.contains("unavailable")) {
             return "warn";
         }

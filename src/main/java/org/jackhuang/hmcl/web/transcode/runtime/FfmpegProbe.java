@@ -47,24 +47,46 @@ public final class FfmpegProbe {
             return FfmpegInfo.unavailable("ffmpeg or ffprobe was not found; install it or set transcode.ffmpeg_path");
         }
         try {
-            String versionOut = run(paths.ffmpeg(), List.of("-hide_banner", "-version"));
-            String encodersOut = run(paths.ffmpeg(), List.of("-hide_banner", "-encoders"));
-            String hwaccelsOut = run(paths.ffmpeg(), List.of("-hide_banner", "-hwaccels"));
-            String filtersOut = run(paths.ffmpeg(), List.of("-hide_banner", "-filters"));
-            String version = firstLine(versionOut);
-            if (version.isBlank()) {
-                return FfmpegInfo.unavailable("ffmpeg answered without a version line");
+            // The exit code is the verdict, not the output: a binary whose shared
+            // libraries are gone still prints a banner-shaped error and used to be
+            // adopted as the panel's ffmpeg on the strength of that text alone.
+            Result versionResult = runWithStatus(paths.ffmpeg(), List.of("-hide_banner", "-version"));
+            String version = firstLine(versionResult.output());
+            if (versionResult.exit() != 0 || version.isBlank()) {
+                return FfmpegInfo.unavailable("ffmpeg -version exited " + versionResult.exit()
+                        + (version.isBlank() ? " without a version line" : "")
+                        + ": " + firstLine(versionResult.output()));
             }
+            Result encodersResult = runWithStatus(paths.ffmpeg(), List.of("-hide_banner", "-encoders"));
+            Set<String> encoders = parseEncoders(encodersResult.output());
+            if (encodersResult.exit() != 0 || encoders.isEmpty()) {
+                return FfmpegInfo.unavailable("ffmpeg -encoders exited " + encodersResult.exit()
+                        + " and listed no encoder: " + firstLine(encodersResult.output()));
+            }
+            // A build that cannot list its accelerators or filters is still an
+            // ffmpeg; those two only narrow what a preset may ask for.
+            Result hwaccelsResult = runWithStatus(paths.ffmpeg(), List.of("-hide_banner", "-hwaccels"));
+            Result filtersResult = runWithStatus(paths.ffmpeg(), List.of("-hide_banner", "-filters"));
             return new FfmpegInfo(paths.ffmpeg(), paths.ffprobe(), version,
-                    parseEncoders(encodersOut), parseHwaccels(hwaccelsOut), parseFilters(filtersOut),
+                    encoders, parseHwaccels(hwaccelsResult.output()), parseFilters(filtersResult.output()),
                     null, System.currentTimeMillis());
         } catch (Exception e) {
             return FfmpegInfo.unavailable("ffmpeg probe failed: " + e.getMessage());
         }
     }
 
+    /// A finished probe: the exit code and everything the process wrote.
+    public record Result(int exit, String output) {
+    }
+
     /// Runs a command and returns its combined output.
     public static String run(Path executable, List<String> args) throws IOException, InterruptedException {
+        return runWithStatus(executable, args).output();
+    }
+
+    /// Runs a command to completion and reports both its exit code and output.
+    public static Result runWithStatus(Path executable, List<String> args)
+            throws IOException, InterruptedException {
         List<String> command = new java.util.ArrayList<>(args.size() + 1);
         command.add(executable.toString());
         command.addAll(args);
@@ -84,7 +106,7 @@ public final class FfmpegProbe {
                 future.cancel(true);
                 throw new IOException("ffmpeg did not answer within " + TIMEOUT.toSeconds() + "s");
             }
-            return new String(future.get(), StandardCharsets.UTF_8);
+            return new Result(process.exitValue(), new String(future.get(), StandardCharsets.UTF_8));
         } catch (java.util.concurrent.ExecutionException e) {
             throw new IOException("could not read ffmpeg output", e.getCause());
         } finally {

@@ -17,11 +17,17 @@
  */
 package org.jackhuang.hmcl.web.transcode.runtime;
 
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class FfmpegProbeTest {
 
@@ -102,5 +108,53 @@ class FfmpegProbeTest {
         assertTrue(filters.contains("libvmaf"), filters.toString());
         assertTrue(filters.contains("scale"), filters.toString());
         assertFalse(filters.contains("="), filters.toString());
+    }
+
+    /// A binary that prints a banner and then dies is not an ffmpeg. Before the
+    /// exit code was read, `-version` failing with 127 still produced a first
+    /// line, and that line was adopted as the panel's current runtime — every
+    /// later transcode then failed on a file that was never going to run.
+    @Test
+    public void aBinaryThatFailsIsUnavailableWhateverItPrints(@TempDir Path dir) throws Exception {
+        assumeTrue(OperatingSystem.CURRENT_OS != OperatingSystem.WINDOWS,
+                "the fixture is a shell script");
+
+        Path ffmpeg = dir.resolve("ffmpeg");
+        Path ffprobe = dir.resolve("ffprobe");
+        Files.writeString(ffmpeg, "#!/bin/sh\n"
+                + "echo 'ffmpeg version 7.1.5 Copyright (c) 2000-2025 the FFmpeg developers'\n"
+                + "echo 'ffmpeg: error while loading shared libraries: libavcodec.so.61: "
+                + "cannot open shared object file' >&2\n"
+                + "exit 127\n");
+        Files.writeString(ffprobe, "#!/bin/sh\nexit 0\n");
+        assertTrue(ffmpeg.toFile().setExecutable(true), "the fixture has to be executable");
+        assertTrue(ffprobe.toFile().setExecutable(true), "the fixture has to be executable");
+
+        FfmpegProbe.FfmpegInfo info = FfmpegProbe.probe(new FfmpegLocator.FfmpegPaths(ffmpeg, ffprobe));
+        assertFalse(info.available());
+        assertTrue(info.error().contains("-version exited 127"), info.error());
+    }
+
+    /// The same shape one step later: the version answers cleanly but the
+    /// encoder table cannot be produced, so nothing can be scheduled on it.
+    @Test
+    public void aBinaryWithoutEncodersIsUnavailable(@TempDir Path dir) throws Exception {
+        assumeTrue(OperatingSystem.CURRENT_OS != OperatingSystem.WINDOWS,
+                "the fixture is a shell script");
+
+        Path ffmpeg = dir.resolve("ffmpeg");
+        Path ffprobe = dir.resolve("ffprobe");
+        Files.writeString(ffmpeg, "#!/bin/sh\n"
+                + "case \"$2\" in\n"
+                + "  -encoders) echo 'Encoders:'; exit 1 ;;\n"
+                + "  *) echo 'ffmpeg version 7.1.5 Copyright (c) 2000-2025 the FFmpeg developers' ;;\n"
+                + "esac\n");
+        Files.writeString(ffprobe, "#!/bin/sh\nexit 0\n");
+        assertTrue(ffmpeg.toFile().setExecutable(true), "the fixture has to be executable");
+        assertTrue(ffprobe.toFile().setExecutable(true), "the fixture has to be executable");
+
+        FfmpegProbe.FfmpegInfo info = FfmpegProbe.probe(new FfmpegLocator.FfmpegPaths(ffmpeg, ffprobe));
+        assertFalse(info.available());
+        assertTrue(info.error().contains("-encoders"), info.error());
     }
 }
