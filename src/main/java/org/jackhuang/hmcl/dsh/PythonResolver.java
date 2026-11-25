@@ -295,6 +295,23 @@ public final class PythonResolver {
                 : "the panel-managed CPython " + managed.version() + " does not run";
     }
 
+    /// Whether an environment's own `PATH` already names an interpreter.
+    ///
+    /// A child that brings its own Python — a bundled runtime, a venv, an
+    /// instance that sets its own PATH — must not be answered by the panel's
+    /// interpreter: the panel only fills a gap. This is the check both the
+    /// environment additions and [applyTo] make before injecting anything.
+    ///
+    /// @param environment the child's environment
+    /// @param executable  how to ask whether a path is a runnable file
+    /// @return whether a `python3`/`python` is already visible
+    static boolean hasInterpreter(Map<String, String> environment,
+                                  java.util.function.Predicate<Path> executable) {
+        return !candidates(environment.get("PATH"), OperatingSystem.CURRENT_OS,
+                System.getenv("WINDIR") != null ? System.getenv("WINDIR")
+                        : System.getenv("SystemRoot"), executable).isEmpty();
+    }
+
     /// Every `python3`/`python` on `PATH`, in `PATH` order, stubs excluded.
     static List<Path> candidates() {
         return candidates(System.getenv("PATH"), OperatingSystem.CURRENT_OS,
@@ -505,6 +522,11 @@ public final class PythonResolver {
     public static void applyTo(Map<String, String> environment) {
         Interpreter python = resolve();
         if (!python.usable() || python.origin() == Origin.OPERATOR) {
+            return;
+        }
+        // The child's own interpreter wins: an instance that ships one, a venv,
+        // or a PATH the caller built must not be shadowed by the panel's choice.
+        if (hasInterpreter(environment, PythonResolver::isExecutable)) {
             return;
         }
         Path executable = python.executable();

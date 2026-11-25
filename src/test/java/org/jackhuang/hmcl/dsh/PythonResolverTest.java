@@ -25,6 +25,7 @@ import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -161,5 +162,30 @@ public class PythonResolverTest {
         assertEquals("3.12", PythonResolver.majorMinor("3.12.16"));
         assertEquals("3.12", PythonResolver.majorMinor("3.12"));
         assertEquals("3.14", PythonResolver.majorMinor("3.14.0"));
+    }
+
+    @Test
+    public void applyToLeavesAChildWithItsOwnInterpreterAlone(@TempDir Path dir) throws Exception {
+        Path own = dir.resolve("python3");
+        Files.writeString(own, "#!/bin/sh\nexit 0\n");
+        own.toFile().setExecutable(true, false);
+        Map<String, String> environment = new java.util.HashMap<>();
+        environment.put("PATH", dir.toString());
+
+        PythonResolver.applyTo(environment);
+
+        assertTrue(!environment.containsKey("PYTHON"), environment.toString());
+        assertEquals(dir.toString(), environment.get("PATH"));
+    }
+
+    @Test
+    public void applyToFillsAGapWhenNoInterpreterIsVisible() {
+        org.junit.jupiter.api.Assumptions.assumeTrue(PythonResolver.resolve().usable());
+        Map<String, String> environment = new java.util.HashMap<>();
+        environment.put("PATH", "/nonexistent");
+
+        PythonResolver.applyTo(environment);
+
+        assertTrue(environment.containsKey("PYTHON"), environment.toString());
     }
 }

@@ -181,7 +181,8 @@ public final class BootstrapEnvironment {
             }
         }
         if (python != null && python.usable()
-                && python.origin() != PythonResolver.Origin.OPERATOR) {
+                && python.origin() != PythonResolver.Origin.OPERATOR
+                && !PythonResolver.hasInterpreter(base, exists)) {
             Path interpreter = python.executable();
             if (python.origin() == PythonResolver.Origin.MANAGED) {
                 // Reaching MANAGED means no usable system interpreter exists, so

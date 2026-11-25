@@ -85,10 +85,12 @@ class BootstrapEnvironmentTest {
         Path interpreter = python.resolve("bin").resolve("python3");
         Files.writeString(interpreter, "#!/bin/sh\n");
 
+        // The child's PATH must not already name an interpreter: when it does,
+        // the panel leaves the child's own Python alone (see the test below).
         Map<String, String> additions = BootstrapEnvironment.additions(null, null,
-                managed(interpreter), Map.of("PATH", "/usr/bin:/bin"), Files::exists);
+                managed(interpreter), Map.of("PATH", "/nonexistent"), Files::exists);
 
-        assertEquals(python.resolve("bin") + File.pathSeparator + "/usr/bin:/bin",
+        assertEquals(python.resolve("bin") + File.pathSeparator + "/nonexistent",
                 additions.get("PATH"));
         assertEquals(interpreter.toString(), additions.get("PYTHON"));
         assertEquals(interpreter.toString(), additions.get("npm_config_python"));
@@ -106,10 +108,10 @@ class BootstrapEnvironmentTest {
 
         Map<String, String> additions = BootstrapEnvironment.additions(runtime, null,
                 managed(python.resolve("bin").resolve("python3")),
-                Map.of("PATH", "/usr/bin"), Files::exists);
+                Map.of("PATH", "/nonexistent"), Files::exists);
 
         assertEquals(runtime.resolve("bin") + File.pathSeparator + python.resolve("bin")
-                + File.pathSeparator + "/usr/bin", additions.get("PATH"));
+                + File.pathSeparator + "/nonexistent", additions.get("PATH"));
     }
 
     @Test
@@ -120,10 +122,10 @@ class BootstrapEnvironmentTest {
 
         Map<String, String> additions = BootstrapEnvironment.additions(null, null,
                 managed(python.resolve("bin").resolve("python3")),
-                Map.of("PATH", "/usr/bin", "PYTHON", "/opt/python/bin/python3"), Files::exists);
+                Map.of("PATH", "/nonexistent", "PYTHON", "/opt/python/bin/python3"), Files::exists);
 
         assertFalse(additions.containsKey("PYTHON"));
-        assertEquals(python.resolve("bin") + File.pathSeparator + "/usr/bin",
+        assertEquals(python.resolve("bin") + File.pathSeparator + "/nonexistent",
                 additions.get("PATH"));
     }
 
@@ -148,10 +150,10 @@ class BootstrapEnvironmentTest {
         Map<String, String> additions = BootstrapEnvironment.additions(null, null,
                 managed(python.resolve("bin").resolve("python3")),
                 build.resolve("bin"), build.resolve("lib"), variables,
-                Map.of("PATH", "/usr/bin:/bin"), Files::exists);
+                Map.of("PATH", "/nonexistent"), Files::exists);
 
         assertEquals(build.resolve("bin") + File.pathSeparator + python.resolve("bin")
-                + File.pathSeparator + "/usr/bin:/bin", additions.get("PATH"));
+                + File.pathSeparator + "/nonexistent", additions.get("PATH"));
         assertEquals(build.resolve("bin").resolve("cc").toString(), additions.get("CC"));
         assertEquals(build.resolve("bin").resolve("c++").toString(), additions.get("CXX"));
         assertEquals(build.resolve("bin").resolve("make").toString(), additions.get("MAKE"));
@@ -302,7 +304,7 @@ class BootstrapEnvironmentTest {
                 PythonResolver.Origin.SYSTEM, system, "3.11.2", true, false, "");
 
         Map<String, String> additions = BootstrapEnvironment.additions(null, null, chosen,
-                Map.of("PATH", "/usr/bin:/bin"), Files::exists);
+                Map.of("PATH", "/nonexistent"), Files::exists);
 
         assertEquals(system.toString(), additions.get("PYTHON"));
         assertEquals(system.toString(), additions.get("UV_PYTHON"));
@@ -340,5 +342,23 @@ class BootstrapEnvironmentTest {
     private static PythonResolver.Interpreter managed(Path interpreter) {
         return new PythonResolver.Interpreter(PythonResolver.Origin.MANAGED, interpreter,
                 "3.12.16", true, false, "");
+    }
+
+    @Test
+    void aChildThatBringsItsOwnPythonIsNotTouched() throws Exception {
+        Path managedPython = temp.resolve("python-managed").resolve("3.12.16");
+        Files.createDirectories(managedPython.resolve("bin"));
+        Path interpreter = managedPython.resolve("bin").resolve("python3");
+        Files.writeString(interpreter, "#!/bin/sh\n");
+        Path ownBin = Files.createDirectories(temp.resolve("instance-bin"));
+        Files.writeString(ownBin.resolve("python3"), "#!/bin/sh\n");
+
+        Map<String, String> additions = BootstrapEnvironment.additions(null, null,
+                managed(interpreter), Map.of("PATH", ownBin.toString()), Files::exists);
+
+        assertFalse(additions.containsKey("PYTHON"), additions.toString());
+        assertFalse(additions.containsKey("npm_config_python"), additions.toString());
+        assertFalse(additions.containsKey("UV_PYTHON"), additions.toString());
+        assertFalse(additions.containsKey("PATH"), additions.toString());
     }
 }
