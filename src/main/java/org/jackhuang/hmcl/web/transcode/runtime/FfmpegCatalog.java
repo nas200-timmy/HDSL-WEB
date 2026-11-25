@@ -211,13 +211,22 @@ public final class FfmpegCatalog {
     ///
     /// A malformed entry is skipped with a warning rather than taking the whole
     /// surface down: a typo in one artifact must not make the panel unstartable.
+    ///
+    /// An override that cannot be read *at all* falls back to the built-in copy
+    /// for the same reason, one level up. This catalogue exists so that there is
+    /// always something to fetch — binaries first, a source build after that —
+    /// and answering with `Catalog.empty()` here reintroduced the one failure
+    /// the whole chain is there to prevent: a transcode page with no ffmpeg on
+    /// offer while the built-in copy sat unused inside the jar. It also matches
+    /// [org.jackhuang.hmcl.dsh.BootstrapCatalog], whose contract is the same and
+    /// which logs the override and uses the embedded copy.
     public static Catalog load(@Nullable Path override) {
         if (override != null && Files.isRegularFile(override)) {
             try {
                 return parse(Files.readString(override, StandardCharsets.UTF_8), override.toString());
             } catch (IOException | RuntimeException e) {
-                LOG.warning("Could not read the ffmpeg catalogue " + override + ": " + e.getMessage());
-                return Catalog.empty();
+                LOG.warning("Could not read the ffmpeg catalogue " + override + ": " + e.getMessage()
+                        + "; using the built-in catalogue instead");
             }
         }
         try (InputStream in = FfmpegCatalog.class.getResourceAsStream(RESOURCE)) {

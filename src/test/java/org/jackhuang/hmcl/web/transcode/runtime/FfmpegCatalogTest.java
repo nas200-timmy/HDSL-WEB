@@ -302,4 +302,21 @@ class FfmpegCatalogTest {
         assertTrue(entry.sha256().matches("[0-9a-f]{64}"), entry.sha256());
         assertTrue(entry.features().contains("libx264"), entry.features().toString());
     }
+    /// An unreadable override must not leave the panel with nothing to install.
+    ///
+    /// This catalogue exists so that transcode always has an ffmpeg to fetch —
+    /// a binary when one is pinned, a source build after that. Answering with
+    /// an empty catalogue here reproduced the exact failure the chain exists to
+    /// prevent, while the built-in copy sat unused inside the jar.
+    @Test
+    void anUnreadableOverrideFallsBackToTheBuiltInCopy(
+            @org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
+        java.nio.file.Path override = dir.resolve("ffmpeg-catalog.json");
+        java.nio.file.Files.writeString(override, "{ this is not json");
+
+        FfmpegCatalog.Catalog catalog = FfmpegCatalog.load(override);
+
+        assertFalse(catalog.entries().isEmpty(), "the built-in copy must take over");
+        assertEquals(List.of("7.1", "8.1", "9.1"), catalog.majors());
+    }
 }
