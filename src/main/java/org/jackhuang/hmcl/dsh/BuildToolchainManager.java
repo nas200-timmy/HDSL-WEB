@@ -1413,6 +1413,17 @@ public final class BuildToolchainManager {
         for (String name : List.of("cc", "c++", "make")) {
             String program = toolchain.pathOf(name);
             if (program == null) {
+                // w64devkit ships `gcc.exe`/`g++.exe`, not `cc.exe`/`c++.exe`;
+                // the Linux portable toolchain is the one that has `cc`. Asking
+                // only for the POSIX names made a perfectly good Windows
+                // install delete itself after the download and the extract.
+                program = switch (name) {
+                    case "cc" -> toolchain.pathOf("gcc");
+                    case "c++" -> toolchain.pathOf("g++");
+                    default -> null;
+                };
+            }
+            if (program == null) {
                 return name + " is not in the bundle";
             }
             try {
