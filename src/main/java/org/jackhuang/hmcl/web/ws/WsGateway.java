@@ -213,6 +213,15 @@ public final class WsGateway {
                 // chat content in cleartext; it can retry after binding.
                 return;
             }
+            if (!service.isCurrent(channel)) {
+                // The channel this socket bound is gone (restart, TTL, or the
+                // 1024-channel eviction). Encrypting with it still succeeds,
+                // but the browser has already moved to a new key and would
+                // drop every frame; tell it to bind again instead.
+                session.getUserProperties().remove("chat.channel");
+                send(session, error("chat_key_required"));
+                return;
+            }
             try {
                 JsonObject envelope = service.encrypt(channel, false,
                         Json.GSON.toJson(payload).getBytes(java.nio.charset.StandardCharsets.UTF_8));
