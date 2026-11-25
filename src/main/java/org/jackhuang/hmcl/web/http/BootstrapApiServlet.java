@@ -232,7 +232,7 @@ public final class BootstrapApiServlet extends HttpServlet {
     static JsonObject uv() {
         String why = "品牌源码安装用它装 Python 依赖；面板会先校验它的 SHA-256。";
         Path binary = UvRuntime.sharedBinary();
-        if (Files.isRegularFile(binary) && UvRuntime.verified(binary)) {
+        if (Files.isRegularFile(binary) && UvRuntime.verifiedCached(binary)) {
             return bundle("uv", "uv", "ready",
                     "uv " + UvRuntime.version() + " · SHA-256 校验通过",
                     why, null, null, binary, false);

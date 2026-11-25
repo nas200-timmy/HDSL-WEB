@@ -181,6 +181,50 @@ public final class UvRuntime {
         }
     }
 
+    /// [#verified] for a caller that only *reports* the answer.
+    ///
+    /// `/api/bootstrap` asks this on every poll and the doctor on every run,
+    /// and each answer is a SHA-256 of the whole binary — tens of megabytes per
+    /// request for a page that is usually only being looked at. The key carries
+    /// everything that could change the answer, so a replaced binary is noticed:
+    /// size, modification time and the pinned digest.
+    ///
+    /// Callers that are about to *execute* the binary keep using [#verified]:
+    /// the cache is for display, and the gate in front of an `exec` should cost
+    /// what it costs.
+    ///
+    /// @param binary the shared copy
+    /// @return whether its digest matches the pin
+    public static boolean verifiedCached(Path binary) {
+        String key = verificationKey(binary);
+        if (key != null && key.equals(verifiedKey)) {
+            return verifiedAnswer;
+        }
+        boolean answer = verified(binary);
+        if (key != null) {
+            verifiedAnswer = answer;
+            verifiedKey = key;
+        }
+        return answer;
+    }
+
+    /// Everything that could invalidate a cached answer, or `null` when the
+    /// file cannot be read and nothing may be cached.
+    static @Nullable String verificationKey(Path binary) {
+        try {
+            java.nio.file.attribute.BasicFileAttributes attributes = Files.readAttributes(binary,
+                    java.nio.file.attribute.BasicFileAttributes.class);
+            return binary.toAbsolutePath().normalize() + "|" + attributes.size() + "|"
+                    + attributes.lastModifiedTime().toMillis() + "|" + binarySha256();
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    /// The last display answer [#verifiedCached] gave, and what it was keyed on.
+    private static volatile @Nullable String verifiedKey;
+    private static volatile boolean verifiedAnswer;
+
     /// The one-line status the doctor prints.
     public static String summary() {
         if (binarySha256() == null) {
@@ -191,7 +235,7 @@ public final class UvRuntime {
         if (!Files.isRegularFile(binary)) {
             return version() + " pinned, not installed (" + platformTag() + ")";
         }
-        return version() + " " + (verified(binary) ? "[pinned digest ok]" : "[DIGEST MISMATCH]")
+        return version() + " " + (verifiedCached(binary) ? "[pinned digest ok]" : "[DIGEST MISMATCH]")
                 + " " + binary;
     }
 }

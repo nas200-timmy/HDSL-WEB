@@ -26,6 +26,8 @@ import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -131,5 +133,24 @@ public class UvRuntimeTest {
         assertTrue(UvRuntime.summary().contains("DIGEST MISMATCH")
                 || UvRuntime.summary().contains("not installed"),
                 UvRuntime.summary());
+    }
+    /// The display cache must not outlive the file it describes.
+    ///
+    /// `/api/bootstrap` polls this answer; the key carries size, modification
+    /// time and the pinned digest, so a binary the panel replaced is re-checked
+    /// instead of being reported with the old verdict.
+    @Test
+    void theCachedAnswerIsKeyedOnTheFileItDescribes(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        java.nio.file.Path binary = dir.resolve("uv");
+        java.nio.file.Files.writeString(binary, "one");
+        String first = UvRuntime.verificationKey(binary);
+        assertNotNull(first);
+        assertEquals(first, UvRuntime.verificationKey(binary), "an untouched file keeps its key");
+
+        java.nio.file.Files.writeString(binary, "a longer body");
+        assertNotEquals(first, UvRuntime.verificationKey(binary), "a replaced file must be re-checked");
+
+        assertNull(UvRuntime.verificationKey(dir.resolve("absent")), "nothing is cached for a missing file");
     }
 }
