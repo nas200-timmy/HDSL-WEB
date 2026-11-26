@@ -204,6 +204,7 @@ interface ChatProtocol {
 - v1 实现 `openai-completions` + `anthropic-messages`；`openai-responses` 放 Phase 4。
 - 共用 `SseParser`：`event:`、`data:`、`id:`、注释、空行分帧、多行 data、`[DONE]`、CRLF、行长度上限。
 - 错误映射：401/403 key 被拒；429 可重试；400 参数/上下文；5xx 可重试；SSE 内 `error` 事件不能当正常结束。
+- 账户没有 API key 时**不发送** `Authorization` / `x-api-key` 头：本地无鉴权端点可以留空；云端端点仍会 401，错误正文会说明“未配置 key”或“检查 key”。401 不是瞬态错误，不做自动重试。
   400/413 里能识别为上下文超限的（`maximum context length`、`prompt is too long`、
   `context_length_exceeded` 等）统一归到 `context_exceeded`，前端据此给「新建会话 / 分支」的提示，
   而不是一句泛泛的生成失败。

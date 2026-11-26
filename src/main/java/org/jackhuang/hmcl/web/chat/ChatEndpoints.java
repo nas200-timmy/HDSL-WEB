@@ -418,7 +418,11 @@ public final class ChatEndpoints {
                     }
                 } else if (status == 401 || status == 403) {
                     authOk = false;
-                    error = "the endpoint rejected the key (HTTP " + status + ")" + excerpt(response.body());
+                    String key = accountKey(profile.accountName());
+                    error = (key == null || key.isBlank()
+                            ? "no API key is configured for this account (HTTP "
+                            : "the endpoint rejected the key (HTTP ")
+                            + status + ")" + excerpt(response.body());
                 } else if (status == 404 || status == 405 || status == 400) {
                     authOk = true;
                     error = "the endpoint answered HTTP " + status + " for the model list;"
@@ -501,8 +505,17 @@ public final class ChatEndpoints {
         try {
             HttpResponse<String> response = client.send(builder.build(),
                     HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new IOException("the endpoint answered HTTP " + response.statusCode()
+            int status = response.statusCode();
+            if (status < 200 || status >= 300) {
+                String key = accountKey(profile.accountName());
+                String hint = "";
+                if (status == 401 || status == 403) {
+                    hint = key == null || key.isBlank()
+                            ? "; this account has no API key (leave it empty only for a local"
+                            + " endpoint that does not authenticate)"
+                            : "; check the API key for this account";
+                }
+                throw new IOException("the endpoint answered HTTP " + status + hint
                         + excerpt(response.body()));
             }
             List<String> models = readModelIds(response.body());
@@ -532,14 +545,24 @@ public final class ChatEndpoints {
     }
 
     static void applyAuth(HttpRequest.Builder builder, Profile profile) {
+        applyAuth(builder, profile, accountKey(profile.accountName()));
+    }
+
+    /// The header decision with the key named explicitly, so a test can drive
+    /// both branches. A blank key sends **no** auth header: a local endpoint
+    /// that does not authenticate works, and a cloud endpoint still answers
+    /// 401 instead of receiving a malformed `Bearer ` value that hides the
+    /// real cause.
+    static void applyAuth(HttpRequest.Builder builder, Profile profile, @Nullable String key) {
         String style = profile.authStyle() == null ? defaultAuthStyle(profile.protocol())
                 : profile.authStyle().toLowerCase(Locale.ROOT);
-        String key = accountKey(profile.accountName());
-        if ("anthropic".equals(style) || "x-api-key".equals(style)) {
-            builder.header("x-api-key", key);
-            builder.header("anthropic-version", "2023-06-01");
-        } else {
-            builder.header("Authorization", "Bearer " + key);
+        if (key != null && !key.isBlank()) {
+            if ("anthropic".equals(style) || "x-api-key".equals(style)) {
+                builder.header("x-api-key", key);
+                builder.header("anthropic-version", "2023-06-01");
+            } else {
+                builder.header("Authorization", "Bearer " + key);
+            }
         }
         profile.extraHeaders().forEach(builder::header);
     }
