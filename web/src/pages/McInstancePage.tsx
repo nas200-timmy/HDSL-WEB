@@ -30,7 +30,7 @@ import {
 } from "../components/icons";
 import { requestDeveloperPassword, isElevationRequired } from "../elevation";
 import { toast } from "../store";
-import { errMsg, mcCoreLabel, mcStateLabel } from "../utils";
+import { errMsg, mcCoreLabel, mcStateLabel, retryWithBackoff } from "../utils";
 
 type McTab =
   | "overview"
@@ -92,7 +92,24 @@ export function McInstancePage() {
 
   useEffect(() => {
     void load();
-    api.mc.versions().then((catalog) => setVersions(catalog.versions)).catch(() => setVersions([]));
+    let cancelled = false;
+    // The Mojang manifest is a network fetch that can fail while the panel is
+    // still provisioning its CA or the uplink is down. Retry instead of
+    // silently leaving the version picker empty until the page is reopened.
+    const stop = retryWithBackoff(async () => {
+      try {
+        const catalog = await api.mc.versions();
+        if (!cancelled) setVersions(catalog.versions);
+        return true;
+      } catch {
+        if (!cancelled) setVersions([]);
+        return false;
+      }
+    });
+    return () => {
+      cancelled = true;
+      stop();
+    };
   }, [id]);
 
   // 第三方核心的版本目录和原版不是同一份：Paper/Fabric/Forge 各自的版本列表
@@ -103,16 +120,21 @@ export function McInstancePage() {
       return;
     }
     let alive = true;
-    api.mc.cores()
-      .then(({ cores }) => {
-        if (!alive) return;
-        setCoreVersions(cores.find((entry) => entry.id === instance.core)?.versions ?? []);
-      })
-      .catch(() => {
+    const stop = retryWithBackoff(async () => {
+      try {
+        const { cores } = await api.mc.cores();
+        if (alive) {
+          setCoreVersions(cores.find((entry) => entry.id === instance.core)?.versions ?? []);
+        }
+        return true;
+      } catch {
         if (alive) setCoreVersions([]);
-      });
+        return false;
+      }
+    });
     return () => {
       alive = false;
+      stop();
     };
   }, [instance?.core]);
 

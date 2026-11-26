@@ -62,6 +62,7 @@ import {
   formatUptime,
   normState,
   parsePortFromUrl,
+  retryWithBackoff,
 } from "../utils";
 
 type DetailTab =
@@ -220,7 +221,23 @@ export function InstanceDetailPage() {
   // The Node selector needs the installed majors and exact versions; the page
   // already asks `/api/node` for the settings tab, so reuse the same contract.
   useEffect(() => {
-    void api.nodeStatus().then(setNodeOptions).catch(() => setNodeOptions(null));
+    let cancelled = false;
+    // Node may be provisioned after this page mounts in a bare environment;
+    // a one-shot failure would leave the selector disabled forever.
+    const stop = retryWithBackoff(async () => {
+      try {
+        const status = await api.nodeStatus();
+        if (!cancelled) setNodeOptions(status);
+        return true;
+      } catch {
+        if (!cancelled) setNodeOptions(null);
+        return false;
+      }
+    });
+    return () => {
+      cancelled = true;
+      stop();
+    };
   }, []);
 
   const nodeConsumer = nodeOptions?.consumers.find((c) => c.kind === "instance" && c.id === id);
