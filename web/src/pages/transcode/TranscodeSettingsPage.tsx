@@ -436,13 +436,18 @@ export function TranscodeSettingsPage() {
                 lineHeight: 1.7,
                 background: "var(--monet-surface-container-low)",
               }}>
-                <b style={{ color: "var(--monet-error)" }}>Windows 源码构建可能被杀毒软件拦截</b>
+                <b style={{ color: "var(--monet-error)" }}>Windows 源码构建的两点限制</b>
                 <div style={{ color: "var(--monet-on-surface-variant)" }}>
-                  ffmpeg 的 configure 会把自己的探测程序编译成 <span className="mono">test.exe</span>
-                  并在临时目录里执行，Defender 等常按行为启发式误报为
-                  <span className="mono"> Trojan:Win64/ShellcodeRunner</span>，构建可能中途被打断。
-                  更稳妥的是切到「下载二进制」选 BtbN / gyan.dev 的 GPL 构建；确实需要源码构建时，
-                  请先给面板数据目录加杀毒排除，或逐次允许。
+                  <b>只产出最小 LGPL 构建</b>：面板不在 Windows 上编译 x264/x265 等完整依赖栈，
+                  源码构建只启用宿主已有的库，通常没有 <span className="mono">libx264</span> /
+                  <span className="mono">libx265</span>，产物按 LGPL 记录。需要全编码请切到
+                  「下载二进制」选 gyan.dev / BtbN 的 GPL 构建。
+                </div>
+                <div style={{ color: "var(--monet-on-surface-variant)", marginTop: 6 }}>
+                  <b>可能被杀毒软件拦截</b>：ffmpeg 的 configure 会把自己的探测程序编译成
+                  <span className="mono">test.exe</span> 并在临时目录里执行，Defender 等常按行为启发式
+                  误报为 <span className="mono">Trojan:Win64/ShellcodeRunner</span>，构建可能中途被打断。
+                  确实需要源码构建时，请先给面板数据目录加杀毒排除，或逐次允许。
                 </div>
               </div>
             )}
