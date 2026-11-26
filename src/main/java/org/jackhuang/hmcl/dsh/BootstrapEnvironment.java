@@ -74,10 +74,16 @@ public final class BootstrapEnvironment {
     /// installed". Keeping the test here (rather than only in [#additions()])
     /// is what makes it apply to [#apply] and [#agentProcess] too: those are
     /// where every child is actually started.
+    ///
+    /// The test asks [#BootstrapRuntimeManager.missingHostNodeLibraries()]:
+    /// the host's own paths, with the closure's `lib` excluded. Counting the
+    /// closure made it vouch for itself — the check saw the closure's
+    /// libatomic, answered "the host is complete", skipped the injection, and
+    /// every spawned node died on the libatomic it still could not see.
     private static @Nullable Installed environmentRuntime() {
         Installed runtime = BootstrapRuntimeManager.currentRuntimeClosure();
         if (runtime != null && !closureNeeded(
-                BootstrapRuntimeManager.missingNodeLibraries().isEmpty(),
+                BootstrapRuntimeManager.missingHostNodeLibraries().isEmpty(),
                 org.jackhuang.hmcl.util.platform.Executables.resolve("setpriv").isPresent())) {
             return null;
         }

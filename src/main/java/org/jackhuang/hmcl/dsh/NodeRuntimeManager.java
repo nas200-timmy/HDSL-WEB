@@ -714,8 +714,10 @@ public final class NodeRuntimeManager {
             return;
         }
         if (BootstrapRuntimeManager.nodeLibrariesAvailable()) {
-            BootstrapTrace.note("closure", "the host's loader finds the Node libraries;"
-                    + " nothing is downloaded");
+            BootstrapTrace.note("closure", BootstrapRuntimeManager.missingHostNodeLibraries().isEmpty()
+                    ? "the host's loader finds the Node libraries; nothing is downloaded"
+                    : "the installed runtime closure supplies the Node libraries;"
+                            + " nothing is downloaded");
             return;
         }
         @Nullable String attempt = null;

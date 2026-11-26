@@ -290,6 +290,27 @@ class BootstrapRuntimeManagerTest {
         assertTrue(BootstrapRuntimeManager.missingNodeLibraries(search, Files::exists).isEmpty());
     }
 
+    /// The closure must not vouch for itself: the injection decision asks
+    /// whether the *host* provides the libraries, with the closure's own
+    /// directory excluded. Counting it made the panel answer "the host is
+    /// complete", skip the LD_LIBRARY_PATH injection, and every spawned node
+    /// died on the libatomic that only the closure had.
+    @Test
+    void theClosureCannotVouchForItself(@TempDir Path directory) throws IOException {
+        Path closureLib = Files.createDirectories(directory.resolve("closure").resolve("lib"));
+        Path systemLib = Files.createDirectories(directory.resolve("system"));
+        assertTrue(write(systemLib.resolve("libstdc++.so.6")));
+        assertTrue(write(systemLib.resolve("libgcc_s.so.1")));
+        assertTrue(write(closureLib.resolve("libatomic.so.1")));
+
+        // A search that includes the closure sees every library…
+        assertTrue(BootstrapRuntimeManager.missingNodeLibraries(
+                List.of(closureLib, systemLib), Files::exists).isEmpty());
+        // …but the host-only question still names the one only the closure has.
+        assertEquals(List.of("libatomic.so.1"),
+                BootstrapRuntimeManager.missingNodeLibraries(List.of(systemLib), Files::exists));
+    }
+
     private static boolean write(Path file) {
         try {
             Files.writeString(file, "fake");

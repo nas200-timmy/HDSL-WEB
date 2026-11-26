@@ -928,8 +928,24 @@ public final class BootstrapRuntimeManager {
     /// when the file exists in one of them, which is what the dynamic loader
     /// would find for the common case and is cheap enough to ask on every install.
     public static List<Path> nodeLibrarySearchDirectories() {
+        return nodeLibrarySearchDirectories(true);
+    }
+
+    /// The same list, optionally without the managed closure's own `lib`.
+    ///
+    /// The host-only form answers "can this machine start Node.js without the
+    /// panel's help". That is a different question from "is the library
+    /// somewhere", because the closure's directory is the answer it is deciding
+    /// about: counting it makes every installed closure vouch for itself, and a
+    /// host that only satisfies the libraries *through the closure* was told
+    /// "the host's loader finds the Node libraries", skipped the injection, and
+    /// every spawned node died on `libatomic.so.1` it could not see.
+    ///
+    /// @param includeManaged whether the closure's `lib` directory is part of the list
+    /// @return the directories, closure first when it is included
+    static List<Path> nodeLibrarySearchDirectories(boolean includeManaged) {
         List<Path> directories = new ArrayList<>();
-        Installed managed = currentRuntimeClosure();
+        Installed managed = includeManaged ? currentRuntimeClosure() : null;
         if (managed != null) {
             directories.add(managed.directory().resolve("lib"));
         }
@@ -956,6 +972,17 @@ public final class BootstrapRuntimeManager {
     /// @return the missing file names, empty when every one is available
     public static List<String> missingNodeLibraries() {
         return missingNodeLibraries(nodeLibrarySearchDirectories(), Files::exists);
+    }
+
+    /// The Node.js libraries the host's own paths do not provide.
+    ///
+    /// The closure's directory is excluded on purpose: this is the question the
+    /// environment injection has to answer, and the closure cannot testify for
+    /// itself. See [#nodeLibrarySearchDirectories(boolean)].
+    ///
+    /// @return the missing file names, empty when the host needs no help
+    public static List<String> missingHostNodeLibraries() {
+        return missingNodeLibraries(nodeLibrarySearchDirectories(false), Files::exists);
     }
 
     /// The pure form, with the search path named so a test can drive it.
