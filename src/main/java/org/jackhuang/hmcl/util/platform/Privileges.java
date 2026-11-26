@@ -818,24 +818,48 @@ public final class Privileges {
     /// `ProcessBuilder` when it resolves a bare program name, so the absolute
     /// path has to be named here.
     ///
+    /// A `PATH` hit that is really busybox is not a system `setpriv`: busybox
+    /// ships a crippled applet that understands only `-d`/`--nnp`/`--inh-caps`/
+    /// `--ambient-caps`, so `--reuid=…` reaches it as an unknown option and
+    /// every agent launch dies before it starts. An image that links every
+    /// busybox applet onto `PATH` (the "complete busybox" layout) does exactly
+    /// that, so the shadow is skipped and the closure's util-linux build — the
+    /// one the panel verified and registered — takes over.
+    ///
     /// @return the program to exec
     private static String setpriv() {
-        // The system's own `setpriv` first, the closure's only as a fallback.
-        //
-        // Both work; this order is the safer one. A native binary is the one
-        // whose libc is the host's by definition, while the bundled copy is a
-        // Debian build that needs the closure's loader — and `setpriv` is the
-        // program every agent launch depends on, so failing to start it fails
-        // everything. The argument for the other order is that the bundled copy
-        // is the pinned, tested one; it loses to "must start at all" because the
-        // flags in use here (`--reuid`/`--regid`/`--clear-groups`) have been in
-        // util-linux for years.
-        return Executables.resolve("setpriv").map(Path::toString)
+        return Executables.resolve("setpriv")
+                .filter(Privileges::isRealSetpriv)
+                .map(Path::toString)
                 .orElseGet(() -> {
                     Path bundled = bootstrapSetpriv;
                     return bundled != null && Files.isExecutable(bundled)
                             ? bundled.toString() : "setpriv";
                 });
+    }
+
+    /// Whether a `setpriv` found by name is not a multicall-binary applet.
+    ///
+    /// Follows the symlink chain to the file actually executed; a busybox
+    /// multicall (any file whose name starts with `busybox`) is the shadow
+    /// this rejects. An unreadable path is kept: the caller asked for a
+    /// startable program and the exec will say what is wrong better than a
+    /// silent skip would.
+    ///
+    /// @param executable the `PATH` hit
+    /// @return whether it may be run as util-linux's `setpriv`
+    static boolean isRealSetpriv(Path executable) {
+        Path target = executable;
+        for (int depth = 0; depth < 8 && Files.isSymbolicLink(target); depth++) {
+            try {
+                Path next = Files.readSymbolicLink(target);
+                target = next.isAbsolute() ? next : target.resolveSibling(next);
+            } catch (IOException e) {
+                return true;
+            }
+        }
+        Path name = target.getFileName();
+        return name == null || !name.toString().startsWith("busybox");
     }
 
     /// One line for the startup banner, or `null` when there is nothing to say.

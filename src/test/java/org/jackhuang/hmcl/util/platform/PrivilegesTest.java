@@ -20,6 +20,7 @@ package org.jackhuang.hmcl.util.platform;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -81,6 +82,26 @@ class PrivilegesTest {
         assertEquals(command, wrapped.subList(5, wrapped.size()),
                 "the agent's argv must arrive unchanged after the separator");
         assertTrue(wrapped.get(0).endsWith("setpriv"), wrapped.get(0));
+    }
+
+    /// A busybox applet named `setpriv` understands none of the options the
+    /// panel passes (`--reuid`/`--regid`/`--groups`), so a `PATH` that links
+    /// every busybox applet — the "complete busybox" image layout — breaks
+    /// every agent launch unless the shadow is skipped.
+    @Test
+    void aBusyboxSetprivIsNotASystemSetpriv(@TempDir Path directory) throws IOException {
+        assertTrue(Files.writeString(directory.resolve("busybox"), "fake") != null);
+        Path shadow = Files.createSymbolicLink(directory.resolve("setpriv"),
+                Path.of("busybox"));
+        assertFalse(Privileges.isRealSetpriv(shadow),
+                "a busybox multicall link is not util-linux's setpriv");
+
+        Path real = Files.writeString(directory.resolve("setpriv.real"), "fake");
+        assertTrue(Privileges.isRealSetpriv(real), "an ordinary file is kept");
+
+        Path chain = Files.createSymbolicLink(directory.resolve("link"),
+                Path.of("setpriv.real"));
+        assertTrue(Privileges.isRealSetpriv(chain), "a link to a real file is kept");
     }
 
     @Test
