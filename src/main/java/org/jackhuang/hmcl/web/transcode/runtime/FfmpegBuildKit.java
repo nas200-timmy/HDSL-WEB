@@ -434,6 +434,10 @@ public final class FfmpegBuildKit {
             }
         }
         if (windows) {
+            // w64devkit's `uname -s` is busybox-w32 and answers `Windows_NT`,
+            // which ffmpeg lowercases to `windows_nt` and rejects as an unknown
+            // OS. Pin the target explicitly instead of trusting that probe.
+            args.add("--target-os=mingw32");
             args.add("--extra-ldflags=-static");
         }
         return List.copyOf(args);

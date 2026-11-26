@@ -87,6 +87,9 @@ class FfmpegBuildKitTest {
                 Set.of("libx265"), true, true);
         assertTrue(windows.contains("--enable-gpl"));
         assertTrue(windows.contains("--extra-ldflags=-static"));
+        // w64devkit's busybox-w32 `uname -s` reports Windows_NT, which ffmpeg
+        // rejects; the Windows build must name its target OS.
+        assertTrue(windows.contains("--target-os=mingw32"));
     }
 
     @Test
