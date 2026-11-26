@@ -215,6 +215,10 @@ public final class FfmpegFullBuildKit {
             log.line("$ " + String.join(" ", configureCommand));
             run(configureCommand, checkout, environment, temp, FFMPEG_CONFIGURE_TIMEOUT,
                     "ffmpeg configure", log, cancelled);
+            if (FfmpegBuildKit.disableUnavailableSysctl(checkout)) {
+                log.line("HAVE_SYSCTL disabled: the compiler links sysctl but has no"
+                        + " sys/sysctl.h; Linux uses sched_getaffinity/sysconf instead");
+            }
 
             String make = toolchain.pathOf("make");
             if (make == null) {

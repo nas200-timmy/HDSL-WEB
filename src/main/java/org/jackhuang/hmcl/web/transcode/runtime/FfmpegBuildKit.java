@@ -296,6 +296,10 @@ public final class FfmpegBuildKit {
             log.line("$ " + String.join(" ", configureCommand));
             runBuildProcess(configureCommand, checkout, toolchain, temp, configureTimeout,
                     "configure", log, cancelled);
+            if (disableUnavailableSysctl(checkout)) {
+                log.line("HAVE_SYSCTL disabled: the portable libc links sysctl but omits"
+                        + " sys/sysctl.h; Linux uses sched_getaffinity/sysconf instead");
+            }
 
             String make = toolchain.pathOf("make");
             if (make == null) {
@@ -441,6 +445,29 @@ public final class FfmpegBuildKit {
             args.add("--extra-ldflags=-static");
         }
         return List.copyOf(args);
+    }
+
+    /// Zig's bundled libc exports `sysctl`, so FFmpeg's `check_func sysctl`
+/// succeeds and `config.h` says `HAVE_SYSCTL 1` — but Zig's Linux headers do
+/// not ship `sys/sysctl.h`, and `libavutil/cpu.c` includes it unconditionally.
+/// Linux does not need sysctl for the CPU count (sched_getaffinity/sysconf
+/// come first), so turn it off after configure. Returns whether it changed.
+    static boolean disableUnavailableSysctl(Path checkout) throws IOException {
+        if (OperatingSystem.CURRENT_OS != OperatingSystem.LINUX) {
+            return false;
+        }
+        Path config = checkout.resolve("config.h");
+        if (!Files.isRegularFile(config)) {
+            return false;
+        }
+        String text = Files.readString(config, StandardCharsets.UTF_8);
+        if (!text.contains("#define HAVE_SYSCTL 1")) {
+            return false;
+        }
+        Files.writeString(config,
+                text.replace("#define HAVE_SYSCTL 1", "#define HAVE_SYSCTL 0"),
+                StandardCharsets.UTF_8);
+        return true;
     }
 
     private static Map<String, List<String>> featureFlags() {

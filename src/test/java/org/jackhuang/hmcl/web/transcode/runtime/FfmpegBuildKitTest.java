@@ -93,6 +93,18 @@ class FfmpegBuildKitTest {
     }
 
     @Test
+    void zigSysctlIsDisabledAfterConfigure() throws Exception {
+        Assumptions.assumeTrue(OperatingSystem.CURRENT_OS == OperatingSystem.LINUX);
+        Path config = temp.resolve("config.h");
+        Files.writeString(config, "#define HAVE_SYSCTL 1\n#define HAVE_SYSCTLBYNAME 0\n");
+        assertTrue(FfmpegBuildKit.disableUnavailableSysctl(temp));
+        String text = Files.readString(config);
+        assertTrue(text.contains("#define HAVE_SYSCTL 0"), text);
+        assertFalse(text.contains("#define HAVE_SYSCTL 1"), text);
+        assertFalse(FfmpegBuildKit.disableUnavailableSysctl(temp), "already patched");
+    }
+
+    @Test
     void missingToolchainMessageNamesTheActionablePackages() {
         FfmpegToolchainManager.Toolchain toolchain = new FfmpegToolchainManager.Toolchain(
                 "linux", "x64", null, false, false,
