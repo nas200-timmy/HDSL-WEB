@@ -934,6 +934,11 @@ origin** 下，而浏览器只按 origin（协议 + 域名 + 端口）隔离 `lo
 
 ## 10. 裸部署（systemd）
 
+> **libc 基线：glibc。** 面板与 agent（Node 原生模块、dsh、opencode 等）都按 glibc 目标构建；
+> Alpine/musl 上这些 agent 的预编译二进制与原生模块不可用（实测跑不起来），所以面板不承诺
+> musl。能跑面板的环境至少是 glibc；ffmpeg 的便携工具链也按宿主 glibc 构建，二进制目录只选
+> `linux-*-glibc-*` 条目。没有 glibc 的环境不是支持目标，不要用 Zig 的 musl 目标去“绕”。
+
 不用容器、直接 `java -jar` 的 Linux 部署通常交给 systemd。最小单元：
 
 ```ini
