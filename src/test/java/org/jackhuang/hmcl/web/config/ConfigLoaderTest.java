@@ -332,6 +332,9 @@ class ConfigLoaderTest {
                   failure_policy: timeout-auto
                   failure_timeout_minutes: 15
                   default_runtime: system
+                  binary_mirror: https://gh-proxy.com/
+                  source_mirror: https://m.example/ffmpeg/
+                  toolchain_mirror: https://m.example/toolchain/
                   auto_resume: false
                 """);
 
@@ -339,6 +342,9 @@ class ConfigLoaderTest {
         assertEquals("/srv/video", config.transcode.mediaRoot);
         assertEquals("/opt/ffmpeg/bin/ffmpeg", config.transcode.ffmpegPath);
         assertEquals("system", config.transcode.defaultRuntime);
+        assertEquals("https://gh-proxy.com/", config.transcode.binaryMirror);
+        assertEquals("https://m.example/ffmpeg/", config.transcode.sourceMirror);
+        assertEquals("https://m.example/toolchain/", config.transcode.toolchainMirror);
         assertEquals(2, config.transcode.maxConcurrent);
         assertEquals(50, config.transcode.maxQueue);
         assertEquals("timeout-auto", config.transcode.failurePolicy);
@@ -349,12 +355,14 @@ class ConfigLoaderTest {
                 ServerConfigLoader.ENV_MEDIA_ROOT, "/mnt/media",
                 ServerConfigLoader.ENV_TRANSCODE_MAX_CONCURRENT, "1",
                 ServerConfigLoader.ENV_TRANSCODE_FAILURE_POLICY, "full-auto",
-                ServerConfigLoader.ENV_TRANSCODE_DEFAULT_RUNTIME, "managed-8.1");
+                ServerConfigLoader.ENV_TRANSCODE_DEFAULT_RUNTIME, "managed-8.1",
+                ServerConfigLoader.ENV_TOOLCHAIN_MIRROR, "https://env.example/toolchain/");
         ServerConfig overridden = load(env);
         assertEquals("/mnt/media", overridden.transcode.mediaRoot);
         assertEquals(1, overridden.transcode.maxConcurrent);
         assertEquals("full-auto", overridden.transcode.failurePolicy);
         assertEquals("managed-8.1", overridden.transcode.defaultRuntime);
+        assertEquals("https://env.example/toolchain/", overridden.transcode.toolchainMirror);
     }
 
     @Test

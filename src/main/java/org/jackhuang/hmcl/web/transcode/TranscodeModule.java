@@ -17,6 +17,7 @@
  */
 package org.jackhuang.hmcl.web.transcode;
 
+import org.jackhuang.hmcl.dsh.BuildToolchainManager;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.event.EventBus;
 import org.jackhuang.hmcl.web.transcode.media.MediaBrowser;
@@ -84,6 +85,11 @@ public final class TranscodeModule {
         this.runtimeManager.setBinaryMirror(() -> config.transcode.binaryMirror);
         this.buildKit.setSourceMirror(() -> config.transcode.sourceMirror);
         this.fullBuildKit.setSourceMirror(() -> config.transcode.sourceMirror);
+        this.toolchains.setToolchainMirror(() -> config.transcode.toolchainMirror);
+        // The bootstrap page installs the same portable toolchain through the
+        // shared manager, so it must see the same mirror prefix.
+        BuildToolchainManager.defaultManager()
+                .setMirror(() -> config.transcode.toolchainMirror);
         this.installer = new FfmpegInstaller(this);
         if (feature.enabled()) {
             queue.start();

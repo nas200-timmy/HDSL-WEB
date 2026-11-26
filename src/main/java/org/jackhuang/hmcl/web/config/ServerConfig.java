@@ -329,6 +329,12 @@ public final class ServerConfig {
         /// `HDSL_FFMPEG_SOURCE_MIRROR`).
         public volatile String sourceMirror = "";
 
+        /// A mirror prefix for build toolchain artifacts — Zig on Linux,
+        /// w64devkit on Windows (`transcode.toolchain_mirror`,
+        /// `HDSL_TOOLCHAIN_MIRROR`). Empty keeps the catalogue's official URL
+        /// and its built-in mirrors. Hash pins never change with the source.
+        public volatile String toolchainMirror = "";
+
         /// Optional local ffmpeg catalogue (`transcode.ffmpeg_catalog`,
         /// `HDSL_FFMPEG_CATALOG`). Empty means the built-in jar resource; a
         /// path is read as-is and may add or override entries. Remote URLs are

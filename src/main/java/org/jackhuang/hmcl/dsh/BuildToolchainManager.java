@@ -54,6 +54,7 @@ import java.util.UUID;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 import java.util.zip.GZIPInputStream;
 
@@ -209,6 +210,15 @@ public final class BuildToolchainManager {
     /// Samples the catalogue's mirrors before each artifact download and
     /// remembers the winner; see [DownloadSourcePicker].
     private final DownloadSourcePicker sourcePicker = new DownloadSourcePicker();
+
+    /// A deployment mirror prefix for toolchain artifacts (Zig / w64devkit and
+    /// the pinned helpers). A supplier so a settings change applies without a
+    /// restart. Empty means the catalogue's official URL and mirrors only.
+    private volatile Supplier<String> mirror = () -> "";
+
+    public void setMirror(Supplier<String> mirror) {
+        this.mirror = mirror == null ? () -> "" : mirror;
+    }
 
     /// One program of a resolved toolchain.
     public record Tool(String name, @Nullable String path, String version) {
@@ -1192,8 +1202,17 @@ public final class BuildToolchainManager {
     /// @throws IOException when every candidate fails
     private void fetch(Artifact artifact, Path target, BooleanSupplier cancelled)
             throws IOException {
+        List<String> alternatives = new ArrayList<>();
+        String prefix = mirror.get();
+        if (prefix != null && !prefix.isBlank()) {
+            alternatives.add(prefix + artifact.url());
+            for (String source : artifact.mirrors()) {
+                alternatives.add(prefix + source);
+            }
+        }
+        alternatives.addAll(artifact.mirrors());
         DownloadSourcePicker.Choice choice = sourcePicker.choose(
-                artifact.url(), artifact.mirrors(), artifact.size(), magicOf(artifact.archive()));
+                artifact.url(), alternatives, artifact.size(), magicOf(artifact.archive()));
         BootstrapTrace.note("toolchain", artifact.name() + " source: " + hostOf(choice.url())
                 + " (" + choice.reason() + ")");
         if (choice.probes().size() > 1) {
@@ -1203,7 +1222,7 @@ public final class BuildToolchainManager {
             }
         }
         IOException failure = null;
-        for (String url : candidates(artifact.url(), artifact.mirrors(), choice.url())) {
+        for (String url : candidates(artifact.url(), alternatives, choice.url())) {
             try {
                 fetchOne(url, target, artifact.sha256(), artifact.size(), cancelled);
                 sourcePicker.recordOutcome(url, true, null);

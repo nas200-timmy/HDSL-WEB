@@ -115,7 +115,7 @@ public final class BootstrapApiServlet extends HttpServlet {
                 live.update("准备构建工具链", -1);
                 BuildToolchainManager.Toolchain toolchain = BuildToolchainManager.defaultManager()
                         .ensureForBuild((message, fraction) -> live.update(message, fraction),
-                                () -> false);
+                                live::isCancelled);
                 return toolchain.portable() ? "便携构建工具链已就绪" : "宿主构建工具链可用";
             });
             case "uv" -> tasks.submit("bootstrap-uv", null, live -> {
@@ -213,19 +213,24 @@ public final class BootstrapApiServlet extends HttpServlet {
     }
 
     static JsonObject toolchain() {
-        String why = "从源码构建（品牌源码安装、ffmpeg）时需要 cc / c++ / make。";
+        boolean windows = OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS;
+        String label = windows ? "构建工具链（w64devkit，可选）" : "构建工具链（Zig，可选）";
+        String why = "只在源码构建需要时安装：ffmpeg 源码/全编码构建、品牌源码安装。"
+                + "系统已有完整的 cc / c++ / make（Windows 还需要 POSIX sh）时不需要它；"
+                + "选择「系统工具链」也不会下载。";
         BuildToolchainManager.Toolchain toolchain = BuildToolchainManager.defaultManager().detect();
         if (toolchain.usable()) {
             String detail = toolchain.portable() && toolchain.directory() != null
-                    ? "便携工具链 " + toolchain.os() + "-" + toolchain.arch() + " · "
-                    + toolchain.directory()
+                    ? (windows ? "w64devkit " : "Zig ")
+                    + toolchain.os() + "-" + toolchain.arch() + " · " + toolchain.directory()
                     : "宿主提供（cc=" + String.valueOf(toolchain.pathOf("cc")) + "）";
-            return bundle("toolchain", "构建工具链", "ready", detail, why, null, null,
+            return bundle("toolchain", label, "ready", detail, why, null, null,
                     toolchain.directory(), false);
         }
-        return bundle("toolchain", "构建工具链", "missing",
+        return bundle("toolchain", label, "missing",
                 toolchain.missing().isEmpty() ? "没有可用的编译器"
-                        : "缺 " + String.join(", ", toolchain.missing()),
+                        : "缺 " + String.join(", ", toolchain.missing())
+                        + "；点击后从官方源与内置镜像测速下载",
                 why, null, null, null, canInstallToolchain());
     }
 

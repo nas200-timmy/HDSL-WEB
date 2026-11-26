@@ -74,8 +74,9 @@ export function TranscodeSettingsPage() {
     setTimeoutMinutes(feature.failureTimeoutMinutes);
     setBinaryMirror(feature.binaryMirror ?? "");
     setSourceMirror(feature.sourceMirror ?? "");
+    setToolchainMirror(feature.toolchainMirror ?? "");
   }, [feature?.failurePolicy, feature?.failureTimeoutMinutes, feature?.binaryMirror,
-      feature?.sourceMirror]);
+      feature?.sourceMirror, feature?.toolchainMirror]);
 
   useEffect(() => {
     installJobsRef.current = installJobs;
@@ -169,6 +170,7 @@ export function TranscodeSettingsPage() {
 
   const [binaryMirror, setBinaryMirror] = useState("");
   const [sourceMirror, setSourceMirror] = useState("");
+  const [toolchainMirror, setToolchainMirror] = useState("");
 
   /// 保存下载源。接口把失败策略和源放在同一个 PATCH 里，所以顺带带上当前策略，
   /// 免得保存源把未保存的策略改动带走。
@@ -180,6 +182,7 @@ export function TranscodeSettingsPage() {
         failureTimeoutMinutes: timeoutMinutes,
         binaryMirror,
         sourceMirror,
+        toolchainMirror,
       });
       setTranscodeFeature(next);
       toast("success", "下载源已保存");
@@ -563,6 +566,12 @@ export function TranscodeSettingsPage() {
             {effectiveCompiler && (
               <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", lineHeight: 1.6 }}>
                 {effectiveCompiler.detail}
+                <br />
+                {compilerId === "auto"
+                  ? "自动：Linux 上系统工具链可用时不下载；Windows 还需要 POSIX sh，系统工具链不完整时仍会下载 w64devkit。"
+                  : compilerId === "system"
+                    ? "系统工具链：只使用宿主已有的 cc/c++/make，不会下载任何编译器。"
+                    : "便携编译器：未安装时才会下载 Zig / w64devkit，可用于没有系统编译器的宿主。"}
               </span>
             )}
             {effectiveSource && (
@@ -831,7 +840,7 @@ export function TranscodeSettingsPage() {
         <div className="comp-row">
           <span className="comp-label">下载源（镜像）</span>
           <span className="comp-value mono" style={{ fontSize: 11, overflowWrap: "anywhere" }}>
-            {binaryMirror || "官方"} / {sourceMirror || "官方"}
+            {binaryMirror || "官方"} / {sourceMirror || "官方"} / {toolchainMirror || "官方 + 内置镜像"}
           </span>
         </div>
         <div style={{ display: "grid", gap: 6, padding: "4px 8px 8px" }}>
@@ -850,6 +859,19 @@ export function TranscodeSettingsPage() {
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button className="btn btn-text" onClick={() => setSourceMirror("")}>官方（默认）</button>
           </div>
+          <label style={{ fontSize: 12 }}>构建工具链下载前缀（Zig / w64devkit）</label>
+          <input className="input"
+                 placeholder="https://你的镜像/ 或留空用官方源 + 内置镜像"
+                 value={toolchainMirror} onChange={(e) => setToolchainMirror(e.target.value)} />
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="btn btn-text" onClick={() => setToolchainMirror("")}>
+              官方 + 内置镜像（默认）
+            </button>
+          </div>
+          <p style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", lineHeight: 1.6 }}>
+            只在选择「Zig（便携）/ w64devkit（便携）」或「自动」且系统工具链不可用时才会下载；
+            下载前仍会对官方源和镜像测速，前缀只改变优先尝试的地址，SHA-256 不变。
+          </p>
           <button className="btn btn-raised" disabled={saving} onClick={() => void saveSources()}>
             {saving ? "保存中…" : "保存下载源"}
           </button>

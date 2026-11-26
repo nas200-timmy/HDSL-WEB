@@ -77,6 +77,7 @@ public final class ServerConfigLoader {
     public static final String ENV_FFMPEG_CATALOG = "HDSL_FFMPEG_CATALOG";
     public static final String ENV_FFMPEG_BINARY_MIRROR = "HDSL_FFMPEG_BINARY_MIRROR";
     public static final String ENV_FFMPEG_SOURCE_MIRROR = "HDSL_FFMPEG_SOURCE_MIRROR";
+    public static final String ENV_TOOLCHAIN_MIRROR = "HDSL_TOOLCHAIN_MIRROR";
     public static final String ENV_TRANSCODE_DEFAULT_RUNTIME = "HDSL_TRANSCODE_DEFAULT_RUNTIME";
     public static final String ENV_TRANSCODE_MAX_CONCURRENT = "HDSL_TRANSCODE_MAX_CONCURRENT";
     public static final String ENV_TRANSCODE_MAX_QUEUE = "HDSL_TRANSCODE_MAX_QUEUE";
@@ -394,6 +395,10 @@ public final class ServerConfigLoader {
             target.sourceMirror = mirrorPrefix(stringField(section, "source_mirror"),
                     "transcode.source_mirror");
         }
+        if (section.containsKey("toolchain_mirror")) {
+            target.toolchainMirror = mirrorPrefix(stringField(section, "toolchain_mirror"),
+                    "transcode.toolchain_mirror");
+        }
         if (section.containsKey("ffmpeg_catalog")) {
             target.ffmpegCatalog = stringField(section, "ffmpeg_catalog");
         }
@@ -430,7 +435,7 @@ public final class ServerConfigLoader {
                 case "media_root", "ffmpeg_path", "max_concurrent", "max_queue",
                         "failure_policy", "failure_timeout_minutes", "auto_resume",
                         "ffmpeg_catalog", "binary_mirror", "source_mirror",
-                        "default_runtime" -> {
+                        "toolchain_mirror", "default_runtime" -> {
                 }
                 default -> throw new ConfigException("transcode: unknown key `" + key + "`");
             }
@@ -661,6 +666,10 @@ public final class ServerConfigLoader {
         if (env.containsKey(ENV_FFMPEG_SOURCE_MIRROR)) {
             config.transcode.sourceMirror = mirrorPrefix(env.get(ENV_FFMPEG_SOURCE_MIRROR),
                     ENV_FFMPEG_SOURCE_MIRROR);
+        }
+        if (env.containsKey(ENV_TOOLCHAIN_MIRROR)) {
+            config.transcode.toolchainMirror = mirrorPrefix(env.get(ENV_TOOLCHAIN_MIRROR),
+                    ENV_TOOLCHAIN_MIRROR);
         }
         if (env.containsKey(ENV_TRANSCODE_DEFAULT_RUNTIME)) {
             config.transcode.defaultRuntime = defaultRuntime(

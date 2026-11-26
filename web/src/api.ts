@@ -1306,6 +1306,7 @@ export const api = {
       failureTimeoutMinutes?: number;
       binaryMirror?: string;
       sourceMirror?: string;
+      toolchainMirror?: string;
     }) =>
       request<TranscodeFeature>("/api/transcode/settings", jsonInit("PUT", body)),
     runtime: (major?: string) => request<TranscodeRuntime>(
@@ -1501,6 +1502,8 @@ export interface TranscodeFeature {
   binaryMirror: string;
   /// 源码归档的镜像前缀；空串=只用官方地址
   sourceMirror: string;
+  /// 构建工具链（Zig / w64devkit）的镜像前缀；空串=只用官方地址与内置镜像
+  toolchainMirror: string;
   autoResume: boolean;
   consent?: TranscodeConsentInfo;
 }

@@ -257,7 +257,8 @@ public final class TranscodeApiServlet extends HttpServlet {
         // bytes from. The digest still protects integrity, but the choice is
         // an execution-shaped knob and belongs behind the same door as the
         // install it feeds.
-        boolean changesMirror = body.has("binaryMirror") || body.has("sourceMirror");
+        boolean changesMirror = body.has("binaryMirror") || body.has("sourceMirror")
+                || body.has("toolchainMirror");
         if (changesMirror && !requireHumanElevation(request, response)) {
             return;
         }
@@ -275,6 +276,7 @@ public final class TranscodeApiServlet extends HttpServlet {
         }
         String binaryMirror = config.transcode.binaryMirror;
         String sourceMirror = config.transcode.sourceMirror;
+        String toolchainMirror = config.transcode.toolchainMirror;
         try {
             if (body.has("binaryMirror")) {
                 binaryMirror = ServerConfigLoader.mirrorPrefix(stringField(body, "binaryMirror"),
@@ -284,14 +286,20 @@ public final class TranscodeApiServlet extends HttpServlet {
                 sourceMirror = ServerConfigLoader.mirrorPrefix(stringField(body, "sourceMirror"),
                         "sourceMirror");
             }
+            if (body.has("toolchainMirror")) {
+                toolchainMirror = ServerConfigLoader.mirrorPrefix(
+                        stringField(body, "toolchainMirror"), "toolchainMirror");
+            }
         } catch (ServerConfigLoader.ConfigException e) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
             return;
         }
         try {
-            ServerConfigWriter.setTranscodeSources(config.dataDir, binaryMirror, sourceMirror);
+            ServerConfigWriter.setTranscodeMirrors(config.dataDir, binaryMirror, sourceMirror,
+                    toolchainMirror);
             config.transcode.binaryMirror = binaryMirror;
             config.transcode.sourceMirror = sourceMirror;
+            config.transcode.toolchainMirror = toolchainMirror;
             ServerConfigWriter.setTranscodeFailurePolicy(config.dataDir, policy,
                     body.has("failureTimeoutMinutes") ? timeout : config.transcode.failureTimeoutMinutes);
             config.transcode.failurePolicy = policy;
@@ -302,7 +310,8 @@ public final class TranscodeApiServlet extends HttpServlet {
             // the record; "policy/timeout" alone could not answer "was the
             // download source rewritten?" after the fact.
             String audited = policy + "/" + config.transcode.failureTimeoutMinutes
-                    + (changesMirror ? " mirrors=" + binaryMirror + "," + sourceMirror : "");
+                    + (changesMirror ? " mirrors=" + binaryMirror + "," + sourceMirror
+                            + "," + toolchainMirror : "");
             audit("transcode.settings.update", audited, "success", request);
             featureJson(response);
         } catch (IOException e) {
@@ -390,6 +399,7 @@ public final class TranscodeApiServlet extends HttpServlet {
         body.addProperty("failureTimeoutMinutes", config.transcode.failureTimeoutMinutes);
         body.addProperty("binaryMirror", config.transcode.binaryMirror);
         body.addProperty("sourceMirror", config.transcode.sourceMirror);
+        body.addProperty("toolchainMirror", config.transcode.toolchainMirror);
         body.addProperty("autoResume", config.transcode.autoResume);
         feature.consent().ifPresent(record -> {
             JsonObject consent = new JsonObject();

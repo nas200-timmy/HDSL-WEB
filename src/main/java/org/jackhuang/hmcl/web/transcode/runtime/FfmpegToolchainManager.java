@@ -248,6 +248,13 @@ public final class FfmpegToolchainManager {
         return toolchainsDir;
     }
 
+    /// A deployment mirror prefix for the portable toolchain (Zig on Linux,
+    /// w64devkit on Windows). Empty keeps the catalogue's official URL and
+    /// built-in mirrors.
+    public void setToolchainMirror(java.util.function.Supplier<String> mirror) {
+        builds.setMirror(mirror);
+    }
+
     /// The cached answer. `pkg-config` probes are a handful of short-lived
     /// processes; repeating them on every settings-page request is noise, not
     /// information. [#refresh] is for the moment after an install.
@@ -357,15 +364,20 @@ public final class FfmpegToolchainManager {
         Toolchain portable = installed == null ? null : ffmpegToolchain(installed);
         boolean portableAvailable = (portable != null && portable.usable())
                 || BuildToolchainManager.portableAvailable();
+        boolean windows = OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS;
+        String label = windows ? "w64devkit（便携）" : "Zig（便携）";
         String detail;
         if (portable != null && portable.usable()) {
             detail = portable.describe();
         } else if (BuildToolchainManager.portableAvailable()) {
-            detail = "未安装；开始构建时下载固定版本的便携工具链";
+            detail = "未安装；选择它时下载 " + (windows
+                    ? "w64devkit " + windowsPortableVersion()
+                    : "Zig " + BuildToolchainManager.zigVersion())
+                    + "（官方源与镜像自动测速）";
         } else {
             detail = "此平台没有便携工具链";
         }
-        choices.add(new CompilerChoice("portable", "便携工具链", portableAvailable, detail));
+        choices.add(new CompilerChoice("portable", label, portableAvailable, detail));
         return choices;
     }
 

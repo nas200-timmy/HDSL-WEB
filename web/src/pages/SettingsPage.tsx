@@ -4692,7 +4692,8 @@ function BootstrapCard() {
         if (t.state === "done" || t.state === "failed") {
           setBusy(null);
           setTaskMsg("");
-          toast(t.state === "done" ? "success" : "error", t.message ?? t.state);
+          toast(t.state === "done" ? "success" : "error",
+            t.message === "cancelled" ? "已取消" : (t.message ?? t.state));
           void load();
         }
       } catch {
@@ -4813,6 +4814,12 @@ function BootstrapCard() {
               <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px", borderTop: "1px solid var(--monet-outline-variant)" }}>
                 <span className="spinner" />
                 <span className="tlli-subtitle">{taskMsg || "正在安装…"}</span>
+                <button className="btn btn-text danger" style={{ marginLeft: "auto" }}
+                        onClick={() => void api.cancelTask(busy)
+                          .then(() => toast("info", "已请求取消，正在停止下载…"))
+                          .catch((e) => toast("error", errMsg(e)))}>
+                  取消
+                </button>
               </div>
             )}
           </>
