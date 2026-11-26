@@ -44,6 +44,31 @@ const initialState: AppState = {
 let state: AppState = initialState;
 const listeners = new Set<() => void>();
 
+/// The version list needs a working Node/npm on the server. In a bare
+/// environment the panel may start before Node is installed, so a failure is
+/// usually temporary: retry with backoff until the list arrives instead of
+/// leaving the page on "无法获取版本列表" until someone refreshes.
+let versionsRetryTimer: ReturnType<typeof setTimeout> | undefined;
+let versionsRetryDelay = 5000;
+let versionsFetching = false;
+
+function clearVersionsRetry(): void {
+  if (versionsRetryTimer !== undefined) {
+    clearTimeout(versionsRetryTimer);
+    versionsRetryTimer = undefined;
+  }
+}
+
+function scheduleVersionsRetry(): void {
+  if (versionsRetryTimer !== undefined || !getState().username || getState().versions) return;
+  const delay = versionsRetryDelay;
+  versionsRetryDelay = Math.min(Math.round(versionsRetryDelay * 1.8), 30000);
+  versionsRetryTimer = setTimeout(() => {
+    versionsRetryTimer = undefined;
+    void fetchVersions(false, false);
+  }, delay);
+}
+
 function emit(): void {
   for (const l of [...listeners]) l();
 }
@@ -161,6 +186,7 @@ export async function logout(): Promise<void> {
     // 即使登出接口失败也继续本地清理
   }
   ws.close();
+  clearVersionsRetry();
   setState(() => ({ ...initialState, authChecked: true, username: null }));
 }
 
@@ -168,6 +194,7 @@ export async function logout(): Promise<void> {
 // （全新未初始化的服务端走 bootstrap 的 status 分支），因此这里固定 false。
 setUnauthorizedHandler(() => {
   ws.close();
+  clearVersionsRetry();
   setState((s) => ({
     ...s,
     username: null,
@@ -310,17 +337,32 @@ export function scheduleInstanceRefresh(delay = 400): void {
   }, delay);
 }
 
+async function fetchVersions(showLoading: boolean, force: boolean): Promise<void> {
+  if (versionsFetching) return;
+  if (!force && getState().versions) return;
+  versionsFetching = true;
+  clearVersionsRetry();
+  if (showLoading) {
+    setState((s) => ({ ...s, versionsLoading: true, versionsError: null }));
+  }
+  try {
+    const r = await api.versions();
+    versionsRetryDelay = 5000;
+    clearVersionsRetry();
+    setState((s) => ({ ...s, versions: r.versions, versionsLoading: false, versionsError: null }));
+  } catch (e) {
+    setState((s) => ({ ...s, versionsLoading: false, versionsError: errMsg(e) }));
+    scheduleVersionsRetry();
+  } finally {
+    versionsFetching = false;
+  }
+}
+
 export async function loadVersions(force = false): Promise<void> {
   const cur = getState();
   if (cur.versions && !force) return;
   if (cur.versionsLoading) return;
-  setState((s) => ({ ...s, versionsLoading: true, versionsError: null }));
-  try {
-    const r = await api.versions();
-    setState((s) => ({ ...s, versions: r.versions, versionsLoading: false }));
-  } catch (e) {
-    setState((s) => ({ ...s, versionsLoading: false, versionsError: errMsg(e) }));
-  }
+  await fetchVersions(true, force);
 }
 
 /** 拉取任务列表合并进 store（详情页挂载、安装提交后调用）。 */
@@ -535,6 +577,10 @@ export function applyWsEvent(evt: WsEvent): void {
         scheduleInstanceRefresh(300);
         // WS 终态事件可能不带 result，拉任务列表补齐（安装整合包/导出等场景）
         void seedTasks();
+        // Installing Node is the usual reason the dsh version list was
+        // unavailable; retry it as soon as any task finishes rather than
+        // waiting for the next backoff tick.
+        if (!getState().versions) void fetchVersions(false, false);
       }
       break;
     }

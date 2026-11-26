@@ -168,6 +168,12 @@ export function InstallInstanceWizard() {
                 <div className="empty-state">
                   <ErrorIcon size={30} />
                   <span>{I18N["dsh.versions.load_failed"]}</span>
+                  <span className="empty-sub" style={{ maxWidth: 560, textAlign: "center" }}>
+                    {s.versionsError}
+                  </span>
+                  <span className="empty-sub" style={{ maxWidth: 560, textAlign: "center" }}>
+                    面板会在后台自动重试；如果是在装 Node，装好后这里会自己恢复。
+                  </span>
                   <button className="btn btn-outline ripple-host" onClick={() => void loadVersions(true)}>
                     {I18N["button.refresh"]}
                   </button>
