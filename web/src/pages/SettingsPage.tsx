@@ -10,6 +10,7 @@ import { SystemMonitorCard } from "../components/SystemMonitorCard";
 import { StorageCard } from "../components/StorageCard";
 import { PlainSurfaceCard } from "../components/PlainSurfaceCard";
 import { FileDropInput } from "../components/FileDropInput";
+import { ProgressBar } from "../components/ProgressBar";
 import {
   AddIcon,
   CheckCircleIcon,
@@ -4656,6 +4657,7 @@ function BootstrapCard() {
   const [autoExpanded, setAutoExpanded] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [taskMsg, setTaskMsg] = useState("");
+  const [taskFraction, setTaskFraction] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = async () => {
@@ -4667,8 +4669,28 @@ function BootstrapCard() {
     }
   };
 
+  /// A bootstrap task can outlive this card (tab switch, page reload). Reattach
+/// to the running one instead of showing "nothing is installing" and letting a
+/// second click start another download.
+  const resumeRunning = async () => {
+    try {
+      const list = await api.tasks();
+      const running = list.find((t) => t.kind.startsWith("bootstrap-")
+        && (t.state === "running" || t.state === "waiting_approval"));
+      if (running) {
+        setBusy(running.id);
+        setTaskMsg(running.message ?? "");
+        setTaskFraction(typeof running.fraction === "number" && running.fraction >= 0
+          ? running.fraction : null);
+      }
+    } catch {
+      // The report still renders; a later mount can try again.
+    }
+  };
+
   useEffect(() => {
     void load();
+    void resumeRunning();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -4689,9 +4711,11 @@ function BootstrapCard() {
         const t = list.find((x) => x.id === busy);
         if (!t) return;
         setTaskMsg(t.message ?? "");
+        setTaskFraction(typeof t.fraction === "number" && t.fraction >= 0 ? t.fraction : null);
         if (t.state === "done" || t.state === "failed") {
           setBusy(null);
           setTaskMsg("");
+          setTaskFraction(null);
           toast(t.state === "done" ? "success" : "error",
             t.message === "cancelled" ? "已取消" : (t.message ?? t.state));
           void load();
@@ -4707,11 +4731,13 @@ function BootstrapCard() {
   const install = async (bundle: string) => {
     setBusy(bundle);
     setTaskMsg("正在提交…");
+    setTaskFraction(null);
     try {
       const r = await withElevation(() => api.bootstrapInstall(bundle));
       setBusy(r.taskId);
     } catch (e) {
       setBusy(null);
+      setTaskFraction(null);
       toast("error", `启动安装失败：${errMsg(e)}`);
     }
   };
@@ -4815,15 +4841,19 @@ function BootstrapCard() {
                 </div>
               ))}
             {busy && (
-              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px", borderTop: "1px solid var(--monet-outline-variant)" }}>
-                <span className="spinner" />
-                <span className="tlli-subtitle">{taskMsg || "正在安装…"}</span>
-                <button className="btn btn-text danger" style={{ marginLeft: "auto" }}
-                        onClick={() => void api.cancelTask(busy)
-                          .then(() => toast("info", "已请求取消，正在停止下载…"))
-                          .catch((e) => toast("error", errMsg(e)))}>
-                  取消
-                </button>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6,
+                            padding: "10px 16px", borderTop: "1px solid var(--monet-outline-variant)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span className="spinner" />
+                  <span className="tlli-subtitle">{taskMsg || "正在安装…"}</span>
+                  <button className="btn btn-text danger" style={{ marginLeft: "auto" }}
+                          onClick={() => void api.cancelTask(busy)
+                            .then(() => toast("info", "已请求取消，正在停止下载…"))
+                            .catch((e) => toast("error", errMsg(e)))}>
+                    取消
+                  </button>
+                </div>
+                <ProgressBar fraction={taskFraction} />
               </div>
             )}
           </>
