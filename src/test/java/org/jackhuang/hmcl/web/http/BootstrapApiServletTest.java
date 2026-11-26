@@ -34,7 +34,7 @@ public class BootstrapApiServletTest {
     public void theReportNamesEveryBundleOnce() {
         JsonObject report = BootstrapApiServlet.report();
         JsonArray bundles = report.getAsJsonArray("bundles");
-        assertEquals(List.of("closure", "ca", "python", "toolchain", "uv"),
+        assertEquals(List.of("closure", "ca", "python", "toolchain", "toolchain-portable", "uv"),
                 bundles.asList().stream().map(e -> e.getAsJsonObject().get("id").getAsString())
                         .toList());
         assertFalse(report.get("catalog").getAsString().isBlank());

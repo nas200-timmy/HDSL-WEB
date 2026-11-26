@@ -60,7 +60,8 @@ import java.util.stream.Collectors;
 public final class BootstrapApiServlet extends HttpServlet {
 
     /// Bundles this page can provision.
-    private static final List<String> BUNDLES = List.of("closure", "ca", "python", "toolchain", "uv");
+    private static final List<String> BUNDLES = List.of("closure", "ca", "python",
+            "toolchain", "toolchain-portable", "uv");
 
     private final TaskService tasks;
 
@@ -118,6 +119,13 @@ public final class BootstrapApiServlet extends HttpServlet {
                                 live::isCancelled);
                 return toolchain.portable() ? "便携构建工具链已就绪" : "宿主构建工具链可用";
             });
+            case "toolchain-portable" -> tasks.submit("bootstrap-toolchain-portable", null, live -> {
+                live.update("下载便携工具链", -1);
+                BuildToolchainManager.Toolchain toolchain = BuildToolchainManager.defaultManager()
+                        .installPortable((message, fraction) -> live.update(message, fraction),
+                                live::isCancelled);
+                return toolchain.portable() ? "便携工具链已就绪" : "便携工具链已是宿主工具链";
+            });
             case "uv" -> tasks.submit("bootstrap-uv", null, live -> {
                 live.update("下载并校验 uv", -1);
                 org.jackhuang.hmcl.web.brand.BrandInstaller.ensureSharedUv(
@@ -141,6 +149,7 @@ public final class BootstrapApiServlet extends HttpServlet {
         bundles.add(ca());
         bundles.add(python());
         bundles.add(toolchain());
+        bundles.add(portableToolchain());
         bundles.add(uv());
         body.add("bundles", bundles);
         body.addProperty("generatedAt", Instant.now().toString());
@@ -232,6 +241,35 @@ public final class BootstrapApiServlet extends HttpServlet {
                         : "缺 " + String.join(", ", toolchain.missing())
                         + "；点击后从官方源与内置镜像测速下载",
                 why, null, null, null, canInstallToolchain());
+    }
+
+    /// The portable compiler as an **optional** bundle: installing it even when the
+/// host already provides gcc is a supported choice (reproducible builds, or a
+/// host whose compiler is incomplete). `auto` still prefers the system toolchain,
+/// so this never changes a build behind the operator's back.
+static JsonObject portableToolchain() {
+        boolean windows = OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS;
+        String kind = windows
+                ? "w64devkit " + BuildToolchainManager.windowsPortableVersion()
+                : "Zig " + BuildToolchainManager.zigVersion();
+        String label = windows ? "便携工具链（w64devkit，可选）" : "便携工具链（Zig，可选）";
+        String why = "系统工具链可用时不需要；安装后可在转码源码构建里选「"
+                + (windows ? "w64devkit" : "Zig") + "（便携）」。"
+                + "「自动」仍优先系统工具链，不会因为装了就切换。";
+        BuildToolchainManager.Toolchain installed =
+                BuildToolchainManager.defaultManager().installed();
+        if (installed != null && installed.usable()) {
+            return bundle("toolchain-portable", label, "ready",
+                    kind + " · " + installed.directory(), why, null, null,
+                    installed.directory(), false);
+        }
+        if (!canInstallToolchain()) {
+            return bundle("toolchain-portable", label, "not-applicable",
+                    "此平台没有固定版本的便携工具链", why, null, null, null, false);
+        }
+        return bundle("toolchain-portable", label, "missing",
+                "未安装；点击下载 " + kind + "（官方源 + 内置镜像，安装前测速）",
+                why, null, null, null, true);
     }
 
     static JsonObject uv() {

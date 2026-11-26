@@ -4717,7 +4717,8 @@ function BootstrapCard() {
   };
 
   const bundles = data?.bundles ?? [];
-  const missing = bundles.filter((b) => b.state === "missing");
+  const missing = bundles.filter((b) => b.state === "missing"
+      && b.id !== "toolchain-portable");
   const summary = data == null
     ? "读取中…"
     : missing.length === 0
@@ -4789,7 +4790,10 @@ function BootstrapCard() {
                   <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
                     <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <b>{b.label}</b>
-                      <span className="tlli-subtitle">{stateLabel(b.state)}</span>
+                      <span className="tlli-subtitle">
+                        {b.id === "toolchain-portable" && b.state === "missing"
+                          ? "可选" : stateLabel(b.state)}
+                      </span>
                       {b.canInstall && (
                         <button
                           className="btn btn-outline ripple-host"

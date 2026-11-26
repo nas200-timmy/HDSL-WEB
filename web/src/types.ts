@@ -532,7 +532,7 @@ export interface DoctorCheck {
 
 /// GET /api/bootstrap 的一个组件：缺什么、为什么需要、从哪来、放哪儿
 export interface BootstrapBundle {
-  id: "closure" | "ca" | "python" | "toolchain" | "uv";
+  id: "closure" | "ca" | "python" | "toolchain" | "toolchain-portable" | "uv";
   label: string;
   /// ready：已就绪；missing：缺失，面板可以装；not-applicable：本平台不适用
   state: "ready" | "missing" | "not-applicable";

@@ -215,7 +215,9 @@ ffmpeg 获取阶梯：
 - 设置页只保留这一套安装入口；旧的“在线安装”折叠块（静态包 / 自定义 URL / 重复的安装状态）已移除。`mode=custom` 仍留在后端接口，页面不再暴露第二套路径。
 - **最小构建**的源码版本下拉写的是**源码包**的许可（LGPL-2.1+），不是产物许可：构建启用 libx264/libx265 后产物按 GPL-3.0 记录，否则是最小编码集（LGPL）。页面从 `/api/transcode/runtime/source` 读缺失的 Debian/Ubuntu 开发包并给出安装命令；要全编码可以直接选「全编码 GPL」，不必在宿主装开发包。
 - **全编码构建**的预检只需要系统 `cc/c++/make`；cmake 与 nasm 由面板自己缓存到 `<data>/transcode/tools/ffmpeg/.build-tools/`，不写入最终运行时目录。下载大小、预计时间与磁盘占用来自 recipe 的声明值。
+- **便携工具链不是 Debian build-essential**：Linux 的便携工具链是 `bootstrap.json` 固定版本的 **Zig**（自带 clang/LLVM、链接器与归档器），再加单独钉住的 GNU make、pkgconf、nasm，并生成 `cc/c++/gcc/g++/ar/ranlib/ld` 包装；Windows 是 w64devkit。面板不会 `apt install build-essential`。只拿一个 `zig` 二进制不够：ffmpeg 的构建还需要 make，全编码构建还需要 pkgconf/nasm，这些都在同一套便携 bundle 里。
 - **编译器触发条件**：`auto` 系统优先，只有系统工具链不可用时才下载便携工具链；`system` 从不下载；`portable` 在 Linux 下载 Zig、Windows 下载 w64devkit。Windows 上 ffmpeg 的 configure 还需要 POSIX `sh`，所以系统编译器存在但 `sh` 缺失时，`auto` 仍会下载 w64devkit。下拉直接写 `Zig（便携）` / `w64devkit（便携）`，并在详情里说明“未安装；选择它时下载”。
+- **可选安装**：自举页的「构建工具链」只报告当前会用的那套；另有一行「便携工具链（Zig / w64devkit，可选）」，即使宿主已有 gcc 也可以安装，用于可复现构建或显式切换到便携编译器。安装后 `auto` 仍优先系统工具链，不会因此静默换编译器。
 - **工具链下载源**：`transcode.toolchain_mirror` / `HDSL_TOOLCHAIN_MIRROR`，前缀拼在官方绝对 URL 前面，与 ffmpeg 的 `binary_mirror` / `source_mirror` 分开；空值使用 `bootstrap/bootstrap.json` 的官方源 + 内置镜像，安装前仍会测速选最快。自举页的「构建工具链（Zig / w64devkit，可选）」使用同一个前缀，任务可取消。
 - **取消**：ffmpeg 安装任务（二进制/源码/全编码/包管理器）在任务列表里都有「取消」，取消会终止下载或构建；自举页的构建工具链任务也支持取消；实例安装沿用 `TaskService` 的取消。
 - 安装任务在服务端登记（`FfmpegInstaller` 内存表，保留 6 小时）：`GET /api/transcode/runtime/installs` 返回运行中与最近完成的任务，页面挂载时重新拉取并继续轮询，切换页面或刷新不会丢进度。任务带 `target`（目录条目的 id）；同一目标正在跑时再次点击会返回同一个任务，而不是重复下载。二进制下载走 3 线程池可并行；源码/全编码构建仍串行（共享工具链缓存）。
