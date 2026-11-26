@@ -1084,10 +1084,22 @@ public final class TranscodeApiServlet extends HttpServlet {
             entries.add(item);
         }
         body.add("entries", entries);
+        // The full build compiles its own dependency stack, so the only host
+        // requirement is a C/C++ compiler + make + pkg-config (cmake, nasm and
+        // every codec library are built by the kit). If the host has none, the
+        // portable Zig/w64devkit bundle is a valid answer — availability must
+        // not hinge on the system compiler alone.
         FfmpegToolchainManager.Toolchain toolchain = module.toolchains().detect();
-        body.addProperty("available", toolchain.usable());
-        body.addProperty("reason", toolchain.usable() ? ""
-                : toolchain.missingMessage());
+        boolean systemUsable = toolchain.usable();
+        boolean portableAvailable = module.toolchains().compilers().stream()
+                .anyMatch(choice -> "portable".equals(choice.id()) && choice.available());
+        boolean available = systemUsable || portableAvailable;
+        body.addProperty("available", available);
+        body.addProperty("systemUsable", systemUsable);
+        body.addProperty("portableAvailable", portableAvailable);
+        body.addProperty("reason", available ? ""
+                : "需要 cc / c++ / make / pkg-config，或此平台可安装的便携工具链"
+                + "（Zig / w64devkit）；cmake、nasm 与编码库由面板自建");
         Json.write(response, body);
     }
 

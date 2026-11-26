@@ -488,6 +488,16 @@ export function TranscodeSettingsPage() {
                     磁盘 {Math.round(effectiveFull.diskBytes / 1073741824)} GiB
                   </span>
                 </div>
+                <div className="comp-row">
+                  <span className="comp-label">编译器</span>
+                  <span className="comp-value" style={{ fontSize: 11 }}>
+                    {fullBuilds?.systemUsable
+                      ? "自动：系统编译器优先；不可用时下载面板托管的 Zig / w64devkit"
+                      : fullBuilds?.portableAvailable
+                        ? "系统编译器不可用：构建时下载面板托管的 Zig / w64devkit"
+                        : "没有可用的编译器"}
+                  </span>
+                </div>
                 <div style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", lineHeight: 1.6 }}>
                   声明编码器：{effectiveFull.features.join("、")}
                   <br />
@@ -506,7 +516,7 @@ export function TranscodeSettingsPage() {
                           disabled={!fullBuilds?.available || fullInstalled
                             || (effectiveFull != null && runningTargets.has(effectiveFull.id))}
                           onClick={() => effectiveFull && void startRuntimeInstall({
-                            mode: "full-source", id: effectiveFull.id, compiler: "system",
+                            mode: "full-source", id: effectiveFull.id, compiler: "auto",
                           })}>
                     {fullInstalled ? "已构建"
                       : effectiveFull && runningTargets.has(effectiveFull.id) ? "构建中…"

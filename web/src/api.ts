@@ -1888,7 +1888,10 @@ export interface TranscodeFullBuild {
 
 export interface TranscodeFullBuilds {
   entries: TranscodeFullBuild[];
+  /** True when the system compiler or the portable Zig/w64devkit bundle can build. */
   available: boolean;
+  systemUsable: boolean;
+  portableAvailable: boolean;
   reason: string;
 }
 
