@@ -382,6 +382,25 @@ export function TranscodeSettingsPage() {
 
         {runtimeMode === "source" && (
           <div style={{ padding: "0 8px 10px", display: "grid", gap: 6 }}>
+            {host?.os === "windows" && (
+              <div style={{
+                border: "1px solid var(--monet-error)",
+                borderRadius: 8,
+                padding: "8px 10px",
+                fontSize: 12,
+                lineHeight: 1.7,
+                background: "var(--monet-surface-container-low)",
+              }}>
+                <b style={{ color: "var(--monet-error)" }}>Windows 源码构建可能被杀毒软件拦截</b>
+                <div style={{ color: "var(--monet-on-surface-variant)" }}>
+                  ffmpeg 的 configure 会把自己的探测程序编译成 <span className="mono">test.exe</span>
+                  并在临时目录里执行，Defender 等常按行为启发式误报为
+                  <span className="mono"> Trojan:Win64/ShellcodeRunner</span>，构建可能中途被打断。
+                  更稳妥的是切到「下载二进制」选 BtbN / gyan.dev 的 GPL 构建；确实需要源码构建时，
+                  请先给面板数据目录加杀毒排除，或逐次允许。
+                </div>
+              </div>
+            )}
             <div className="comp-row">
               <span className="comp-label">构建方案</span>
               <span className="comp-value">

@@ -202,6 +202,7 @@ ffmpeg 获取阶梯：
   - `源码构建`：先选「构建方案」：
     - `官方源码 · 宿主依赖（最小构建）`：来源（当前为官方 ffmpeg.org）→ 版本 → 编译器（`auto` / `system` / `portable`）→ 构建。`system` 不可用时直接报错，不会偷偷下载；`portable` 未安装时下载固定版本的 Zig/w64devkit。实际编译器写入 runtime.json 的 `toolchain`。
     - `全编码 GPL / 全编码 LGPL（静态）`：面板下载并编译 x264/x265/libvpx/libaom/svt-av1/opus/lame/vorbis，以及 cmake（预编译工具）与 nasm（源码），再用这些静态库编译 FFmpeg；产物 `license` 为 `GPL-2.0-or-later` 或 `LGPL-2.1-or-later`，`buildRecipe=full-static-v1`。当前只支持 Linux。
+  - **Windows 提示**：源码构建时 ffmpeg 的 `configure` 会在临时目录编译并执行 `test.exe` 探测程序，Defender 等常按行为启发式误报为 `Trojan:Win64/ShellcodeRunner`，可能中途拦截。面板在 Windows 的源码卡片上直接显示这条警告并建议改用二进制；确实要编译时需给数据目录加杀毒排除或逐次允许。Windows 构建会显式加 `--target-os=mingw32`，因为 w64devkit 的 busybox `uname -s` 返回 `Windows_NT`，ffmpeg 会拒绝识别。
   - 只有最后的“安装/构建”按钮会下载或编译；切换下拉不触网。
 - **默认运行时**（卡片下方，类似证书默认项）：`transcode.default_runtime: auto | system | <runtime-id>`，也接受 `HDSL_TRANSCODE_DEFAULT_RUNTIME`。
   - `auto`：托管 `current` 优先，否则 `PATH`；
