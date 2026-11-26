@@ -441,8 +441,27 @@ public final class NodeRuntimeManager {
         if (normalized.startsWith("v") || normalized.startsWith("V")) {
             normalized = normalized.substring(1);
         }
-        if (findInstalled(normalized) != null) {
-            throw new DshException("Node.js " + normalized + " is already installed");
+        NodeRuntime existing = findInstalled(normalized);
+        if (existing != null) {
+            // The runtime's files are there, but its pnpm may not be: pnpm
+            // provisioning is best-effort, and an image without `/usr/bin/env`
+            // made every npm shebang fail while the install still reported
+            // success. Refusing with "already installed" then left the runtime
+            // looking managed and permanently unusable — repair it in place
+            // instead of making the dead end final.
+            if (Files.isRegularFile(existing.pnpm())) {
+                throw new DshException("Node.js " + normalized + " is already installed");
+            }
+            stage(onStage, "Installing pnpm into the existing " + normalized);
+            provisionPnpm(existing, onStage);
+            if (!Files.isRegularFile(existing.pnpm())) {
+                throw new DshException("Node.js " + normalized + " is installed but pnpm could not be"
+                        + " provisioned into it. The install log names the reason; an image without"
+                        + " /usr/bin/env fails every npm shebang.");
+            }
+            DshNodeRuntime.invalidateCache();
+            LOG.info("Re-provisioned pnpm into the existing Node.js " + normalized);
+            return existing;
         }
         checkRuntimeClosure();
         ensureCertificateBundle();
