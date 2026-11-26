@@ -63,6 +63,9 @@ public final class FfmpegInstaller {
     public static final class InstallJob {
         public String id = "";
         public String kind = "";
+        /// Catalogue/runtime id this job installs. The UI uses it to reattach a
+        /// running job after a page switch and to disable a duplicate download.
+        public String target = "";
         public State state = State.RUNNING;
         public double progress = 0;
         public String message = "";
@@ -78,11 +81,24 @@ public final class FfmpegInstaller {
     private final Path toolsDir;
     private final FfmpegRuntimeManager runtimes;
     private final Map<String, InstallJob> jobs = new ConcurrentHashMap<>();
-    private final ExecutorService executor = Executors.newSingleThreadExecutor(runnable -> {
-        Thread thread = new Thread(runnable, "transcode-installer");
-        thread.setDaemon(true);
-        return thread;
-    });
+    /// One running job per target, so clicking "install" twice reattaches
+    /// instead of downloading the same build again.
+    private final Map<String, InstallJob> runningByTarget = new ConcurrentHashMap<>();
+    /// Binary downloads may run in parallel (different builds); source/full
+    /// builds stay on one thread so two compiles cannot fight over the shared
+    /// toolchain/cache.
+    private final ExecutorService downloads = Executors.newFixedThreadPool(3,
+            daemon("transcode-downloader"));
+    private final ExecutorService builds = Executors.newSingleThreadExecutor(
+            daemon("transcode-installer"));
+
+    private static java.util.concurrent.ThreadFactory daemon(String name) {
+        return runnable -> {
+            Thread thread = new Thread(runnable, name);
+            thread.setDaemon(true);
+            return thread;
+        };
+    }
 
     public FfmpegInstaller(TranscodeModule module) {
         this.module = module;
@@ -110,8 +126,12 @@ public final class FfmpegInstaller {
                     + " is for " + entry.os() + "/" + entry.arch() + "/" + entry.libc()
                     + ", this host is " + host.describe());
         }
-        InstallJob job = newJob("artifact");
-        executor.execute(() -> runArtifact(job, entry));
+        InstallJob running = runningFor(entry.id());
+        if (running != null) {
+            return running;
+        }
+        InstallJob job = newJob("artifact", entry.id());
+        downloads.execute(() -> runArtifact(job, entry));
         return job;
     }
 
@@ -125,9 +145,13 @@ public final class FfmpegInstaller {
     public InstallJob startAuto(Set<String> requiredFeatures, @Nullable String major) throws IOException {
         FfmpegSelector.Recommendation recommendation = FfmpegSelector.select(
                 module.catalog(), FfmpegCapabilities.detect(), requiredFeatures, major);
-        InstallJob job = newJob("auto");
+        InstallJob running = runningFor(recommendation.entry().id());
+        if (running != null) {
+            return running;
+        }
+        InstallJob job = newJob("auto", recommendation.entry().id());
         job.log = "selected " + recommendation.entry().id() + ": " + recommendation.reason() + "\n";
-        executor.execute(() -> runArtifact(job, recommendation.entry()));
+        downloads.execute(() -> runArtifact(job, recommendation.entry()));
         return job;
     }
 
@@ -143,17 +167,63 @@ public final class FfmpegInstaller {
         }
         validateUrl(url);
         String id = "custom-" + sha256.substring(0, 12).toLowerCase(java.util.Locale.ROOT);
-        InstallJob job = newJob("custom");
-        executor.execute(() -> runArtifact(job, FfmpegCatalog.Entry.custom(id, url, sha256, version)));
+        InstallJob running = runningFor(id);
+        if (running != null) {
+            return running;
+        }
+        InstallJob job = newJob("custom", id);
+        downloads.execute(() -> runArtifact(job, FfmpegCatalog.Entry.custom(id, url, sha256, version)));
         return job;
     }
 
-    private InstallJob newJob(String kind) {
+    private InstallJob newJob(String kind, String target) {
         InstallJob job = new InstallJob();
         job.id = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
         job.kind = kind;
+        job.target = target == null ? "" : target;
         jobs.put(job.id, job);
+        if (!job.target.isBlank()) {
+            runningByTarget.put(job.target, job);
+        }
         return job;
+    }
+
+    /// The job already installing this target, if any. A second click returns
+    /// that job instead of starting another download.
+    private @Nullable InstallJob runningFor(String target) {
+        if (target == null || target.isBlank()) {
+            return null;
+        }
+        InstallJob job = runningByTarget.get(target);
+        if (job != null && job.state == State.RUNNING) {
+            return job;
+        }
+        if (job != null) {
+            runningByTarget.remove(target, job);
+        }
+        return null;
+    }
+
+    private void finish(InstallJob job) {
+        if (job.target != null && !job.target.isBlank()) {
+            runningByTarget.remove(job.target, job);
+        }
+    }
+
+    /// Recent jobs, oldest first. Finished jobs are kept for six hours so a page
+    /// switch can still show the result; older ones are pruned.
+    public List<InstallJob> jobs() {
+        long cutoff = System.currentTimeMillis() - 6L * 60 * 60 * 1000;
+        List<InstallJob> recent = new ArrayList<>();
+        for (InstallJob job : jobs.values()) {
+            if (job.state == State.RUNNING || job.endedAt < 0 || job.endedAt >= cutoff) {
+                recent.add(job);
+            } else {
+                jobs.remove(job.id, job);
+            }
+        }
+        recent.sort(java.util.Comparator.comparingLong(job -> job.createdAt));
+        return recent;
     }
 
     private void runArtifact(InstallJob job, FfmpegCatalog.Entry entry) {
@@ -184,6 +254,8 @@ public final class FfmpegInstaller {
                 job.message = "failed";
                 job.endedAt = System.currentTimeMillis();
             }
+        } finally {
+            finish(job);
         }
     }
 
@@ -214,12 +286,20 @@ public final class FfmpegInstaller {
                         + " its own 64-hex SHA-256; sidecar hashes are no longer trusted");
             }
         }
+        String target = "static".equals(kind)
+                ? "custom-" + sha256.substring(0, 12).toLowerCase(java.util.Locale.ROOT)
+                : kind;
+        InstallJob running = runningFor(target);
+        if (running != null) {
+            return running;
+        }
         Files.createDirectories(toolsDir);
-        InstallJob job = new InstallJob();
-        job.id = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
-        job.kind = kind;
-        jobs.put(job.id, job);
-        executor.execute(() -> run(job, url, sha256, version));
+        InstallJob job = newJob(kind, target);
+        if ("static".equals(kind)) {
+            downloads.execute(() -> run(job, url, sha256, version));
+        } else {
+            builds.execute(() -> run(job, url, sha256, version));
+        }
         return job;
     }
 
@@ -263,6 +343,8 @@ public final class FfmpegInstaller {
                 job.message = "failed";
                 job.endedAt = System.currentTimeMillis();
             }
+        } finally {
+            finish(job);
         }
     }
 
@@ -370,10 +452,14 @@ public final class FfmpegInstaller {
             throw new IOException("ffmpeg_already_installed: " + versionId
                     + "; delete the installed version before rebuilding");
         }
-        InstallJob job = newJob("full-source");
+        InstallJob running = runningFor(entry.id());
+        if (running != null) {
+            return running;
+        }
+        InstallJob job = newJob("full-source", entry.id());
         job.logPath = module.fullBuildKit().logFor(job.id).toString();
         job.log = "full build " + id + " (" + entry.profile() + ")\n";
-        executor.execute(() -> runFullSource(job, entry, versionDir, compiler));
+        builds.execute(() -> runFullSource(job, entry, versionDir, compiler));
         return job;
     }
 
@@ -412,6 +498,8 @@ public final class FfmpegInstaller {
                 job.message = "failed";
                 job.endedAt = System.currentTimeMillis();
             }
+        } finally {
+            finish(job);
         }
     }
 
@@ -432,10 +520,14 @@ public final class FfmpegInstaller {
             throw new IOException("ffmpeg_already_installed: " + versionId
                     + "; delete the installed version before rebuilding");
         }
-        InstallJob job = newJob("source");
+        InstallJob running = runningFor(entry.id());
+        if (running != null) {
+            return running;
+        }
+        InstallJob job = newJob("source", entry.id());
         job.logPath = module.buildKit().logFor(job.id).toString();
         job.log = reason + "\n";
-        executor.execute(() -> runSource(job, entry, versionDir, features, compiler));
+        builds.execute(() -> runSource(job, entry, versionDir, features, compiler));
         return job;
     }
 
@@ -477,6 +569,8 @@ public final class FfmpegInstaller {
                 job.message = "failed";
                 job.endedAt = System.currentTimeMillis();
             }
+        } finally {
+            finish(job);
         }
     }
 

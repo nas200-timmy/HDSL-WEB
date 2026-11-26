@@ -215,7 +215,9 @@ ffmpeg 获取阶梯：
 - 设置页只保留这一套安装入口；旧的“在线安装”折叠块（静态包 / 自定义 URL / 重复的安装状态）已移除。`mode=custom` 仍留在后端接口，页面不再暴露第二套路径。
 - **最小构建**的源码版本下拉写的是**源码包**的许可（LGPL-2.1+），不是产物许可：构建启用 libx264/libx265 后产物按 GPL-3.0 记录，否则是最小编码集（LGPL）。页面从 `/api/transcode/runtime/source` 读缺失的 Debian/Ubuntu 开发包并给出安装命令；要全编码可以直接选「全编码 GPL」，不必在宿主装开发包。
 - **全编码构建**的预检只需要系统 `cc/c++/make`；cmake 与 nasm 由面板自己缓存到 `<data>/transcode/tools/ffmpeg/.build-tools/`，不写入最终运行时目录。下载大小、预计时间与磁盘占用来自 recipe 的声明值。
-- 已安装的二进制/源码版本在下拉和按钮上标记，重复安装按钮禁用；“任务状态”只由安装卡片显示。
+- 安装任务在服务端登记（`FfmpegInstaller` 内存表，保留 6 小时）：`GET /api/transcode/runtime/installs` 返回运行中与最近完成的任务，页面挂载时重新拉取并继续轮询，切换页面或刷新不会丢进度。任务带 `target`（目录条目的 id）；同一目标正在跑时再次点击会返回同一个任务，而不是重复下载。二进制下载走 3 线程池可并行；源码/全编码构建仍串行（共享工具链缓存）。
+- 任务完成时先写 `runtime.json` 并激活，再把状态置为 `done`；页面看到 `done` 后立即刷新 runtime，因此“完成”与“已安装”之间没有空窗。任务日志可展开，运行中可取消。
+- 已安装的二进制/源码版本在下拉和按钮上标记，重复安装按钮禁用。
 - **队列快照带运行时**：`GET /api/transcode/queue` 的 `runtime` 块（`default/kind/id/path/version/available/error`）表示“现在开跑会用哪个 ffmpeg”，只读 agent 票也能看到；每个任务在**第一次启动时**把实际使用的二进制写进 `job.ffmpeg`（`kind/id/path/version/error`），任务结束后仍保留。之后切换默认运行时不会改写已完成任务的记录。队列详情接口 `GET /queue/jobs/{id}` 同样带 `ffmpeg`。
 
 ### 8. 硬件直通

@@ -40,8 +40,10 @@ import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
 
 /// Installs, activates and rolls back ffmpeg artifacts the panel manages.
@@ -114,6 +116,9 @@ public final class FfmpegRuntimeManager {
     private final Path toolsDir;
     private final FfmpegCatalog.Catalog catalog;
     private final Object lock = new Object();
+    /// Per-version locks: two different builds download in parallel, while the
+    /// same build cannot be installed twice at once.
+    private final Map<String, Object> installLocks = new ConcurrentHashMap<>();
 
     public FfmpegRuntimeManager(Path toolsDir, FfmpegCatalog.Catalog catalog) {
         this.toolsDir = toolsDir.toAbsolutePath().normalize();
@@ -192,30 +197,36 @@ public final class FfmpegRuntimeManager {
     /// @throws IOException when the download or install fails
     public Installed install(FfmpegCatalog.Entry entry, Progress progress,
                              java.util.function.BooleanSupplier cancelled) throws IOException {
-        synchronized (lock) {
-            if (!entry.isBinary()) {
-                throw new IOException("ffmpeg_source_unsupported: source builds are not part of this stage");
-            }
-            if (entry.url() == null || entry.url().isBlank()) {
-                throw new IOException("ffmpeg_artifact_invalid: the entry has no URL");
-            }
-            if (entry.sha256() == null || !entry.sha256().matches("[0-9a-fA-F]{64}")) {
-                throw new IOException("ffmpeg_artifact_invalid: the entry has no pinned SHA-256");
-            }
-            FfmpegInstaller.validateUrl(entry.url());
+        if (!entry.isBinary()) {
+            throw new IOException("ffmpeg_source_unsupported: source builds are not part of this stage");
+        }
+        if (entry.url() == null || entry.url().isBlank()) {
+            throw new IOException("ffmpeg_artifact_invalid: the entry has no URL");
+        }
+        if (entry.sha256() == null || !entry.sha256().matches("[0-9a-fA-F]{64}")) {
+            throw new IOException("ffmpeg_artifact_invalid: the entry has no pinned SHA-256");
+        }
+        FfmpegInstaller.validateUrl(entry.url());
 
-            String id = safeId(entry.id());
-            Path versionDir = toolsDir.resolve(id).normalize();
-            if (!versionDir.startsWith(toolsDir)) {
-                throw new IOException("ffmpeg_artifact_invalid: id escapes the tools directory");
+        String id = safeId(entry.id());
+        Path versionDir = toolsDir.resolve(id).normalize();
+        if (!versionDir.startsWith(toolsDir)) {
+            throw new IOException("ffmpeg_artifact_invalid: id escapes the tools directory");
+        }
+        Object idLock = installLocks.computeIfAbsent(id, ignored -> new Object());
+        synchronized (idLock) {
+            synchronized (lock) {
+                if (Files.isRegularFile(versionDir.resolve("runtime.json"))) {
+                    throw new IOException("ffmpeg_already_installed: " + id);
+                }
+                Files.createDirectories(toolsDir);
+                // A previous interrupted attempt is not a usable runtime.
+                FfmpegArchive.deleteTree(versionDir);
             }
-            if (Files.isRegularFile(versionDir.resolve("runtime.json"))) {
-                throw new IOException("ffmpeg_already_installed: " + id);
-            }
-            Files.createDirectories(toolsDir);
-            // A previous interrupted attempt is not a usable runtime.
-            FfmpegArchive.deleteTree(versionDir);
 
+            // Downloads run outside the manager lock so two different builds
+            // can fetch in parallel; extraction and activation still serialize
+            // in installArchive.
             Path download = Files.createTempFile(toolsDir, ".download-", suffix(entry.archive()));
             try {
                 java.util.List<String> candidates = FfmpegDownload.candidates(

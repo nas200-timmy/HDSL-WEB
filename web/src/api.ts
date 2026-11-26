@@ -1331,6 +1331,8 @@ export const api = {
       request<TranscodeRuntime>("/api/transcode/runtime/rollback", jsonInit("POST", {})),
     runtimeDelete: (id: string) =>
       request<{ ok: boolean }>(`/api/transcode/runtime/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    runtimeInstalls: () =>
+      request<{ jobs: TranscodeInstallJob[] }>("/api/transcode/runtime/installs"),
     runtimeJob: (id: string) =>
       request<TranscodeInstallJob>(`/api/transcode/runtime/install/${encodeURIComponent(id)}`),
     runtimeCancel: (id: string) =>
@@ -1778,7 +1780,9 @@ export interface TranscodeQualityJob {
 
 export interface TranscodeInstallJob {
   id: string;
-  kind: "static" | "package" | "compile" | "artifact" | "auto" | "custom" | "source";
+  /** Catalogue/runtime id this job installs; lets the page reattach and de-duplicate. */
+  target?: string;
+  kind: "static" | "package" | "compile" | "artifact" | "auto" | "custom" | "source" | "full-source";
   state: "running" | "done" | "failed" | "cancelled";
   progress: number;
   message: string;

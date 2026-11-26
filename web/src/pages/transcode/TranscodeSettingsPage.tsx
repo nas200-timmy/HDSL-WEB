@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, type TranscodeCapabilities, type TranscodeFullBuilds, type TranscodeInstallJob,
   type TranscodeRuntime, type TranscodeSourceStatus } from "../../api";
 import { refreshTranscodeFeature, setTranscodeFeature, useTranscodeFeature } from "../../transcodeFeature";
@@ -7,6 +7,14 @@ import { toast } from "../../store";
 import { ProgressBar } from "../../components/ProgressBar";
 import { HelpNote } from "./common";
 
+
+function installJobLabel(job: TranscodeInstallJob): string {
+  const kind = job.kind === "full-source" ? "全编码构建"
+    : job.kind === "source" ? "源码构建"
+    : job.kind === "package" ? "包管理器"
+    : "下载";
+  return `${kind} · ${job.target || job.id}`;
+}
 
 export function TranscodeSettingsPage() {
   const feature = useTranscodeFeature();
@@ -27,7 +35,9 @@ export function TranscodeSettingsPage() {
   const [policy, setPolicy] = useState("ask");
   const [timeoutMinutes, setTimeoutMinutes] = useState(10);
   const [saving, setSaving] = useState(false);
-  const [installJob, setInstallJob] = useState<TranscodeInstallJob | null>(null);
+  const [installJobs, setInstallJobs] = useState<TranscodeInstallJob[]>([]);
+  const installJobsRef = useRef<TranscodeInstallJob[]>([]);
+  const anyInstallRunning = installJobs.some((job) => job.state === "running");
   const [probeEncoderName, setProbeEncoderName] = useState("libx264");
   const [probeResult, setProbeResult] = useState<{ ok: boolean; encoder: string; exitCode: number; output: string } | null>(null);
   const [probing, setProbing] = useState(false);
@@ -68,15 +78,38 @@ export function TranscodeSettingsPage() {
       feature?.sourceMirror]);
 
   useEffect(() => {
-    if (!installJob || installJob.state !== "running") return;
-    const timer = window.setInterval(() => {
-      void api.transcode.runtimeJob(installJob.id).then((job) => {
-        setInstallJob(job);
-        if (job.state === "done") void load();
-      }).catch(() => undefined);
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, [installJob]);
+    installJobsRef.current = installJobs;
+  }, [installJobs]);
+
+  // Reattach to installs that were started before this page mounted. The list
+  // is the source of truth: switching tabs no longer hides a running job, and a
+  // finished job refreshes the installed-runtime ledger immediately.
+  useEffect(() => {
+    let stopped = false;
+    const tick = async () => {
+      try {
+        const { jobs } = await api.transcode.runtimeInstalls();
+        if (stopped) return;
+        const wasRunning = new Set(installJobsRef.current
+          .filter((job) => job.state === "running").map((job) => job.id));
+        setInstallJobs(jobs);
+        if (jobs.some((job) => wasRunning.has(job.id) && job.state !== "running")) {
+          void load();
+        }
+      } catch {
+        // the next tick retries; a transient read failure is not an install failure
+      }
+    };
+    void tick();
+    if (!anyInstallRunning) {
+      return () => { stopped = true; };
+    }
+    const timer = window.setInterval(tick, 1500);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [anyInstallRunning]);
 
   const startRuntimeInstall = async (body: {
     mode: "auto" | "artifact" | "package" | "source" | "full-source";
@@ -86,7 +119,8 @@ export function TranscodeSettingsPage() {
     compiler?: "auto" | "system" | "portable";
   }) => {
     try {
-      setInstallJob(await api.transcode.runtimeInstallArtifact(body));
+      const job = await api.transcode.runtimeInstallArtifact(body);
+      setInstallJobs((prev) => [job, ...prev.filter((item) => item.id !== job.id)]);
     } catch (e) {
       toast("error", errMsg(e));
     }
@@ -195,6 +229,9 @@ export function TranscodeSettingsPage() {
   const effectiveBinary = majorBinaries.find((entry) => entry.id === binaryId)
     ?? majorBinaries[0] ?? null;
   const installedIds = new Set((runtime?.installed ?? []).map((item) => item.id));
+  const runningTargets = new Set(installJobs
+    .filter((job) => job.state === "running" && job.target)
+    .map((job) => job.target as string));
   const binaryInstalled = effectiveBinary ? installedIds.has(effectiveBinary.id) : false;
   const originIds = [...new Set(sources.map((entry) => entry.vendor))];
   const effectiveOrigin = originIds.includes(sourceOrigin) ? sourceOrigin : originIds[0] ?? "";
@@ -294,9 +331,9 @@ export function TranscodeSettingsPage() {
               <button className="btn btn-text" disabled={busy} onClick={() => void load()}>
                 重新检测
               </button>
-              <button className="btn btn-text" disabled={installJob?.state === "running"}
+              <button className="btn btn-text" disabled={runningTargets.has("package")}
                       onClick={() => void startRuntimeInstall({ mode: "package" })}>
-                通过包管理器安装
+                {runningTargets.has("package") ? "正在安装…" : "通过包管理器安装"}
               </button>
             </div>
             <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)" }}>
@@ -366,15 +403,20 @@ export function TranscodeSettingsPage() {
             )}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <button className="btn btn-raised"
-                      disabled={!effectiveBinary || binaryInstalled || installJob?.state === "running"}
+                      disabled={!effectiveBinary || binaryInstalled
+                        || (effectiveBinary != null && runningTargets.has(effectiveBinary.id))}
                       onClick={() => effectiveBinary
                         && void startRuntimeInstall({ mode: "artifact", id: effectiveBinary.id })}>
-                {binaryInstalled ? "已安装" : "安装二进制"}
+                {binaryInstalled ? "已安装"
+                  : effectiveBinary && runningTargets.has(effectiveBinary.id) ? "下载中…"
+                  : "安装二进制"}
               </button>
               <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", alignSelf: "center" }}>
                 {binaryInstalled
                   ? "这个构建已在数据目录里；可在下方设为默认，重装前先删除。"
-                  : "只有点这里才会下载；哈希按 catalog 校验。"}
+                  : effectiveBinary && runningTargets.has(effectiveBinary.id)
+                    ? "下载在后台进行，切走页面不会中断。"
+                    : "只有点这里才会下载；哈希按 catalog 校验。"}
               </span>
             </div>
           </div>
@@ -459,11 +501,13 @@ export function TranscodeSettingsPage() {
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <button className="btn btn-raised"
                           disabled={!fullBuilds?.available || fullInstalled
-                            || installJob?.state === "running"}
+                            || (effectiveFull != null && runningTargets.has(effectiveFull.id))}
                           onClick={() => effectiveFull && void startRuntimeInstall({
                             mode: "full-source", id: effectiveFull.id, compiler: "system",
                           })}>
-                    {fullInstalled ? "已构建" : "开始全量构建"}
+                    {fullInstalled ? "已构建"
+                      : effectiveFull && runningTargets.has(effectiveFull.id) ? "构建中…"
+                      : "开始全量构建"}
                   </button>
                   <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)",
                                  alignSelf: "center" }}>
@@ -559,45 +603,69 @@ export function TranscodeSettingsPage() {
             )}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <button className="btn btn-raised"
-                      disabled={!effectiveSource || sourceInstalled || installJob?.state === "running"
+                      disabled={!effectiveSource || sourceInstalled
+                        || (effectiveSource != null && runningTargets.has(effectiveSource.id))
                         || (compilerId !== "auto" && !effectiveCompiler?.available)}
                       onClick={() => effectiveSource && void startRuntimeInstall({
                         mode: "source", id: effectiveSource.id,
                         compiler: compilerId as "auto" | "system" | "portable",
                       })}>
-                {sourceInstalled ? "已构建" : "开始构建"}
+                {sourceInstalled ? "已构建"
+                  : effectiveSource && runningTargets.has(effectiveSource.id) ? "构建中…"
+                  : "开始构建"}
               </button>
               <span style={{ fontSize: 11, color: "var(--monet-on-surface-variant)", alignSelf: "center" }}>
                 {sourceInstalled
                   ? "这个版本已经构建过；要重编先删除已安装的运行时。"
-                  : "只有点这里才会下载源码并编译。"}
+                  : effectiveSource && runningTargets.has(effectiveSource.id)
+                    ? "构建在后台进行，切走页面不会中断。"
+                    : "只有点这里才会下载源码并编译。"}
               </span>
             </div>
             </>)}
           </div>
         )}
 
-        {installJob && (
-          <div style={{ padding: "0 8px 10px", borderTop: "1px solid var(--monet-outline-variant)" }}>
-            <div className="comp-row">
-              <span className="comp-label">任务状态</span>
-              <span className="comp-value">
-                <span className={`tag ${installJob.state === "done" ? "running" : "plain"}`}>
-                  {installJob.state === "done" ? "完成" : installJob.state === "failed" ? "失败"
-                    : installJob.state === "cancelled" ? "已取消" : installJob.message || "运行中"}
-                </span>
-              </span>
-            </div>
-            <ProgressBar fraction={installJob.progress} />
-            {installJob.error && (
-              <span style={{ fontSize: 12, color: "var(--monet-error)" }}>{installJob.error}</span>
-            )}
-            {installJob.log && (
-              <pre style={{ margin: "6px 0 0", padding: 8, maxHeight: 160, overflow: "auto", fontSize: 10,
-                            background: "var(--monet-surface-container-low)", whiteSpace: "pre-wrap" }}>
-                {installJob.log}
-              </pre>
-            )}
+        {installJobs.length > 0 && (
+          <div style={{ padding: "0 8px 10px", borderTop: "1px solid var(--monet-outline-variant)",
+                        display: "grid", gap: 10 }}>
+            {[...installJobs].sort((a, b) => b.createdAt - a.createdAt).slice(0, 6).map((job) => (
+              <div key={job.id} style={{ display: "grid", gap: 4, paddingTop: 6 }}>
+                <div className="comp-row" style={{ padding: 0 }}>
+                  <span className="comp-label">{installJobLabel(job)}</span>
+                  <span className="comp-value" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <span className={`tag ${job.state === "done" ? "running" : job.state === "failed" ? "danger" : "plain"}`}>
+                      {job.state === "done" ? "完成" : job.state === "failed" ? "失败"
+                        : job.state === "cancelled" ? "已取消" : job.message || "运行中"}
+                    </span>
+                    {job.state === "running" && (
+                      <button className="btn btn-text danger"
+                              onClick={() => void api.transcode.runtimeCancel(job.id)
+                                .then((next) => setInstallJobs((prev) => prev.map((item) => item.id === next.id ? next : item)))
+                                .catch(() => undefined)}>
+                        取消
+                      </button>
+                    )}
+                  </span>
+                </div>
+                {job.state === "running" && <ProgressBar fraction={job.progress} />}
+                {job.error && (
+                  <span style={{ fontSize: 12, color: "var(--monet-error)" }}>{job.error}</span>
+                )}
+                {job.log && (
+                  <details>
+                    <summary style={{ fontSize: 11, cursor: "pointer",
+                                      color: "var(--monet-on-surface-variant)" }}>
+                      {job.state === "running" ? "日志" : "查看日志"}
+                    </summary>
+                    <pre style={{ margin: "6px 0 0", padding: 8, maxHeight: 160, overflow: "auto", fontSize: 10,
+                                  background: "var(--monet-surface-container-low)", whiteSpace: "pre-wrap" }}>
+                      {job.log}
+                    </pre>
+                  </details>
+                )}
+              </div>
+            ))}
           </div>
         )}
       </div>

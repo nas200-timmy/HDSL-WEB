@@ -160,6 +160,10 @@ public final class TranscodeApiServlet extends HttpServlet {
             fullBuildsJson(response);
             return;
         }
+        if ("/runtime/installs".equals(path)) {
+            installsJson(response);
+            return;
+        }
         if (path.startsWith("/runtime/jobs/")) {
             runtimeGet(response, path.substring("/runtime/jobs/".length()));
             return;
@@ -1198,6 +1202,18 @@ public final class TranscodeApiServlet extends HttpServlet {
             throw new IllegalArgumentException(name + " is required");
         }
         return value;
+    }
+
+    /// Running and recently finished installs, so a page switch can reattach to a
+/// download instead of showing "nothing is happening" and starting another.
+private void installsJson(HttpServletResponse response) throws IOException {
+        JsonArray jobs = new JsonArray();
+        for (FfmpegInstaller.InstallJob job : module.installer().jobs()) {
+            jobs.add(Json.GSON.toJsonTree(job));
+        }
+        JsonObject body = new JsonObject();
+        body.add("jobs", jobs);
+        Json.write(response, body);
     }
 
     private void runtimeGet(HttpServletResponse response, String id) throws IOException {
