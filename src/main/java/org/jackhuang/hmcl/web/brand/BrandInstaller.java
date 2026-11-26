@@ -1889,6 +1889,12 @@ public final class BrandInstaller {
             }
         } catch (IOException e) {
             throw new BrandException("Could not unpack " + archive.getFileName() + ": " + e.getMessage(), e);
+        } catch (IllegalArgumentException e) {
+            BrandException explained = localeCannotRepresentNames(e);
+            if (explained != null) {
+                throw explained;
+            }
+            throw e;
         }
     }
 
@@ -2957,7 +2963,35 @@ public final class BrandInstaller {
             }
         } catch (java.io.IOException e) {
             throw new BrandException("Could not unpack the source archive: " + e.getMessage(), e);
+        } catch (IllegalArgumentException e) {
+            BrandException explained = localeCannotRepresentNames(e);
+            if (explained != null) {
+                throw explained;
+            }
+            throw e;
         }
+    }
+
+    /// Rephrases the JVM's path-encoding failure when an archive member carries a
+    /// non-ASCII file name.
+    ///
+    /// `sun.jnu.encoding` decides what a path may contain. On an image without
+    /// locale data it degrades to ASCII, and a member named `启动.cmd` — the
+    /// claude-web source ships one — fails inside `UnixPath` with a bare
+    /// "Malformed input or input contains unmappable characters". That reads like
+    /// a corrupt archive; it is a missing system locale.
+    ///
+    /// @param e the path failure
+    /// @return the actionable exception, or `null` when this is not that failure
+    static @Nullable BrandException localeCannotRepresentNames(IllegalArgumentException e) {
+        String message = String.valueOf(e.getMessage());
+        if (!message.contains("unmappable characters")) {
+            return null;
+        }
+        return new BrandException("The archive contains a file name this machine's locale cannot"
+                + " represent (sun.jnu.encoding=" + System.getProperty("sun.jnu.encoding") + "): "
+                + message + " — install a UTF-8 locale (Debian: apt-get install locales;"
+                + " /usr/lib/locale/C.utf8 must exist) and run the panel with LANG=C.UTF-8.", e);
     }
 
     /// Runs one install command, streaming its merged output to the log and

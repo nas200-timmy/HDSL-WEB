@@ -34,6 +34,7 @@ import java.util.zip.GZIPOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -287,5 +288,18 @@ class BrandInstallerTest {
         Files.createDirectories(marker.getParent());
         Files.createFile(marker);
         return release;
+    }
+
+    /// The JVM's bare "unmappable characters" says nothing about why a `启动.cmd`
+    /// member cannot be unpacked; the locale is the missing piece, so the error
+    /// has to name it.
+    @Test
+    void anUnmappableArchiveNameBlamesTheLocale() {
+        BrandException explained = BrandInstaller.localeCannotRepresentNames(new IllegalArgumentException(
+                "Malformed input or input contains unmappable characters: 启动.cmd"));
+        assertNotNull(explained);
+        assertTrue(explained.getMessage().contains("sun.jnu.encoding"), explained.getMessage());
+        assertTrue(explained.getMessage().contains("locales"), explained.getMessage());
+        assertNull(BrandInstaller.localeCannotRepresentNames(new IllegalArgumentException("something else")));
     }
 }
