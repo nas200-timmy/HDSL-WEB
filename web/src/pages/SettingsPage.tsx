@@ -104,10 +104,11 @@ type SettingsTab =
   | "about";
 
 const TLS_SOURCE_LABEL: Record<string, string> = {
-  none: "HTTP 明文",
+  none: "来源未知",
   "self-signed": "自签证书",
-  uploaded: "上传证书（PEM）",
-  pkcs12: "上传证书（PKCS#12）",
+  uploaded: "证书文件（PEM）",
+  pkcs12: "证书文件（PKCS#12）",
+  acme: "ACME 证书",
 };
 
 export function SettingsPage() {
@@ -1653,14 +1654,19 @@ function OutboundTlsCard() {
 /* ---------------- HTTPS 证书 ---------------- */
 
 function tlsSourceTag(source: string): { cls: string; label: string } {
-  switch ((source ?? "").toLowerCase()) {
+  const key = (source ?? "").toLowerCase();
+  switch (key) {
     case "uploaded":
     case "pkcs12":
-      return { cls: "running", label: TLS_SOURCE_LABEL[(source ?? "").toLowerCase()] ?? source };
+    case "acme":
+      return { cls: "running", label: TLS_SOURCE_LABEL[key] ?? key };
     case "self-signed":
       return { cls: "warn", label: TLS_SOURCE_LABEL["self-signed"] };
     default:
-      return { cls: "plain", label: TLS_SOURCE_LABEL["none"] };
+      // An HTTPS listener with an unrecorded source is still HTTPS; do not
+      // label it "HTTP 明文" — that is what produced the contradictory
+      // "HTTP 明文  HTTPS 已启用" line.
+      return { cls: "warn", label: TLS_SOURCE_LABEL["none"] };
   }
 }
 
@@ -1787,7 +1793,9 @@ function TlsTab() {
     }
   };
 
-  const tag = tls ? tlsSourceTag(tls.source) : null;
+  const tag = tls
+    ? (tls.https ? tlsSourceTag(tls.source) : { cls: "plain", label: "HTTP 明文" })
+    : null;
 
   return (
     <>
@@ -1811,32 +1819,50 @@ function TlsTab() {
           </div>
         ) : tls ? (
           <>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "flex-start",
-                gap: 8,
-                margin: "4px 8px 8px",
-                padding: "10px 12px",
-                border: "1px solid var(--monet-error)",
-                borderRadius: 4,
-                color: "var(--monet-error)",
-                fontSize: 12,
-                lineHeight: 1.6,
-              }}
-            >
-              <WarningIcon size={16} style={{ flex: "none", marginTop: 2 }} />
-              <span>
-                <strong>自签名证书只是权宜之计。</strong>
-                浏览器会提示证书不受信任，它也无法证明服务器身份，只适合内网或临时使用。
-                正式部署请上传受信任证书，或把面板放到带证书的反向代理后面。
-              </span>
-            </div>
+            {tls.source === "self-signed" && (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: 8,
+                  margin: "4px 8px 8px",
+                  padding: "10px 12px",
+                  border: "1px solid var(--monet-error)",
+                  borderRadius: 4,
+                  color: "var(--monet-error)",
+                  fontSize: 12,
+                  lineHeight: 1.6,
+                }}
+              >
+                <WarningIcon size={16} style={{ flex: "none", marginTop: 2 }} />
+                <span>
+                  <strong>自签名证书只是权宜之计。</strong>
+                  浏览器会提示证书不受信任，它也无法证明服务器身份，只适合内网或临时使用。
+                  正式部署请上传受信任证书，或把面板放到带证书的反向代理后面。
+                </span>
+              </div>
+            )}
+            {tls.https && tls.source === "none" && (
+              <div
+                style={{
+                  margin: "4px 8px 8px",
+                  padding: "8px 12px",
+                  border: "1px solid var(--monet-outline-variant)",
+                  borderRadius: 4,
+                  color: "var(--monet-on-surface-variant)",
+                  fontSize: 12,
+                  lineHeight: 1.6,
+                }}
+              >
+                HTTPS 已启用，但面板没有记录证书来源——可能是旧版本上传的证书、
+                server.yaml 里配置的证书，或由外部注入。下面显示的是实际生效的证书信息。
+              </div>
+            )}
             <div className="comp-row">
               <span className="comp-label">当前状态</span>
               <span className="comp-value">
                 <span className={`tag ${tag?.cls}`}>{tag?.label}</span>
-                {tls.https && <span style={{ fontSize: 12 }}>HTTPS 已启用</span>}
+                <span style={{ fontSize: 12 }}>{tls.https ? "HTTPS 已启用" : "HTTPS 未启用"}</span>
               </span>
             </div>
             {tls.subject && (

@@ -1803,7 +1803,7 @@ select.input {
   border-bottom: 1px solid var(--monet-outline-variant);
 }
 
-/* 表头即筛选：整格是一个原生 select，右侧画一个粗三角当提示。 */
+/* 表头即筛选：整格是一个原生 select，右侧一个小三角当提示。 */
 .seed-head-cell {
   position: relative;
   display: flex;
@@ -1814,7 +1814,7 @@ select.input {
 .seed-head-select {
   width: 100%;
   min-width: 0;
-  padding: 2px 18px 2px 2px;
+  padding: 2px 14px 2px 2px;
   border: 0;
   border-radius: 4px;
   background: transparent;
@@ -1840,9 +1840,9 @@ select.input {
   right: 2px;
   top: 50%;
   transform: translateY(-50%);
-  border-left: 7px solid transparent;
-  border-right: 7px solid transparent;
-  border-top: 9px solid currentColor;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
   pointer-events: none;
 }
 
