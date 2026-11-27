@@ -1722,7 +1722,7 @@ function TlsTab() {
 
   const pickP12 = (f: File | null) => {
     setP12File(f);
-    setTlsFormError(f && !/\.(p12|pfx)$/i.test(f.name) ? "证书文件应为 .p12 / .pfx" : null);
+    setTlsFormError(f && !/\.(p12|pfx|jks|keystore)$/i.test(f.name) ? "密钥库应为 .p12 / .pfx / .jks" : null);
   };
 
   const doUploadTls = async () => {
@@ -1909,7 +1909,7 @@ function TlsTab() {
                   </label>
                   <label className="input-check">
                     <input type="radio" checked={tlsMode === "p12"} onChange={() => { setTlsMode("p12"); setTlsFormError(null); }} />
-                    <span>PKCS#12（.p12）</span>
+                    <span>密钥库（.p12 / .pfx / .jks）</span>
                   </label>
                 </div>
                 {tlsMode === "pem" ? (
@@ -1926,15 +1926,15 @@ function TlsTab() {
                 ) : (
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                     <div className="form-row" style={{ flex: 1, minWidth: 200, marginBottom: 0 }}>
-                      <span className="form-label">证书文件（.p12 / .pfx）</span>
-                      <FileDropInput file={p12File} onFile={pickP12} accept=".p12,.pfx" hint="选择或拖入 PKCS#12 证书" disabled={tlsBusy} />
+                      <span className="form-label">密钥库文件（.p12 / .pfx / .jks）</span>
+                      <FileDropInput file={p12File} onFile={pickP12} accept=".p12,.pfx,.jks,.keystore" hint="选择或拖入 PKCS#12 / JKS" disabled={tlsBusy} />
                     </div>
                     <div className="form-row" style={{ flex: 1, minWidth: 200, marginBottom: 0 }}>
-                      <span className="form-label">导出密码</span>
+                      <span className="form-label">密钥库密码</span>
                       <input
                         className="input"
                         type="password"
-                        placeholder="创建 .p12 时设置的密码"
+                        placeholder="PKCS#12 / JKS 的密码"
                         value={p12Password}
                         onChange={(e) => setP12Password(e.target.value)}
                         autoComplete="off"

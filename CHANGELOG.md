@@ -118,8 +118,14 @@
   连接当死连接关闭。
 - GameDirectoryManager 初始化发布竞态修复：并发创建实例不再随机 500。
 
+### 证书
+
+- 上传密钥库现在也接受 JKS / JCEKS（阿里云「Tomcat」下载项）：按字节识别格式，
+  用库口令读出私钥与证书链后统一转成 PKCS#12 再落盘，重启加载与热切换沿用同一条路径。
+
 ### 安全
 
+- ACME DNS 凭证的 AccessKey ID 与 Secret 一样只回显末四位，不再明文展示。
 - setpriv：四个组选项互斥（`--clear-groups` 与 `--groups` 不再同传）；PATH 上
   的 busybox `setpriv` 视为不存在并回落到闭包的 util-linux 版本（否则全 applet
   镜像下所有 agent 启动死于 `--reuid: applet not found`）；测试钉住 argv 形状。

@@ -48,6 +48,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
@@ -624,7 +625,7 @@ public final class AcmeApiServlet extends HttpServlet {
         for (AcmeDnsProviderRegistry.Field field : info.fields()) {
             String value = dns.get(field.key());
             if (value != null && !value.isBlank()) {
-                masked.addProperty(field.key(), field.secret() ? mask(value) : value);
+                masked.addProperty(field.key(), maskValue(field.key(), value, field.secret()));
             }
         }
         return masked;
@@ -639,6 +640,15 @@ public final class AcmeApiServlet extends HttpServlet {
             if (hmac != null) masked.addProperty("hmacKey", mask(hmac));
         }
         return masked;
+    }
+
+    /// Identifiers that are not passwords but still name the account. The
+    /// read-only preview masks them like secrets; the edit form leaves the
+    /// stored value alone when the field is left blank.
+    private static final Set<String> MASKED_IDENTIFIERS = Set.of("accessKeyId");
+
+    static String maskValue(String key, String value, boolean secret) {
+        return secret || MASKED_IDENTIFIERS.contains(key) ? mask(value) : value;
     }
 
     private static String mask(String value) {
