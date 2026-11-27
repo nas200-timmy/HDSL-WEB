@@ -401,6 +401,14 @@ public final class FfmpegFullBuildKit {
             Map<String, String> env = new LinkedHashMap<>(toolchain.environment());
             env.put("LC_ALL", "C");
             env.put("LANG", "C");
+            // zig cc (clang) promotes the `__DATE__` expansion in nasmlib/ver.c
+            // to an error (`-Werror,-Wdate-time`), and nasm upstream has no
+            // switch for it. The warning is about reproducibility, not about a
+            // defect in this build; demote it so the pinned nasm can compile.
+            String cflags = env.getOrDefault("CFLAGS", "");
+            env.put("CFLAGS", cflags.isBlank()
+                    ? "-Wno-error=date-time"
+                    : cflags + " -Wno-error=date-time");
             run(List.of("./configure", "--prefix=" + out), source, env, temp,
                     DEP_CONFIGURE_TIMEOUT, "nasm configure", log, cancelled);
             String make = toolchain.pathOf("make");
