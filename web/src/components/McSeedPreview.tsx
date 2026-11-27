@@ -1036,8 +1036,14 @@ export function McSeedPreview({
                       <div className="empty-state seed-empty">这个种子下没有匹配的记录。</div>
                     ) : sortedVariants.map((entry) => {
                       const active = view?.source === "history" && view.id === entry.id;
+                      // The id comes from the server; a colliding pair used to
+                      // share this React key, and React then reused the wrong
+                      // row nodes (duplicates, stale rows after filtering).
+                      // generatedAt keeps the key unique even against an older
+                      // server that still computes ids from the recorded inputs.
+                      const rowKey = `${entry.id}:${entry.generatedAt}`;
                       return (
-                        <div className={`seed-variant${active ? " active" : ""}`} key={entry.id}>
+                        <div className={`seed-variant${active ? " active" : ""}`} key={rowKey}>
                           <span className="seed-cell" data-label="版本">{entry.version}</span>
                           <span className="seed-cell" data-label="引擎">{entry.engine === "server" ? "MC" : "Java"}</span>
                           <span className="seed-cell" data-label="清晰度">{qualityLabel(entry.quality)}</span>

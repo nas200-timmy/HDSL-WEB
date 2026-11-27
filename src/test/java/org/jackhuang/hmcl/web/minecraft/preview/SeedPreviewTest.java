@@ -35,6 +35,7 @@ import java.util.zip.GZIPOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /// The reader is the only part of the preview that can be wrong without the
@@ -351,6 +352,30 @@ class SeedPreviewTest {
         } else {
             throw new IllegalArgumentException("unsupported payload " + value.getClass());
         }
+    }
+
+    @Test
+    void oldCacheDirectoriesRecoverFieldsAndKeepDistinctIds() {
+        // Legacy meta.json files recorded no engine/quality; the directory name
+        // still carries them, and it is what keeps sibling entries apart.
+        SeedPreviewService.VariantHints hd = SeedPreviewService.variantHints("8192-63-biome-java-hd-v10");
+        assertEquals("java", hd.engine());
+        assertEquals("high", hd.quality());
+        assertEquals("biome", hd.mode());
+
+        SeedPreviewService.VariantHints detail = SeedPreviewService.variantHints("512-63-v9");
+        assertEquals("server", detail.engine());
+        assertEquals("standard", detail.quality());
+        assertEquals("detail", detail.mode());
+
+        // These siblings in the live cache recorded identical inputs and used to
+        // share one id (and one React key in the history table).
+        assertNotEquals(
+                SeedPreviewService.historyId("1.14.4", "237286", "512-63-v10"),
+                SeedPreviewService.historyId("1.14.4", "237286", "512-63-biome-v10"));
+        assertNotEquals(
+                SeedPreviewService.historyId("1.14.4", "237286", "8192-63-biome-java-v10"),
+                SeedPreviewService.historyId("1.14.4", "237286", "8192-63-biome-java-hd-v10"));
     }
 
     private static void writeString(DataOutputStream out, String value) throws IOException {
