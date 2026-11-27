@@ -1312,7 +1312,7 @@ public final class PlainChatServlet extends HttpServlet {
         if (authDisabled) {
             return new AuthService.Session("admin", Instant.MAX);
         }
-        String token = cookie(request, AuthFilter.SESSION_COOKIE);
+        String token = cookie(request, authFilter.sessionCookieName());
         return token == null ? null : auth.verify(token).orElse(null);
     }
 
@@ -1324,7 +1324,7 @@ public final class PlainChatServlet extends HttpServlet {
     /// The elevation key of this request's session, exactly the key the JSON
     /// developer routes use, so one elevation serves both surfaces.
     private String elevKey(HttpServletRequest request) {
-        return DeveloperElevation.key(cookie(request, AuthFilter.SESSION_COOKIE),
+        return DeveloperElevation.key(cookie(request, authFilter.sessionCookieName()),
                 request.getRemoteAddr());
     }
 

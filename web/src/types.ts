@@ -6,6 +6,8 @@ export interface Health {
   /** 面板自身运行的 JDK，只给大版本号（`/api/health` 免认证，不该送完整指纹）。 */
   java?: string;
   uptimeSec: number;
+  /** 面板实例 id（`<data>/instance-id`），用于区分同机同域名的多个面板。 */
+  instance?: string;
 }
 
 export interface VersionInfo {

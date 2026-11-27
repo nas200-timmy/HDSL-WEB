@@ -268,12 +268,17 @@ public final class HdslServer {
                 new org.jackhuang.hmcl.web.terminal.TerminalManager();
         org.jackhuang.hmcl.web.auth.PeerIdentity peerIdentity =
                 new org.jackhuang.hmcl.web.auth.PeerIdentity(terminals);
+        String instanceId = org.jackhuang.hmcl.web.config.PanelIdentity.loadOrCreate(config.dataDir);
+        String sessionCookieName = org.jackhuang.hmcl.web.auth.SessionCookies.forInstance(
+                instanceId, config.port);
+        org.jackhuang.hmcl.web.auth.SessionCookies.bind(sessionCookieName);
+        logger.info("Panel instance " + instanceId + " (session cookie " + sessionCookieName + ")");
         AuthFilter authFilter = new AuthFilter(authService, config.auth.disabled,
                 request -> request.isSecure()
                         || org.jackhuang.hmcl.web.http.RequestSecurity.forwardedHttps(request, config),
                 ttlSeconds, config.basePath, developerElevation, peerIdentity,
                 config.agent.remoteNeedsSession, config.agent.loopbackOnly,
-                () -> config.network.trustedProxies);
+                () -> config.network.trustedProxies, sessionCookieName);
         PasswordCrypto passwordCrypto = new PasswordCrypto();
         ChatCryptoService chatCrypto = new ChatCryptoService();
 
@@ -799,8 +804,8 @@ public final class HdslServer {
         }
         for (String pair : cookie.split(";")) {
             String trimmed = pair.trim();
-            if (trimmed.startsWith(AuthFilter.SESSION_COOKIE + "=")) {
-                String token = trimmed.substring(AuthFilter.SESSION_COOKIE.length() + 1);
+            if (trimmed.startsWith(org.jackhuang.hmcl.web.auth.SessionCookies.name() + "=")) {
+                String token = trimmed.substring(org.jackhuang.hmcl.web.auth.SessionCookies.name().length() + 1);
                 return authService.verify(token).isPresent();
             }
         }
@@ -817,8 +822,8 @@ public final class HdslServer {
         if (cookie != null) {
             for (String pair : cookie.split(";")) {
                 String trimmed = pair.trim();
-                if (trimmed.startsWith(AuthFilter.SESSION_COOKIE + "=")) {
-                    String token = trimmed.substring(AuthFilter.SESSION_COOKIE.length() + 1);
+                if (trimmed.startsWith(org.jackhuang.hmcl.web.auth.SessionCookies.name() + "=")) {
+                    String token = trimmed.substring(org.jackhuang.hmcl.web.auth.SessionCookies.name().length() + 1);
                     if (!authService.verify(token).isPresent()) {
                         return false;
                     }

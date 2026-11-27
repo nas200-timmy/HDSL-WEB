@@ -165,7 +165,8 @@ public final class ApiServlet extends HttpServlet {
                 "status", "ok",
                 "version", version,
                 "java", String.valueOf(Runtime.version().feature()),
-                "uptimeSec", uptimeSec));
+                "uptimeSec", uptimeSec,
+                "instance", org.jackhuang.hmcl.web.config.PanelIdentity.current()));
     }
 
     private void login(HttpServletRequest request, HttpServletResponse response) throws IOException {
@@ -338,7 +339,7 @@ public final class ApiServlet extends HttpServlet {
                 s.username(), request.getRemoteAddr());
         // The session that made the change survives; every other session of
         // this user (other browsers, other devices) is logged out.
-        authService.revokeOtherSessions(s.username(), cookieValue(request, AuthFilter.SESSION_COOKIE));
+        authService.revokeOtherSessions(s.username(), cookieValue(request, authFilter.sessionCookieName()));
         Json.write(response, Map.of("ok", true));
     }
 
@@ -383,12 +384,12 @@ public final class ApiServlet extends HttpServlet {
         }
         // The session that made the change survives under the new name;
         // every other session of the old name is logged out.
-        authService.renameUser(oldUsername, newUsername, cookieValue(request, AuthFilter.SESSION_COOKIE));
+        authService.renameUser(oldUsername, newUsername, cookieValue(request, authFilter.sessionCookieName()));
         Json.write(response, new UsernameBody(true, newUsername));
     }
 
     private void logout(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        String token = cookieValue(request, AuthFilter.SESSION_COOKIE);
+        String token = cookieValue(request, authFilter.sessionCookieName());
         authService.logout(token);
         // 已建立的终端 WS 不再复查会话，不掐的话登出后的浏览器还留着一条
         // 活动的终端通道。只断连接、不动 PTY：detach 语义，agent 继续跑

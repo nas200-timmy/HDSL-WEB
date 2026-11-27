@@ -118,7 +118,7 @@ class PlainChatTest {
             assertEquals(303, ok.statusCode(), ok.body());
             assertEquals("/plain", ok.headers().firstValue("Location").orElseThrow());
             String cookie = ok.headers().firstValue("set-cookie").orElseThrow();
-            assertTrue(cookie.contains("hdsl_session="), cookie);
+            assertTrue(cookie.contains(org.jackhuang.hmcl.web.auth.SessionCookies.name() + "="), cookie);
             assertTrue(cookie.contains("SameSite=Strict"), cookie);
 
             HttpResponse<String> home = getWithCookie(running, "/plain", cookie.split(";")[0]);

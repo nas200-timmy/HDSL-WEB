@@ -213,19 +213,21 @@ dsh.example.com {
 | 终端与开发者模式报 403 `insecure_transport` | 反代终结了 TLS 但没发 `X-Forwarded-Proto`，或面板没开 `trust_forwarded_proto` |
 | 实例网页突然要开发者密码 | 面板开了开发者守卫（`developer_guard.scope`），这是预期；要么在开发者页提权，要么把作用域调回 `off` |
 | 实例网页 / 终端全部 503 `emergency_stop` | 有人按了紧急停机；冷却 1 小时或重启面板进程/容器，之后在开发者页解除 |
-| 登录 A 面板之后 B 面板掉线 | 同一个域名下挂了两个面板且用了旧版 Cookie（`Path=/` 互相覆盖）；新版按挂载点收敛，重新登录一次即可 |
+| 同域名不同端口登录互相挤掉 | Cookie 不区分端口，旧版都叫 `hdsl_session`；新版按实例 id + 端口命名（`hdsl_session_<id12>_<port>`），两个面板的会话互不覆盖。升级后重新登录一次 |
+| 同域名同端口不同子路径登录互相挤掉 | 旧版 `Path=/` 互相覆盖；新版按挂载点收敛，Cookie 的 `Path` 是挂载点本身 |
 | `Set-Cookie` 里是 `Path=/hdsl` | 正常：会话 Cookie 跟着挂载点走，两个面板互不覆盖 |
+| `Set-Cookie` 的名字不是 `hdsl_session` | 正常：名字带实例 id 和端口（如 `hdsl_session_a1b2c3d4e5f6_3080`），这是不同面板/不同端口互不干扰的隔离键 |
 
 ### 验收命令
 
 ```bash
-# 1) 面板活着，且经过反代可达（子路径时要带前缀）
+# 1) 面板活着，且经过反代可达（子路径时要带前缀）；返回体里的 instance 是面板实例 id
 curl -sS https://dsh.example.com/hdsl/api/health
 
 # 2) 80 是否只做跳转（期望 308 / 301，Location 是 https）
 curl -sSI http://dsh.example.com/hdsl/api/health | head -3
 
-# 3) 登录后的 Cookie 作用域（期望 Path=/hdsl）
+# 3) 登录后的 Cookie（期望名字形如 hdsl_session_<id12>_<port>，Path=/hdsl）
 curl -sS -D- -o /dev/null https://dsh.example.com/hdsl/api/auth/login   -H 'Content-Type: application/json'   -d '{"username":"admin","password":"<口令>"}' | grep -i '^set-cookie'
 
 # 4) WebSocket 能不能升级（没有会话 cookie 时会被拒，但能看出路由到了面板而不是别的站点）

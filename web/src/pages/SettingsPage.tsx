@@ -4996,6 +4996,15 @@ function AboutTab() {
           <span className="comp-value">{health?.java ? `Java ${health.java}` : "—"}</span>
         </div>
         <div className="comp-row">
+          <span className="comp-label">面板实例</span>
+          <span className="comp-value mono" style={{ fontSize: 12 }}>
+            {health?.instance || "—"}
+            <span style={{ color: "var(--monet-on-surface-variant)", marginLeft: 8, fontSize: 11 }}>
+              同机多面板时用它区分会话
+            </span>
+          </span>
+        </div>
+        <div className="comp-row">
           <span className="comp-label">说明</span>
           <span className="comp-value" style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
             {I18N["about.project.description"]}
