@@ -39,6 +39,55 @@ const formatEta = (seconds: number) =>
 const qualityLabel = (quality?: string) =>
   quality === "extreme" ? "极限" : quality === "ultra" ? "超清" : quality === "high" ? "高清" : "标准";
 
+/** 组内排序键。`time` 是纯粹的时间关系，被选为主排序时不参与任何组合。 */
+type SeedSortKey = "time" | "engine" | "radius" | "quality";
+const SEED_SORT_LABELS: Record<SeedSortKey, string> = {
+  time: "时间（新→旧）",
+  engine: "引擎",
+  radius: "范围",
+  quality: "清晰度",
+};
+const SEED_SORT_KEYS: SeedSortKey[] = ["time", "engine", "radius", "quality"];
+
+const seedSortRank = (entry: McSeedPreviewHistoryEntry, key: SeedSortKey): number => {
+  switch (key) {
+    case "engine":
+      return entry.engine === "server" ? 1 : 0;
+    case "radius":
+      return entry.radius;
+    case "quality":
+      return QUALITY_TIERS.findIndex((tier) => tier.id === (entry.quality ?? "standard"));
+    case "time":
+      return Date.parse(entry.generatedAt);
+  }
+};
+
+/**
+ * 组内排序：主排序 → 次排序 → 时间倒序兜底。
+ *
+ * 主排序为 `time` 时直接返回纯时间序——其余键被完全忽略，不会因为"引擎相同"
+ * 之类的原因重新洗牌。其他主排序下，次排序只在主排序打平时生效。
+ */
+const sortSeedVariants = (
+  variants: McSeedPreviewHistoryEntry[],
+  primary: SeedSortKey,
+  secondary: SeedSortKey | "none",
+) => {
+  const sorted = [...variants];
+  if (primary === "time") {
+    return sorted.sort((left, right) => seedSortRank(right, "time") - seedSortRank(left, "time"));
+  }
+  return sorted.sort((left, right) => {
+    const byPrimary = seedSortRank(left, primary) - seedSortRank(right, primary);
+    if (byPrimary !== 0) return byPrimary;
+    if (secondary !== "none" && secondary !== primary) {
+      const bySecondary = seedSortRank(left, secondary) - seedSortRank(right, secondary);
+      if (bySecondary !== 0) return bySecondary;
+    }
+    return seedSortRank(right, "time") - seedSortRank(left, "time");
+  });
+};
+
 /** 正在看的是哪一张图：刚跑完的作业，还是历史里的一条。 */
 type View = {
   source: "job" | "history";
@@ -101,6 +150,10 @@ export function McSeedPreview({
   });
   const [expandedSeeds, setExpandedSeeds] = useState<Set<string>>(() => new Set());
   const [groupFilters, setGroupFilters] = useState<Record<string, SeedGroupFilter>>({});
+  const [historySort, setHistorySort] = useState<{
+    primary: SeedSortKey;
+    secondary: SeedSortKey | "none";
+  }>({ primary: "time", secondary: "none" });
   const [deleting, setDeleting] = useState<string | null>(null);
   const [radius, setRadius] = useState(512);
   const [caps, setCaps] = useState<McSeedPreviewCapabilities | null>(null);
@@ -779,6 +832,48 @@ export function McSeedPreview({
                 ))}
               </select>
             </label>
+            <label className="seed-filter">
+              <span>主排序</span>
+              <select
+                className="input"
+                value={historySort.primary}
+                onChange={(e) => {
+                  const primary = e.target.value as SeedSortKey;
+                  setHistorySort((previous) => ({
+                    primary,
+                    secondary: previous.secondary === primary ? "none" : previous.secondary,
+                  }));
+                }}
+              >
+                {SEED_SORT_KEYS.map((key) => (
+                  <option key={key} value={key}>{SEED_SORT_LABELS[key]}</option>
+                ))}
+              </select>
+            </label>
+            <label className="seed-filter">
+              <span>次排序</span>
+              <select
+                className="input"
+                value={historySort.secondary}
+                disabled={historySort.primary === "time"}
+                title={historySort.primary === "time"
+                  ? "时间排序是纯粹的时间关系，忽略次排序"
+                  : "主排序相同（例如同引擎、同清晰度）时再按这一项排"}
+                onChange={(e) => setHistorySort((previous) => ({
+                  ...previous,
+                  secondary: e.target.value as SeedSortKey | "none",
+                }))}
+              >
+                <option value="none">
+                  {historySort.primary === "time" ? "忽略（纯时间）" : "无（时间兜底）"}
+                </option>
+                {SEED_SORT_KEYS
+                  .filter((key) => key !== "time" && key !== historySort.primary)
+                  .map((key) => (
+                    <option key={key} value={key}>{SEED_SORT_LABELS[key]}</option>
+                  ))}
+              </select>
+            </label>
             <button
               className="btn btn-text"
               disabled={!filtersActive}
@@ -795,6 +890,10 @@ export function McSeedPreview({
             const localFilter = groupFilters[group.seed] ?? EMPTY_GROUP_FILTER;
             const visibleVariants = group.variants
               .filter((entry) => matchesGroupFilter(entry, localFilter));
+            // 过滤结果本身按时间倒序（filteredGroups 里排好），最新一条仍在首位；
+            // 表格展示再按用户选的主/次排序重排，两者互不干扰。
+            const sortedVariants = sortSeedVariants(
+              visibleVariants, historySort.primary, historySort.secondary);
             const latest = visibleVariants[0] ?? group.variants[0];
             const busy = deleting === `seed:${group.seed}`;
             const localActive = Object.values(localFilter).some((value) => value !== "");
@@ -916,7 +1015,7 @@ export function McSeedPreview({
                     </div>
                     {visibleVariants.length === 0 ? (
                       <div className="empty-state seed-empty">这个种子下没有匹配的记录。</div>
-                    ) : visibleVariants.map((entry) => {
+                    ) : sortedVariants.map((entry) => {
                       const active = view?.source === "history" && view.id === entry.id;
                       return (
                         <div className={`seed-variant${active ? " active" : ""}`} key={entry.id}>
