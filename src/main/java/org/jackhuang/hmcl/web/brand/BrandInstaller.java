@@ -2195,7 +2195,11 @@ public final class BrandInstaller {
             throw new BrandException("pm/lock.json pins an unusable pnpm version: " + version);
         }
         Path dir = brandRoot.resolve("toolchain").resolve("pnpm-" + version);
-        Path cli = dir.resolve("node_modules").resolve("pnpm").resolve("bin").resolve("pnpm.cjs");
+        // pnpm 11 shipped `node_modules/pnpm/bin/pnpm.cjs`; pnpm 12 uses a
+        // native launcher, and npm exposes it as `node_modules/.bin/pnpm` —
+        // the exact entry point the build's PATH will find. Checking the old
+        // path made a successful install look like a broken one.
+        Path cli = dir.resolve("node_modules").resolve(".bin").resolve("pnpm");
         Path bin = dir.resolve("node_modules").resolve(".bin");
         if (!Files.isRegularFile(cli)) {
             if (node.npm() == null) {
