@@ -958,79 +958,72 @@ export function McSeedPreview({
                 </div>
                 {expanded && (
                   <div className="seed-variants">
-                    {group.variants.length > 1 && (
-                      <div className="seed-group-filters">
-                        <label className="seed-filter">
-                          <span>版本</span>
-                          <select
-                            className="input"
-                            value={localFilter.version}
-                            onChange={(e) => updateGroupFilter(group.seed, { version: e.target.value })}
-                          >
-                            <option value="">全部</option>
-                            {groupChoices.version.map((value) => (
-                              <option key={value} value={value}>{value}</option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="seed-filter">
-                          <span>引擎</span>
-                          <select
-                            className="input"
-                            value={localFilter.engine}
-                            onChange={(e) => updateGroupFilter(group.seed, { engine: e.target.value })}
-                          >
-                            <option value="">全部</option>
-                            {groupChoices.engine.map((value) => (
-                              <option key={value} value={value}>{value === "java" ? "Java" : "MC"}</option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="seed-filter">
-                          <span>清晰度</span>
-                          <select
-                            className="input"
-                            value={localFilter.quality}
-                            onChange={(e) => updateGroupFilter(group.seed, { quality: e.target.value })}
-                          >
-                            <option value="">全部</option>
-                            {groupChoices.quality.map((value) => (
-                              <option key={value} value={value}>{qualityLabel(value)}</option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="seed-filter">
-                          <span>范围</span>
-                          <select
-                            className="input"
-                            value={localFilter.radius}
-                            onChange={(e) => updateGroupFilter(group.seed, { radius: e.target.value })}
-                          >
-                            <option value="">全部</option>
-                            {groupChoices.radius.map((value) => (
-                              <option key={value} value={value}>
-                                {(Number(value) * 2).toLocaleString()} 格
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <button
-                          className="btn btn-text"
-                          disabled={!localActive}
-                          onClick={() => updateGroupFilter(group.seed, EMPTY_GROUP_FILTER)}
+                    <div className="seed-variant-head">
+                      <span className="seed-head-cell">
+                        <select
+                          className="seed-head-select"
+                          aria-label="按版本筛选"
+                          value={localFilter.version}
+                          onChange={(e) => updateGroupFilter(group.seed, { version: e.target.value })}
                         >
-                          重置
-                        </button>
-                      </div>
-                    )}
-                    <div className="seed-variant-head" aria-hidden="true">
-                      <span>版本</span>
-                      <span>引擎</span>
-                      <span>清晰度</span>
-                      <span>范围</span>
-                      <span>结构</span>
-                      <span>时间</span>
-                      <span />
+                          <option value="">版本</option>
+                          {groupChoices.version.map((value) => (
+                            <option key={value} value={value}>版本:{value}</option>
+                          ))}
+                        </select>
+                      </span>
+                      <span className="seed-head-cell">
+                        <select
+                          className="seed-head-select"
+                          aria-label="按引擎筛选"
+                          value={localFilter.engine}
+                          onChange={(e) => updateGroupFilter(group.seed, { engine: e.target.value })}
+                        >
+                          <option value="">引擎</option>
+                          {groupChoices.engine.map((value) => (
+                            <option key={value} value={value}>
+                              引擎:{value === "java" ? "Java" : "MC"}
+                            </option>
+                          ))}
+                        </select>
+                      </span>
+                      <span className="seed-head-cell">
+                        <select
+                          className="seed-head-select"
+                          aria-label="按清晰度筛选"
+                          value={localFilter.quality}
+                          onChange={(e) => updateGroupFilter(group.seed, { quality: e.target.value })}
+                        >
+                          <option value="">清晰度</option>
+                          {groupChoices.quality.map((value) => (
+                            <option key={value} value={value}>清晰度:{qualityLabel(value)}</option>
+                          ))}
+                        </select>
+                      </span>
+                      <span className="seed-head-cell">
+                        <select
+                          className="seed-head-select"
+                          aria-label="按范围筛选"
+                          value={localFilter.radius}
+                          onChange={(e) => updateGroupFilter(group.seed, { radius: e.target.value })}
+                        >
+                          <option value="">范围</option>
+                          {groupChoices.radius.map((value) => (
+                            <option key={value} value={value}>
+                              范围:{(Number(value) * 2).toLocaleString()} 格
+                            </option>
+                          ))}
+                        </select>
+                      </span>
+                      <span className="seed-head-static">结构</span>
+                      <span className="seed-head-static">时间</span>
+                      <button
+                        className="btn btn-text seed-head-reset"
+                        disabled={!localActive}
+                        onClick={() => updateGroupFilter(group.seed, EMPTY_GROUP_FILTER)}
+                      >
+                        重置
+                      </button>
                     </div>
                     {visibleVariants.length === 0 ? (
                       <div className="empty-state seed-empty">这个种子下没有匹配的记录。</div>
