@@ -1663,12 +1663,19 @@ select.input {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  min-width: 112px;
+  width: 128px;
+  min-width: 0;
   font-size: 11px;
   color: var(--monet-on-surface-variant);
 }
 
+/* 种子输入需要完整数字/中文文本；宽度固定，和下面的下拉框成列。 */
+.seed-filter.seed-filter-seed {
+  width: 176px;
+}
+
 .seed-filter .input {
+  width: 100%;
   font-size: 12px;
   padding: 3px 6px;
 }
@@ -1737,47 +1744,66 @@ select.input {
 }
 
 .seed-variants {
+  /* 展开后的表格列；表头与每一行共用同一组列宽，才会真正对齐。 */
+  --seed-cols: 72px 56px 64px 88px 56px minmax(132px, 1fr) auto;
   border-top: 1px solid var(--monet-outline-variant);
 }
 
-.seed-variant {
+.seed-group-filters {
   display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 9px 7px;
+}
+
+.seed-group-filters .seed-filter {
+  width: 104px;
+}
+
+.seed-group-filters .seed-filter .input {
+  font-size: 11px;
+  padding: 2px 5px;
+}
+
+.seed-variant-head,
+.seed-variant {
+  display: grid;
+  grid-template-columns: var(--seed-cols);
   align-items: center;
   gap: 8px;
   padding: 6px 9px;
-  border-top: 1px solid var(--monet-outline-variant);
+}
+
+.seed-variant-head {
+  font-size: 11px;
+  color: var(--monet-on-surface-variant);
+  border-bottom: 1px solid var(--monet-outline-variant);
+}
+
+.seed-variant {
   font-size: 12px;
 }
 
-.seed-variant:first-child {
-  border-top: 0;
+.seed-variant + .seed-variant {
+  border-top: 1px solid var(--monet-outline-variant);
 }
 
 .seed-variant.active {
   background: color-mix(in srgb, var(--monet-primary) 10%, transparent);
 }
 
-.seed-variant-fields {
-  flex: 1;
+.seed-cell {
   min-width: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px 12px;
-}
-
-.seed-field {
   white-space: nowrap;
-}
-
-.seed-field b {
-  margin-right: 3px;
-  font-weight: 600;
-  color: var(--monet-on-surface-variant);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .seed-variant-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 2px;
   flex: none;
 }
@@ -1798,7 +1824,16 @@ select.input {
   }
 
   .seed-filter {
+    width: auto;
     min-width: 0;
+  }
+
+  .seed-filter.seed-filter-seed {
+    width: auto;
+  }
+
+  .seed-group-filters .seed-filter {
+    width: calc(50% - 3px);
   }
 
   .seed-group-row {
@@ -1815,14 +1850,22 @@ select.input {
     margin-left: 20px;
   }
 
-  .seed-variant {
-    flex-direction: column;
-    align-items: stretch;
+  /* 窄屏没有表头，退回一行一个字段，并用 data-label 补上字段名。 */
+  .seed-variant-head {
+    display: none;
   }
 
-  .seed-variant-fields {
+  .seed-variant {
+    display: flex;
     flex-direction: column;
+    align-items: stretch;
     gap: 1px;
+  }
+
+  .seed-cell::before {
+    content: attr(data-label) " ";
+    font-weight: 600;
+    color: var(--monet-on-surface-variant);
   }
 
   .seed-variant-actions {

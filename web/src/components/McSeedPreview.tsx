@@ -50,6 +50,20 @@ type View = {
   mode: "detail" | "biome";
 };
 
+/** 单个种子组内部的筛选；与顶部的全局筛选叠加，互不改写。 */
+type SeedGroupFilter = {
+  version: string;
+  engine: string;
+  quality: string;
+  radius: string;
+};
+const EMPTY_GROUP_FILTER: SeedGroupFilter = { version: "", engine: "", quality: "", radius: "" };
+const matchesGroupFilter = (entry: McSeedPreviewHistoryEntry, filter: SeedGroupFilter) =>
+  (!filter.version || entry.version === filter.version)
+  && (!filter.engine || (entry.engine ?? "java") === filter.engine)
+  && (!filter.quality || (entry.quality ?? "standard") === filter.quality)
+  && (!filter.radius || String(entry.radius) === filter.radius);
+
 /**
  * 种子预览：给一个种子，出一张"这世界长什么样"的图。
  *
@@ -86,6 +100,7 @@ export function McSeedPreview({
     radius: "",
   });
   const [expandedSeeds, setExpandedSeeds] = useState<Set<string>>(() => new Set());
+  const [groupFilters, setGroupFilters] = useState<Record<string, SeedGroupFilter>>({});
   const [deleting, setDeleting] = useState<string | null>(null);
   const [radius, setRadius] = useState(512);
   const [caps, setCaps] = useState<McSeedPreviewCapabilities | null>(null);
@@ -320,6 +335,11 @@ export function McSeedPreview({
   }, [history, historyFilter]);
   const filteredCount = filteredGroups.reduce((total, group) => total + group.variants.length, 0);
   const filtersActive = Object.values(historyFilter).some((value) => value !== "");
+  const updateGroupFilter = (seed: string, patch: Partial<SeedGroupFilter>) =>
+    setGroupFilters((previous) => ({
+      ...previous,
+      [seed]: { ...(previous[seed] ?? EMPTY_GROUP_FILTER), ...patch },
+    }));
 
   const toggleSeed = (seed: string) => {
     setExpandedSeeds((previous) => {
@@ -698,7 +718,7 @@ export function McSeedPreview({
           </div>
 
           <div className="seed-filters">
-            <label className="seed-filter">
+            <label className="seed-filter seed-filter-seed">
               <span>种子</span>
               <input
                 className="input mono"
@@ -772,8 +792,20 @@ export function McSeedPreview({
             <div className="empty-state seed-empty">没有匹配的种子记录。</div>
           ) : filteredGroups.map((group) => {
             const expanded = expandedSeeds.has(group.seed);
-            const latest = group.variants[0];
+            const localFilter = groupFilters[group.seed] ?? EMPTY_GROUP_FILTER;
+            const visibleVariants = group.variants
+              .filter((entry) => matchesGroupFilter(entry, localFilter));
+            const latest = visibleVariants[0] ?? group.variants[0];
             const busy = deleting === `seed:${group.seed}`;
+            const localActive = Object.values(localFilter).some((value) => value !== "");
+            // 只给这一组用的选项：别的种子用过的版本/档位不该出现在这里。
+            const groupChoices = {
+              version: [...new Set(group.variants.map((entry) => entry.version))].sort(),
+              engine: [...new Set(group.variants.map((entry) => entry.engine ?? "java"))].sort(),
+              quality: [...new Set(group.variants.map((entry) => entry.quality ?? "standard"))].sort(),
+              radius: [...new Set(group.variants.map((entry) => String(entry.radius)))]
+                .sort((a, b) => Number(a) - Number(b)),
+            };
             return (
               <div className="seed-group" key={group.seed}>
                 <div className="seed-group-row">
@@ -785,7 +817,11 @@ export function McSeedPreview({
                     <span className="seed-group-caret">{expanded ? "▾" : "▸"}</span>
                     <span className="seed-group-seed mono">{group.seed}</span>
                     <span className="seed-group-meta">
-                      {group.variants.length} 条 · 最近 {new Date(latest.generatedAt).toLocaleString()}
+                      {localActive
+                        ? `${visibleVariants.length} / ${group.variants.length}`
+                        : group.variants.length} 条
+                      {visibleVariants.length > 0
+                        && ` · 最近 ${new Date(latest.generatedAt).toLocaleString()}`}
                     </span>
                   </button>
                   <span className="seed-group-actions">
@@ -804,19 +840,93 @@ export function McSeedPreview({
                 </div>
                 {expanded && (
                   <div className="seed-variants">
-                    {group.variants.map((entry) => {
+                    {group.variants.length > 1 && (
+                      <div className="seed-group-filters">
+                        <label className="seed-filter">
+                          <span>版本</span>
+                          <select
+                            className="input"
+                            value={localFilter.version}
+                            onChange={(e) => updateGroupFilter(group.seed, { version: e.target.value })}
+                          >
+                            <option value="">全部</option>
+                            {groupChoices.version.map((value) => (
+                              <option key={value} value={value}>{value}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="seed-filter">
+                          <span>引擎</span>
+                          <select
+                            className="input"
+                            value={localFilter.engine}
+                            onChange={(e) => updateGroupFilter(group.seed, { engine: e.target.value })}
+                          >
+                            <option value="">全部</option>
+                            {groupChoices.engine.map((value) => (
+                              <option key={value} value={value}>{value === "java" ? "Java" : "MC"}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="seed-filter">
+                          <span>清晰度</span>
+                          <select
+                            className="input"
+                            value={localFilter.quality}
+                            onChange={(e) => updateGroupFilter(group.seed, { quality: e.target.value })}
+                          >
+                            <option value="">全部</option>
+                            {groupChoices.quality.map((value) => (
+                              <option key={value} value={value}>{qualityLabel(value)}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="seed-filter">
+                          <span>范围</span>
+                          <select
+                            className="input"
+                            value={localFilter.radius}
+                            onChange={(e) => updateGroupFilter(group.seed, { radius: e.target.value })}
+                          >
+                            <option value="">全部</option>
+                            {groupChoices.radius.map((value) => (
+                              <option key={value} value={value}>
+                                {(Number(value) * 2).toLocaleString()} 格
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <button
+                          className="btn btn-text"
+                          disabled={!localActive}
+                          onClick={() => updateGroupFilter(group.seed, EMPTY_GROUP_FILTER)}
+                        >
+                          重置
+                        </button>
+                      </div>
+                    )}
+                    <div className="seed-variant-head" aria-hidden="true">
+                      <span>版本</span>
+                      <span>引擎</span>
+                      <span>清晰度</span>
+                      <span>范围</span>
+                      <span>结构</span>
+                      <span>时间</span>
+                      <span />
+                    </div>
+                    {visibleVariants.length === 0 ? (
+                      <div className="empty-state seed-empty">这个种子下没有匹配的记录。</div>
+                    ) : visibleVariants.map((entry) => {
                       const active = view?.source === "history" && view.id === entry.id;
                       return (
                         <div className={`seed-variant${active ? " active" : ""}`} key={entry.id}>
-                          <div className="seed-variant-fields">
-                            <span className="seed-field"><b>版本</b>{entry.version}</span>
-                            <span className="seed-field"><b>引擎</b>{entry.engine === "server" ? "MC" : "Java"}</span>
-                            <span className="seed-field"><b>清晰度</b>{qualityLabel(entry.quality)}</span>
-                            <span className="seed-field"><b>范围</b>{(entry.radius * 2).toLocaleString()} 格</span>
-                            <span className="seed-field"><b>结构</b>{entry.structures ?? "—"}</span>
-                            <span className="seed-field"><b>时间</b>{new Date(entry.generatedAt).toLocaleString()}</span>
-                          </div>
-                          <div className="seed-variant-actions">
+                          <span className="seed-cell" data-label="版本">{entry.version}</span>
+                          <span className="seed-cell" data-label="引擎">{entry.engine === "server" ? "MC" : "Java"}</span>
+                          <span className="seed-cell" data-label="清晰度">{qualityLabel(entry.quality)}</span>
+                          <span className="seed-cell" data-label="范围">{(entry.radius * 2).toLocaleString()} 格</span>
+                          <span className="seed-cell" data-label="结构">{entry.structures ?? "—"}</span>
+                          <span className="seed-cell" data-label="时间">{new Date(entry.generatedAt).toLocaleString()}</span>
+                          <span className="seed-variant-actions">
                             <button className="btn btn-text" onClick={() => void openHistory(entry)}>
                               查看
                             </button>
@@ -828,7 +938,7 @@ export function McSeedPreview({
                             >
                               删除
                             </button>
-                          </div>
+                          </span>
                         </div>
                       );
                     })}
