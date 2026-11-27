@@ -970,11 +970,34 @@ public final class BuildToolchainManager {
 
     private static void writeWrapper(Path target, String relativeExecutable, String subcommand)
             throws IOException {
-        String script = "#!/bin/sh\n"
-                + "here=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n"
-                + "exec \"$here/" + relativeExecutable + "\" " + subcommand + " \"$@\"\n";
-        Files.writeString(target, script, StandardCharsets.UTF_8);
+        Files.writeString(target, wrapperScript(relativeExecutable, subcommand),
+                StandardCharsets.UTF_8);
         makeExecutable(target);
+    }
+
+    /// The shell wrapper around one Zig subcommand.
+    ///
+    /// Zig links with `ld.lld`, which rejects GNU ld's `--exclude-libs` (node-gyp
+    /// passes `-Wl,--exclude-libs,ALL` on Linux). The option only controls symbol
+    /// visibility, so dropping it keeps the link working; an argument that would
+    /// otherwise stop the source-build fallback before the first object file.
+    /// Arguments are re-quoted so paths with spaces and quotes survive.
+    ///
+    /// @param relativeExecutable the Zig binary relative to the wrapper's `bin`
+    /// @param subcommand         `cc`, `c++`, `ar`, `ranlib` or `ld.lld`
+    static String wrapperScript(String relativeExecutable, String subcommand) {
+        return "#!/bin/sh\n"
+                + "here=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n"
+                + "zig=\"$here/" + relativeExecutable + "\"\n"
+                + "args=\n"
+                + "for arg in \"$@\"; do\n"
+                + "  case \"$arg\" in\n"
+                + "    --exclude-libs*|-Wl,--exclude-libs*) continue ;;\n"
+                + "  esac\n"
+                + "  escaped=$(printf '%s' \"$arg\" | sed \"s/'/'\\\\\\\\''/g\")\n"
+                + "  args=\"$args '$escaped'\"\n"
+                + "done\n"
+                + "eval \"exec \\\"\\$zig\\\" " + subcommand + " $args\"\n";
     }
 
     private static @Nullable Path findZig(Path staging) {

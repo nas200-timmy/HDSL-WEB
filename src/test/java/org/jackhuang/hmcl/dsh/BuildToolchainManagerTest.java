@@ -35,6 +35,7 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -64,6 +65,32 @@ class BuildToolchainManagerTest {
     Path temp;
 
     private final Map<String, Path> fixtures = new LinkedHashMap<>();
+
+    @Test
+    void theZigWrapperDropsGnuOnlyExcludeLibs() throws Exception {
+        Assumptions.assumeFalse(OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS,
+                "the wrapper is a POSIX shell script");
+        Path root = Files.createDirectories(temp.resolve("zig-wrap"));
+        Files.createDirectories(root.resolve("bin"));
+        Files.createDirectories(root.resolve("zig"));
+        Path zig = root.resolve("zig").resolve("zig");
+        Files.writeString(zig, "#!/bin/sh\nsub=$1; shift\n"
+                + "for arg; do printf '<%s>\\n' \"$arg\"; done\n");
+        Files.setPosixFilePermissions(zig, PosixFilePermissions.fromString("rwxr-xr-x"));
+        Path wrapper = root.resolve("bin").resolve("cc");
+        Files.writeString(wrapper, BuildToolchainManager.wrapperScript("../zig/zig", "cc"));
+        Files.setPosixFilePermissions(wrapper, PosixFilePermissions.fromString("rwxr-xr-x"));
+
+        Process process = new ProcessBuilder(wrapper.toString(),
+                "--exclude-libs,ALL", "-Wl,--exclude-libs,ALL", "hello world", "a'b")
+                .redirectErrorStream(true)
+                .start();
+        String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        assertEquals(0, process.waitFor(), output);
+        assertTrue(output.contains("<hello world>"), output);
+        assertTrue(output.contains("<a'b>"), output);
+        assertFalse(output.contains("exclude-libs"), output);
+    }
 
     @Test
     void systemToolsArePreferredAndNoBundleIsDownloaded() throws Exception {
@@ -113,9 +140,11 @@ class BuildToolchainManagerTest {
                 "the Debian .so link is recreated rather than copied");
 
         String cc = Files.readString(version.resolve("bin/cc"), StandardCharsets.UTF_8);
-        assertTrue(cc.contains("exec \"$here/../zig/zig\" cc \"$@\""), cc);
+        assertTrue(cc.contains("zig=\"$here/../zig/zig\""), cc);
+        assertTrue(cc.contains("cc $args"), cc);
         String cxx = Files.readString(version.resolve("bin/c++"), StandardCharsets.UTF_8);
-        assertTrue(cxx.contains("exec \"$here/../zig/zig\" c++ \"$@\""), cxx);
+        assertTrue(cxx.contains("zig=\"$here/../zig/zig\""), cxx);
+        assertTrue(cxx.contains("c++ $args"), cxx);
 
         assertEquals(version.resolve("bin/cc").toString(), toolchain.environment().get("CC"));
         assertEquals(version.resolve("bin/c++").toString(), toolchain.environment().get("CXX"));

@@ -62,8 +62,11 @@ class BootstrapEnvironmentTest {
 
         assertEquals(runtime.resolve("bin") + File.pathSeparator + "/usr/bin:/bin",
                 additions.get("PATH"));
-        assertEquals(runtime.resolve("lib") + File.pathSeparator + "/opt/lib",
-                additions.get("LD_LIBRARY_PATH"));
+        // Host library directories are prepended before the closure so a newer
+        // host libstdc++ wins; the closure stays as the fallback and then the
+        // caller's original path.
+        String ld = additions.get("LD_LIBRARY_PATH");
+        assertTrue(ld.endsWith(runtime.resolve("lib") + File.pathSeparator + "/opt/lib"), ld);
         assertFalse(additions.containsKey("SSL_CERT_FILE"));
     }
 

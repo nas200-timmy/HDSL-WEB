@@ -123,6 +123,7 @@ Claude Web 有两个内核（社区引擎 `claude-web-engine`、官方 `@anthrop
 | 来源 | GitHub tag 的源码 zip（`codeload`），不用 PyPI：上游 `setup.py` 在 Nix 之外拒绝构建 wheel/sdist，editable 安装（`uv sync`）才是它认可的路 |
 | Python | 版本自己的 `pm/lock.json` 钉的 **3.14.9**（带 SQLite 3.53.1），不是 `uv python install`（会拿到 3.14.0b2，SQLite 3.50 的 WAL-reset 告警会让 state.db 降级） |
 | uv | 同一个 lock 钉的 **0.13.5**；面板里那个 0.7.13 解析不了 v0.22.5 的 `uv.lock`（revision 5） |
+| pnpm | 版本自己的 `pm/lock.json` 钉的 pnpm（如 0.23.4 的 **12.15.0**）；面板托管 Node 的 pnpm（11.x）过不了前端的精确版本校验。安装时按需下载到 `toolchain/pnpm-<version>` 并前置到 PATH，不改共享运行时 |
 | 依赖 | `uv sync --frozen --no-dev --extra all`（**不用** `--all-extras`：会拉 `[rl]` 的 torch/wandb 与 `[yc-bench]`） |
 | 前端 | `node-deps.mjs --workspace ui-tui --workspace web` → `web.mjs --icons` → `tui.mjs`；面板自带的 Node 22.23.1 就够（源码 `engines.node` 写的是 `^22.22.0 || ^24.11.0 || >=26`） |
 | 安装标记 | `hermes_cli/web_dist/index.html`（web 构建最后一步原子发布） |
@@ -593,6 +594,16 @@ pi-web 的客户端用 `base: "./"` 构建，所有请求经 `appUrl.ts` 解析�
 
 启动接口对 TUI 品牌回 `409 tui_only`；Go 客户端按 `/api/brands/capabilities` 的 `kind`
 隐藏启动/停止，只留终端。网页端同样按这个能力位渲染，不靠品牌 id 硬编码。
+
+### 极限环境的两个边界（2026-11-27）
+
+- **MiniMax 预编译需要 GLIBCXX_3.4.29**：面板的运行时闭包是 Debian 11 / gcc10（上限 3.4.28），
+  直接把它注入 `LD_LIBRARY_PATH` 会让宿主更新的 libstdc++ 被旧库覆盖。现在
+  `BootstrapEnvironment` 把宿主库目录排在闭包 `lib` 之前：宿主有更新的 libstdc++ / libgcc_s
+  就用宿主，缺失的才回落到闭包；宿主也没有时，MiniMax 回退到源码编译。
+- **源码回退的 Zig 链接参数**：node-gyp 在 Linux 会传 GNU ld 的
+  `-Wl,--exclude-libs,ALL`，Zig 的 lld 不认。Zig 的 `cc/c++/ld` 包装脚本会过滤掉这个只影响
+  符号可见性的参数，链接继续；这是让 MiniMax 的源码回退不被卡在第一个目标文件上的补丁。
 
 ## 相关代码
 

@@ -252,8 +252,17 @@ public final class BootstrapEnvironment {
             }
             if (exists.test(lib)) {
                 String existing = additions.get("LD_LIBRARY_PATH");
-                additions.put(keyOf(base, "LD_LIBRARY_PATH"), prepend(lib,
-                        existing != null ? existing : lookup(base, "LD_LIBRARY_PATH")));
+                String value = prepend(lib,
+                        existing != null ? existing : lookup(base, "LD_LIBRARY_PATH"));
+                // Host directories come first: the closure carries Debian 11 /
+                // gcc 10 libraries, and a binary that needs GLIBCXX_3.4.29 (or a
+                // newer libgcc_s) must get the host's copy when it has one.
+                // Anything the host lacks still falls through to the closure.
+                List<Path> host = BootstrapRuntimeManager.nodeLibrarySearchDirectories(false);
+                for (int i = host.size() - 1; i >= 0; i--) {
+                    value = prepend(host.get(i), value);
+                }
+                additions.put(keyOf(base, "LD_LIBRARY_PATH"), value);
             }
         }
         if (includePython && python != null && python.usable()

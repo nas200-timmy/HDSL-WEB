@@ -1727,7 +1727,8 @@ public final class BrandInstaller {
     }
 
     /// What `pm/lock.json` pins for one Hermes version.
-    record HermesLock(String uvVersion, HermesArtifact uv, String pythonVersion, HermesArtifact python) {
+    record HermesLock(String uvVersion, HermesArtifact uv, String pythonVersion,
+                      HermesArtifact python, @Nullable String pnpmVersion) {
     }
 
     /// Where upstream publishes every artifact it pins, by content address
@@ -1753,11 +1754,16 @@ public final class BrandInstaller {
             JsonObject packages = root.getAsJsonObject("packages");
             JsonObject uv = packages.getAsJsonObject("uv");
             JsonObject python = packages.getAsJsonObject("python");
+            JsonObject pnpm = packages.getAsJsonObject("pnpm");
+            String pnpmVersion = pnpm != null && pnpm.has("version")
+                    && pnpm.get("version").isJsonPrimitive()
+                    ? pnpm.get("version").getAsString() : null;
             return new HermesLock(
                     uv.get("version").getAsString(),
                     artifactOf(uv, platform),
                     python.get("version").getAsString(),
-                    artifactOf(python, platform));
+                    artifactOf(python, platform),
+                    pnpmVersion);
         } catch (IOException | RuntimeException e) {
             throw new BrandException("Could not read " + file + ": " + e.getMessage(), e);
         }
@@ -2111,11 +2117,18 @@ public final class BrandInstaller {
                     target, env, log, message, "generating the icons");
         }));
 
-        stage(message, 7, total, "安装前端依赖（node-deps）", 0.81, 0.08, 120, () ->
-                runChecked(List.of("node", "scripts/build/node-deps.mjs",
-                                "--source", target.toString(),
-                                "--workspace", "ui-tui", "--workspace", "web"),
-                        target, nodeEnv, log, message, "installing the front-end dependencies"));
+        stage(message, 7, total, "安装前端依赖（node-deps）", 0.81, 0.08, 120, () -> {
+            if (lock.pnpmVersion() != null && !lock.pnpmVersion().isBlank()) {
+                Path pnpmBin = ensureHermesPnpm(lock.pnpmVersion(), node, brandRoot,
+                        nodeEnv, log, message);
+                String path = nodeEnv.getOrDefault("PATH", "");
+                nodeEnv.put("PATH", pnpmBin + java.io.File.pathSeparator + path);
+            }
+            runChecked(List.of("node", "scripts/build/node-deps.mjs",
+                            "--source", target.toString(),
+                            "--workspace", "ui-tui", "--workspace", "web"),
+                    target, nodeEnv, log, message, "installing the front-end dependencies");
+        });
 
         stage(message, 8, total, "构建 web 工作台", 0.89, 0.06, 120, () ->
                 runChecked(List.of("node", "scripts/build/web.mjs",
@@ -2167,6 +2180,48 @@ public final class BrandInstaller {
     /// an `npm ci` failure. Building on a different runtime would make the
     /// install succeed and the start fail — the failure the panel exists to
     /// prevent, just moved one step later.
+    /// Installs the pnpm version a Hermes release pins in `pm/lock.json` into the
+    /// brand's own toolchain directory and returns its `node_modules/.bin`.
+    ///
+    /// Hermes' front-end build checks the exact pnpm version in `pm/lock.json`;
+    /// the managed Node's pnpm is whatever the panel installed (11.x), so the
+    /// build fails with "pnpm 12.15.0 is required ... found 11.29.0" before it
+    /// reads a source file. A per-brand pnpm keeps every other brand on the
+    /// shared runtime.
+    private static Path ensureHermesPnpm(String version, DshNodeRuntime node, Path brandRoot,
+                                         Map<String, String> env, Path log, Sink message)
+            throws BrandException {
+        if (!version.matches("[0-9][0-9A-Za-z.+-]*")) {
+            throw new BrandException("pm/lock.json pins an unusable pnpm version: " + version);
+        }
+        Path dir = brandRoot.resolve("toolchain").resolve("pnpm-" + version);
+        Path cli = dir.resolve("node_modules").resolve("pnpm").resolve("bin").resolve("pnpm.cjs");
+        Path bin = dir.resolve("node_modules").resolve(".bin");
+        if (!Files.isRegularFile(cli)) {
+            if (node.npm() == null) {
+                throw new BrandException("Hermes needs pnpm " + version
+                        + ", but the selected Node runtime has no npm to install it with");
+            }
+            FileUtils.deleteDirectoryQuietly(dir);
+            try {
+                Files.createDirectories(dir);
+            } catch (IOException e) {
+                throw new BrandException("Could not create " + dir + ": " + e.getMessage(), e);
+            }
+            message.accept("Installing pnpm " + version + " for Hermes");
+            runChecked(List.of(node.npm().toString(), "install", "--prefix", dir.toString(),
+                            "pnpm@" + version, "--no-audit", "--no-fund", "--loglevel=error",
+                            "--registry=" + NpmRegistry.effective().registry()),
+                    brandRoot, env, log, message, "installing pnpm " + version);
+        }
+        if (!Files.isRegularFile(cli)) {
+            throw new BrandException("pnpm " + version + " installed without its entry point under "
+                    + dir);
+        }
+        message.accept("pnpm " + version + " ready at " + bin);
+        return bin;
+    }
+
     private static DshNodeRuntime requireHermesNode(Brand brand, String version, String range)
             throws BrandException {
         org.jackhuang.hmcl.dsh.NodeSelection.Resolution current = BrandRuntime.currentNode(brand);

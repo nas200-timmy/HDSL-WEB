@@ -48,6 +48,25 @@ class BrandInstallerTest {
     Path root;
 
     @Test
+    void hermesLockNamesItsPnpmVersion() throws Exception {
+        String platform = BrandInstaller.hermesPlatform();
+        org.junit.jupiter.api.Assumptions.assumeTrue(platform != null,
+                "no Hermes build for this platform");
+        Path release = Files.createDirectories(root.resolve("hermes-src"));
+        Files.createDirectories(release.resolve("pm"));
+        String sha = "0".repeat(64);
+        Files.writeString(release.resolve("pm").resolve("lock.json"), """
+                {"packages":{
+                  "uv":{"version":"0.9.9","artifacts":{"%s":{"sha256":"%s","url":"https://example/uv"}}},
+                  "python":{"version":"3.12.16","artifacts":{"%s":{"sha256":"%s","url":"https://example/py"}}},
+                  "pnpm":{"version":"12.15.0"}
+                }}
+                """.formatted(platform, sha, platform, sha));
+        BrandInstaller.HermesLock lock = BrandInstaller.readHermesLock(release);
+        assertEquals("12.15.0", lock.pnpmVersion());
+    }
+
+    @Test
     void releasesAreNewestFirstAndFlagTheCurrentLink() throws IOException {
         install(Brand.KIMI, "2.0.2");
         Path current = install(Brand.KIMI, "2.1.1");
