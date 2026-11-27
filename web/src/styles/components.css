@@ -1870,7 +1870,7 @@ select.input {
     width: auto;
   }
 
-  /* 排序条：两列放四个选择器，标签与说明各占整行。 */
+  /* 排序条：两列放三个选择器，标签与说明各占整行。 */
   .seed-sort-row {
     display: grid;
     grid-template-columns: 1fr 1fr;
