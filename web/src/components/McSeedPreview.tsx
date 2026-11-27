@@ -39,52 +39,69 @@ const formatEta = (seconds: number) =>
 const qualityLabel = (quality?: string) =>
   quality === "extreme" ? "极限" : quality === "ultra" ? "超清" : quality === "high" ? "高清" : "标准";
 
-/** 组内排序键。`time` 是纯粹的时间关系，被选为主排序时不参与任何组合。 */
-type SeedSortKey = "time" | "engine" | "radius" | "quality";
+/**
+ * 组内排序键。`time` 是纯粹的时间关系：被选为主排序时，其余键一律不参与。
+ * 其余键用于「把相似参数排在一起」——同版本、同引擎、同清晰度、同大小。
+ */
+type SeedSortKey = "time" | "version" | "engine" | "quality" | "radius";
 const SEED_SORT_LABELS: Record<SeedSortKey, string> = {
   time: "时间（新→旧）",
-  engine: "引擎",
-  radius: "范围",
-  quality: "清晰度",
+  version: "版本（新→旧）",
+  engine: "引擎（Java→MC）",
+  quality: "清晰度（低→高）",
+  radius: "范围（小→大）",
 };
-const SEED_SORT_KEYS: SeedSortKey[] = ["time", "engine", "radius", "quality"];
+const SEED_SORT_KEYS: SeedSortKey[] = ["time", "version", "engine", "quality", "radius"];
+const SORT_LEVEL_LABELS = ["主", "次", "三", "四"] as const;
 
-const seedSortRank = (entry: McSeedPreviewHistoryEntry, key: SeedSortKey): number => {
+/** 排序链的槽位：主排序之外可以留空。 */
+type SeedSortChoice = SeedSortKey | "none";
+
+/** MC 版本号按数字段比较（`1.9` < `1.14`），而不是裸字典序。 */
+const compareSeedVersion = (left: string, right: string) =>
+  left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" });
+
+const compareSeedField = (
+  left: McSeedPreviewHistoryEntry,
+  right: McSeedPreviewHistoryEntry,
+  key: SeedSortKey,
+): number => {
   switch (key) {
+    case "version":
+      return compareSeedVersion(right.version, left.version);
     case "engine":
-      return entry.engine === "server" ? 1 : 0;
-    case "radius":
-      return entry.radius;
+      return (left.engine === "server" ? 1 : 0) - (right.engine === "server" ? 1 : 0);
     case "quality":
-      return QUALITY_TIERS.findIndex((tier) => tier.id === (entry.quality ?? "standard"));
+      return QUALITY_TIERS.findIndex((tier) => tier.id === (left.quality ?? "standard"))
+        - QUALITY_TIERS.findIndex((tier) => tier.id === (right.quality ?? "standard"));
+    case "radius":
+      return left.radius - right.radius;
     case "time":
-      return Date.parse(entry.generatedAt);
+      return Date.parse(right.generatedAt) - Date.parse(left.generatedAt);
   }
 };
 
 /**
- * 组内排序：主排序 → 次排序 → 时间倒序兜底。
+ * 组内排序：按给定的优先级链逐级比较，最后以时间倒序兜底。
  *
- * 主排序为 `time` 时直接返回纯时间序——其余键被完全忽略，不会因为"引擎相同"
- * 之类的原因重新洗牌。其他主排序下，次排序只在主排序打平时生效。
+ * 第一个槽位是主排序；为 `time` 时直接返回纯时间序——其余槽位被完全忽略，
+ * 不会因为"引擎相同"之类的原因重新洗牌。其余情况下每一级只在上一级打平时
+ * 生效，相同参数的记录里新记录在前。
  */
-const sortSeedVariants = (
-  variants: McSeedPreviewHistoryEntry[],
-  primary: SeedSortKey,
-  secondary: SeedSortKey | "none",
-) => {
+const sortSeedVariants = (variants: McSeedPreviewHistoryEntry[], choices: SeedSortChoice[]) => {
   const sorted = [...variants];
+  const primary = choices[0] ?? "time";
   if (primary === "time") {
-    return sorted.sort((left, right) => seedSortRank(right, "time") - seedSortRank(left, "time"));
+    return sorted.sort((left, right) => compareSeedField(left, right, "time"));
   }
+  const chain = [...new Set(choices)]
+    .filter((key): key is SeedSortKey => key !== "none");
   return sorted.sort((left, right) => {
-    const byPrimary = seedSortRank(left, primary) - seedSortRank(right, primary);
-    if (byPrimary !== 0) return byPrimary;
-    if (secondary !== "none" && secondary !== primary) {
-      const bySecondary = seedSortRank(left, secondary) - seedSortRank(right, secondary);
-      if (bySecondary !== 0) return bySecondary;
+    for (const key of chain) {
+      const byKey = compareSeedField(left, right, key);
+      if (byKey !== 0) return byKey;
     }
-    return seedSortRank(right, "time") - seedSortRank(left, "time");
+    return compareSeedField(left, right, "time");
   });
 };
 
@@ -150,10 +167,20 @@ export function McSeedPreview({
   });
   const [expandedSeeds, setExpandedSeeds] = useState<Set<string>>(() => new Set());
   const [groupFilters, setGroupFilters] = useState<Record<string, SeedGroupFilter>>({});
-  const [historySort, setHistorySort] = useState<{
-    primary: SeedSortKey;
-    secondary: SeedSortKey | "none";
-  }>({ primary: "time", secondary: "none" });
+  const [historySort, setHistorySort] = useState<SeedSortChoice[]>(["time", "none", "none", "none"]);
+  const setSortLevel = (index: number, value: SeedSortChoice) =>
+    setHistorySort((previous) => {
+      const next = [...previous];
+      next[index] = value;
+      // 某一级被清空、或与更高级重复时，后面的级别不再有意义。
+      for (let level = 1; level < next.length; level++) {
+        if (next[level] !== "none"
+            && (next[level - 1] === "none" || next.slice(0, level).includes(next[level]))) {
+          next[level] = "none";
+        }
+      }
+      return next;
+    });
   const [deleting, setDeleting] = useState<string | null>(null);
   const [radius, setRadius] = useState(512);
   const [caps, setCaps] = useState<McSeedPreviewCapabilities | null>(null);
@@ -361,7 +388,7 @@ export function McSeedPreview({
 
   const flatHistory = useMemo(() => history.flatMap((group) => group.variants), [history]);
   const historyChoices = useMemo(() => ({
-    version: [...new Set(flatHistory.map((entry) => entry.version))].sort(),
+    version: [...new Set(flatHistory.map((entry) => entry.version))].sort(compareSeedVersion),
     engine: [...new Set(flatHistory.map((entry) => entry.engine ?? "java"))].sort(),
     quality: [...new Set(flatHistory.map((entry) => entry.quality ?? "standard"))].sort(),
     radius: [...new Set(flatHistory.map((entry) => String(entry.radius)))].sort((a, b) => Number(a) - Number(b)),
@@ -832,48 +859,6 @@ export function McSeedPreview({
                 ))}
               </select>
             </label>
-            <label className="seed-filter">
-              <span>主排序</span>
-              <select
-                className="input"
-                value={historySort.primary}
-                onChange={(e) => {
-                  const primary = e.target.value as SeedSortKey;
-                  setHistorySort((previous) => ({
-                    primary,
-                    secondary: previous.secondary === primary ? "none" : previous.secondary,
-                  }));
-                }}
-              >
-                {SEED_SORT_KEYS.map((key) => (
-                  <option key={key} value={key}>{SEED_SORT_LABELS[key]}</option>
-                ))}
-              </select>
-            </label>
-            <label className="seed-filter">
-              <span>次排序</span>
-              <select
-                className="input"
-                value={historySort.secondary}
-                disabled={historySort.primary === "time"}
-                title={historySort.primary === "time"
-                  ? "时间排序是纯粹的时间关系，忽略次排序"
-                  : "主排序相同（例如同引擎、同清晰度）时再按这一项排"}
-                onChange={(e) => setHistorySort((previous) => ({
-                  ...previous,
-                  secondary: e.target.value as SeedSortKey | "none",
-                }))}
-              >
-                <option value="none">
-                  {historySort.primary === "time" ? "忽略（纯时间）" : "无（时间兜底）"}
-                </option>
-                {SEED_SORT_KEYS
-                  .filter((key) => key !== "time" && key !== historySort.primary)
-                  .map((key) => (
-                    <option key={key} value={key}>{SEED_SORT_LABELS[key]}</option>
-                  ))}
-              </select>
-            </label>
             <button
               className="btn btn-text"
               disabled={!filtersActive}
@@ -881,6 +866,39 @@ export function McSeedPreview({
             >
               重置
             </button>
+          </div>
+
+          <div className="seed-sort-row">
+            <span className="seed-sort-label">组内排序</span>
+            {SORT_LEVEL_LABELS.map((label, index) => (
+              <label className="seed-sort-field" key={label}>
+                <span>{label}</span>
+                <select
+                  className="input"
+                  value={historySort[index]}
+                  disabled={index > 0
+                    && (historySort[0] === "time" || historySort[index - 1] === "none")}
+                  onChange={(e) => setSortLevel(index, e.target.value as SeedSortChoice)}
+                >
+                  {index > 0 && (
+                    <option value="none">
+                      {historySort[0] === "time" ? "忽略" : "无"}
+                    </option>
+                  )}
+                  {SEED_SORT_KEYS
+                    .filter((key) => index === 0
+                      || (key !== "time" && !historySort.slice(0, index).includes(key)))
+                    .map((key) => (
+                      <option key={key} value={key}>{SEED_SORT_LABELS[key]}</option>
+                    ))}
+                </select>
+              </label>
+            ))}
+            <span className="seed-sort-hint">
+              {historySort[0] === "time"
+                ? "纯时间序：新→旧，其余键不参与"
+                : "按 主 → 次 → 三 → 四；同级内按时间新→旧兜底"}
+            </span>
           </div>
 
           {filteredGroups.length === 0 ? (
@@ -891,15 +909,14 @@ export function McSeedPreview({
             const visibleVariants = group.variants
               .filter((entry) => matchesGroupFilter(entry, localFilter));
             // 过滤结果本身按时间倒序（filteredGroups 里排好），最新一条仍在首位；
-            // 表格展示再按用户选的主/次排序重排，两者互不干扰。
-            const sortedVariants = sortSeedVariants(
-              visibleVariants, historySort.primary, historySort.secondary);
+            // 表格展示再按用户设的优先级链重排，两者互不干扰。
+            const sortedVariants = sortSeedVariants(visibleVariants, historySort);
             const latest = visibleVariants[0] ?? group.variants[0];
             const busy = deleting === `seed:${group.seed}`;
             const localActive = Object.values(localFilter).some((value) => value !== "");
             // 只给这一组用的选项：别的种子用过的版本/档位不该出现在这里。
             const groupChoices = {
-              version: [...new Set(group.variants.map((entry) => entry.version))].sort(),
+              version: [...new Set(group.variants.map((entry) => entry.version))].sort(compareSeedVersion),
               engine: [...new Set(group.variants.map((entry) => entry.engine ?? "java"))].sort(),
               quality: [...new Set(group.variants.map((entry) => entry.quality ?? "standard"))].sort(),
               radius: [...new Set(group.variants.map((entry) => String(entry.radius)))]

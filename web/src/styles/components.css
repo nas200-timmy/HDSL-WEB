@@ -1680,6 +1680,44 @@ select.input {
   padding: 3px 6px;
 }
 
+/* 组内排序：主 → 次 → 再；时间排序时后两级禁用。 */
+.seed-sort-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--monet-outline-variant);
+  border-radius: 6px;
+  background: var(--monet-surface-container-low);
+  font-size: 11px;
+  color: var(--monet-on-surface-variant);
+}
+
+.seed-sort-label {
+  font-weight: 600;
+}
+
+.seed-sort-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.seed-sort-field .input {
+  width: 150px;
+  font-size: 12px;
+  padding: 3px 6px;
+}
+
+.seed-sort-field .input:disabled {
+  opacity: 0.55;
+}
+
+.seed-sort-hint {
+  margin-left: auto;
+}
+
 .seed-group {
   border: 1px solid var(--monet-outline-variant);
   border-radius: 6px;
@@ -1830,6 +1868,25 @@ select.input {
 
   .seed-filter.seed-filter-seed {
     width: auto;
+  }
+
+  /* 排序条：两列放四个选择器，标签与说明各占整行。 */
+  .seed-sort-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .seed-sort-label,
+  .seed-sort-hint {
+    grid-column: 1 / -1;
+  }
+
+  .seed-sort-field .input {
+    width: 100%;
+  }
+
+  .seed-sort-hint {
+    margin-left: 0;
   }
 
   .seed-group-filters .seed-filter {
