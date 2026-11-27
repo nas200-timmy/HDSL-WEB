@@ -412,6 +412,24 @@ public final class BrandRuntime {
                             : BrandNodeRequirement.of(dataDir, brand, instance.version());
                     if (declared != null
                             && !org.jackhuang.hmcl.dsh.NodeSemver.satisfies(
+                                    resolvedNode.nodeVersion(), declared)
+                            && !explicit) {
+                        // `auto` may have picked an older system Node while a
+                        // compatible managed runtime is installed. Refusing a
+                        // launch the machine can actually run is a dead end; an
+                        // explicit selector keeps its refusal — the operator
+                        // pinned that runtime on purpose.
+                        org.jackhuang.hmcl.dsh.DshNodeRuntime compatible =
+                                managedSatisfying(declared);
+                        if (compatible != null) {
+                            LOG.info("brand launch " + brand.id() + "/" + id
+                                    + ": Node " + resolvedNode.nodeVersion() + " misses "
+                                    + declared + ", using managed Node " + compatible.nodeVersion());
+                            resolvedNode = compatible;
+                        }
+                    }
+                    if (declared != null
+                            && !org.jackhuang.hmcl.dsh.NodeSemver.satisfies(
                                     resolvedNode.nodeVersion(), declared)) {
                         String reason = "Cannot start the " + brand.id() + " instance " + id
                                 + " on Node.js " + resolvedNode.nodeVersion()
@@ -510,6 +528,25 @@ public final class BrandRuntime {
     static org.jackhuang.hmcl.dsh.NodeSelection.Resolution currentNode(Brand brand) {
         return org.jackhuang.hmcl.dsh.NodeSelection.resolve(
                 org.jackhuang.hmcl.dsh.NodeSelection.parse(null), nodeFallback(brand), false);
+    }
+
+    /// The newest managed runtime whose own Node version satisfies `range`.
+    ///
+    /// The auto resolution prefers the system Node, so a release with a stricter
+    /// `engines.node` than the harness's floor (hermes and Node 26) is refused
+    /// even while a compatible managed runtime sits on disk. This is the
+    /// fallback both the installer and the launcher take before giving up.
+    ///
+    /// @param range the release's `engines.node` range
+    /// @return the runtime, or `null` when none installed satisfies it
+    static @Nullable org.jackhuang.hmcl.dsh.DshNodeRuntime managedSatisfying(String range) {
+        for (org.jackhuang.hmcl.dsh.NodeRuntime runtime
+                : org.jackhuang.hmcl.dsh.NodeRuntimeManager.listInstalled()) {
+            if (org.jackhuang.hmcl.dsh.NodeSemver.satisfies(runtime.version(), range)) {
+                return org.jackhuang.hmcl.dsh.DshNodeRuntime.fromManaged(runtime);
+            }
+        }
+        return null;
     }
 
     /// The brand an instance belongs to, when this runtime knows it.

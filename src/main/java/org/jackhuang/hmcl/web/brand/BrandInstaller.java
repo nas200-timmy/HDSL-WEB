@@ -2229,6 +2229,14 @@ public final class BrandInstaller {
                 && NodeSemver.satisfies(current.runtime().nodeVersion(), range)) {
             return current.runtime();
         }
+        // The auto resolution prefers the system Node; when that one misses the
+        // release's range but a compatible managed runtime is installed, building
+        // on it is exactly what the guidance would tell the user to do by hand.
+        // Do it, and let the launcher's own fallback keep the two in step.
+        DshNodeRuntime compatible = BrandRuntime.managedSatisfying(range);
+        if (compatible != null) {
+            return compatible;
+        }
         throw new BrandException(hermesNodeGuidance(version, range, current));
     }
 
