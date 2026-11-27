@@ -73,6 +73,12 @@ import java.util.function.BooleanSupplier;
 @NotNullByDefault
 public final class TranscodeApiServlet extends HttpServlet {
 
+    /// The encoders a transcode-capable build is expected to carry. The
+    /// settings ledger shows how many of these each runtime actually declares
+    /// or probes, so a "LGPL minimal" build is visibly different from a full one.
+    static final java.util.List<String> COMMON_FEATURES = java.util.List.of(
+            "libx264", "libx265", "libvpx", "libaom", "libsvtav1");
+
     private final TranscodeModule module;
     private final ServerConfig config;
     private final TranscodeFeatureState feature;
@@ -956,6 +962,7 @@ public final class TranscodeApiServlet extends HttpServlet {
         }
         body.add("installed", installed);
 
+        body.add("commonFeatures", strings(COMMON_FEATURES));
         body.addProperty("default", config.transcode.defaultRuntime == null
                 ? "auto" : config.transcode.defaultRuntime);
         FfmpegLocator.Resolution resolution = FfmpegLocator.resolve(config);
@@ -981,10 +988,13 @@ public final class TranscodeApiServlet extends HttpServlet {
             system.addProperty("available", info.available());
             system.addProperty("version", info.version());
             system.addProperty("error", info.error() == null ? "" : info.error());
+            system.add("featuresProbed", strings(
+                    FfmpegRuntimeManager.probedFeatures(COMMON_FEATURES, info)));
         } else {
             system.addProperty("available", false);
             system.addProperty("version", "");
             system.addProperty("error", "ffmpeg/ffprobe not found on PATH");
+            system.add("featuresProbed", new JsonArray());
         }
         body.add("system", system);
 

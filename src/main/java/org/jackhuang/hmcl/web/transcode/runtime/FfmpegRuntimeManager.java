@@ -543,7 +543,7 @@ public final class FfmpegRuntimeManager {
         }
     }
 
-    static List<String> probedFeatures(List<String> declared, FfmpegProbe.FfmpegInfo info) {
+    public static List<String> probedFeatures(List<String> declared, FfmpegProbe.FfmpegInfo info) {
         List<String> result = new ArrayList<>();
         for (String feature : declared) {
             String needle = feature.toLowerCase(Locale.ROOT);

@@ -1922,6 +1922,8 @@ export interface TranscodeSystemRuntime {
   ffmpeg: string;
   ffprobe: string;
   error: string;
+  /** 常见编码器探测结果；旧后端不返回时为空。 */
+  featuresProbed?: string[];
 }
 
 export interface TranscodeCompilerChoice {
@@ -1937,6 +1939,8 @@ export interface TranscodeRuntime {
   current: TranscodeRuntimeVersion | null;
   installed: TranscodeRuntimeVersion[];
   catalog: TranscodeCatalogEntry[];
+  /** 判定「常见编解码是否齐全」的基准集合。 */
+  commonFeatures?: string[];
   default: string;
   resolved: TranscodeResolvedRuntime;
   system: TranscodeSystemRuntime;

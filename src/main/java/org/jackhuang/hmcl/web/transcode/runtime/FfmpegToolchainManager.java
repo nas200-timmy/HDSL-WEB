@@ -211,13 +211,24 @@ public final class FfmpegToolchainManager {
         }
 
         public String describe() {
+            String base;
             if (!portable) {
-                return os + "/" + arch + " (system toolchain)";
+                base = os + "/" + arch + " (system toolchain)";
+            } else {
+                String label = OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS
+                        ? "portable MinGW w64devkit " + windowsPortableVersion()
+                        : "portable Linux build toolchain (Zig + GNU make)";
+                base = os + "/" + arch + " (" + label + ")";
             }
-            String label = OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS
-                    ? "portable MinGW w64devkit " + windowsPortableVersion()
-                    : "portable Linux build toolchain (Zig + GNU make)";
-            return os + "/" + arch + " (" + label + ")";
+            // The runtime ledger shows this string as "编译时编译器"; the
+            // tool version is already probed, so name the C compiler here.
+            for (Tool tool : tools) {
+                if (tool.present() && ("cc".equals(tool.name()) || "gcc".equals(tool.name()))
+                        && tool.version() != null && !tool.version().isBlank()) {
+                    return base + " · " + tool.name() + " " + tool.version();
+                }
+            }
+            return base;
         }
     }
 

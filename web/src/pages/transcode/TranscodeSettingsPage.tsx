@@ -7,6 +7,8 @@ import { toast } from "../../store";
 import { ProgressBar } from "../../components/ProgressBar";
 import { HelpNote } from "./common";
 
+/// 判定「常见编解码是否齐全」的基准；后端返回 `commonFeatures` 时以它为准。
+const COMMON_CODECS = ["libx264", "libx265", "libvpx", "libaom", "libsvtav1"];
 
 function installJobLabel(job: TranscodeInstallJob): string {
   const kind = job.kind === "full-source" ? "全编码构建"
@@ -269,6 +271,83 @@ export function TranscodeSettingsPage() {
   const defaultIds = ["auto", "system", ...(runtime?.installed.map((item) => item.id) ?? [])];
   const defaultValue = runtime?.default && defaultIds.includes(runtime.default)
     ? runtime.default : runtime?.default ?? "auto";
+
+  // 运行环境账本：系统 PATH + 每个已安装的托管运行时，一行一个来源。
+  const catalogById = new Map(catalog.map((entry) => [entry.id, entry]));
+  const commonFeatures = runtime?.commonFeatures?.length ? runtime.commonFeatures : COMMON_CODECS;
+  const codecStatus = (probed?: string[]) => {
+    if (!probed) return null;
+    const present = commonFeatures.filter((feature) => probed.includes(feature));
+    return { present, missing: commonFeatures.filter((feature) => !present.includes(feature)) };
+  };
+  const hostOf = (url: string) => {
+    try { return new URL(url).host; } catch { return ""; }
+  };
+  type LedgerRow = {
+    key: string;
+    type: string;
+    download: string;
+    downloadTitle: string;
+    source: string;
+    sourceTitle: string;
+    version: string;
+    builder: string;
+    license: string;
+    codecs: { present: string[]; missing: string[] } | null;
+    compiler: string;
+    item?: TranscodeRuntime["installed"][number];
+    system?: boolean;
+    current: boolean;
+  };
+  const ledgerRows: LedgerRow[] = [];
+  if (runtime?.system.available) {
+    const directory = runtime.system.ffmpeg.replace(/[\\/][^\\/]+$/, "");
+    const codecs = codecStatus(runtime.system.featuresProbed);
+    ledgerRows.push({
+      key: "__system",
+      type: "系统 PATH",
+      download: directory ? `PATH · ${directory}` : "PATH",
+      downloadTitle: runtime.system.ffmpeg,
+      source: "—",
+      sourceTitle: "",
+      version: runtime.system.version || "未知",
+      builder: "系统 / 发行版",
+      license: "—",
+      codecs,
+      compiler: "—（发行版预编译）",
+      system: true,
+      current: runtime.resolved.kind === "system",
+    });
+  }
+  for (const item of runtime?.installed ?? []) {
+    const entry = catalogById.get(item.catalogId);
+    const legacy = item.source === "legacy";
+    const sourceBuilt = !legacy && (Boolean(item.buildRecipe) || Boolean(item.builtFrom)
+      || entry?.kind === "source");
+    const download = legacy
+      ? "旧版安装（来源未记录）"
+      : sourceBuilt
+        ? "本机构建（源码）"
+        : entry
+          ? `${vendorLabel(entry.vendor) || "未知构建方"} · ${hostOf(entry.mirrors?.[0] || "") || hostOf(entry.url) || "—"}`
+          : "托管目录（来源未记录）";
+    const codecs = codecStatus(item.featuresProbed);
+    ledgerRows.push({
+      key: item.id,
+      type: legacy ? "历史安装" : sourceBuilt ? "源码编译" : "二进制",
+      download,
+      downloadTitle: entry ? [entry.url, ...(entry.mirrors ?? [])].filter(Boolean).join("\n") : item.notes,
+      source: sourceBuilt ? (hostOf(item.builtFrom || "") || (item.builtFrom ? "源码" : "—")) : "—",
+      sourceTitle: sourceBuilt ? item.builtFrom || "" : "",
+      version: item.version || item.probeVersion || "—",
+      builder: sourceBuilt ? "本机编译" : legacy ? "未知" : vendorLabel(entry?.vendor ?? "") || "未知",
+      license: item.license || "—",
+      codecs,
+      compiler: item.toolchain || (sourceBuilt ? "—" : "—（预编译）"),
+      item,
+      current: item.current,
+    });
+  }
 
   return (
     <>
@@ -723,39 +802,70 @@ export function TranscodeSettingsPage() {
             {runtime?.resolved.ffmpeg ? ` · ${runtime.resolved.ffmpeg}` : ""}
           </span>
         </div>
-        {runtime && runtime.installed.length > 0 && (
-          <div style={{ padding: "0 8px 8px", display: "grid", gap: 4 }}>
-            {runtime.installed.map((item) => (
-              <div key={item.id}
-                   style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap",
-                            padding: "6px 0", borderTop: "1px solid var(--monet-outline-variant)" }}>
-                <span className="mono" style={{ fontSize: 12, minWidth: 120 }}>{item.id}</span>
-                <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
-                  {item.major ? `${item.major} · ` : ""}{item.version} · {item.license}
-                  {item.toolchain ? ` · ${item.toolchain}` : ""}
-                  {item.featuresProbed.length > 0
-                    ? ` · ${item.featuresProbed.length}/${item.featuresDeclared.length} 特性` : ""}
-                </span>
-                {item.current && <span className="tag running">current</span>}
-                {defaultValue === item.id
-                  ? <span className="tag running">默认</span>
-                  : <button className="btn btn-text"
-                            onClick={() => void setDefaultRuntime(item.id)}>设为默认</button>}
-                {!item.current && (
-                  <button className="btn btn-text"
-                          onClick={() => void selectRuntime(item.id)}>启用</button>
-                )}
-                {!item.current && (
-                  <button className="btn btn-text danger"
-                          onClick={() => void deleteRuntime(item.id)}>删除</button>
-                )}
+        {ledgerRows.length > 0 && (
+          <div className="ff-ledger">
+            <div className="ff-ledger-grid">
+              <div className="ff-ledger-head">
+                <span>类型</span>
+                <span>下载源</span>
+                <span>源码源</span>
+                <span>版本号</span>
+                <span>二进制构建方</span>
+                <span>许可</span>
+                <span>常见编解码</span>
+                <span>编译时编译器</span>
+                <span />
               </div>
-            ))}
-            {runtime.installed.length > 1 && (
-              <button className="btn btn-text" style={{ justifySelf: "start" }}
-                      onClick={() => void rollbackRuntime()}>
-                回滚到上一个版本
-              </button>
+              {ledgerRows.map((row) => {
+                const item = row.item;
+                const codecText = row.codecs
+                  ? `${row.codecs.present.length}/${row.codecs.present.length + row.codecs.missing.length}`
+                    + (row.codecs.missing.length > 0 ? `（缺 ${row.codecs.missing.length}）` : "")
+                  : "—";
+                return (
+                  <div key={row.key} className={`ff-ledger-row${row.current ? " is-current" : ""}`}>
+                    <span className="ff-ledger-cell" data-label="类型">{row.type}</span>
+                    <span className="ff-ledger-cell" data-label="下载源" title={row.downloadTitle}>{row.download}</span>
+                    <span className="ff-ledger-cell" data-label="源码源" title={row.sourceTitle}>{row.source}</span>
+                    <span className="ff-ledger-cell mono" data-label="版本号" title={row.version}>{row.version}</span>
+                    <span className="ff-ledger-cell" data-label="二进制构建方">{row.builder}</span>
+                    <span className="ff-ledger-cell" data-label="许可">{row.license}</span>
+                    <span
+                      className="ff-ledger-cell ff-ledger-codecs"
+                      data-label="常见编解码"
+                      title={row.codecs
+                        ? row.codecs.missing.length > 0
+                          ? `缺少：${row.codecs.missing.join("、")}`
+                          : `常见编码器齐全：${row.codecs.present.join("、")}`
+                        : "这个运行时没有探测信息"}
+                    >
+                      {codecText}
+                    </span>
+                    <span className="ff-ledger-cell" data-label="编译时编译器" title={row.compiler}>{row.compiler}</span>
+                    <span className="ff-ledger-cell ff-ledger-actions">
+                      {row.current && <span className="tag running">正在使用</span>}
+                      {row.system && defaultValue === "system" && <span className="tag running">默认</span>}
+                      {item && defaultValue === item.id && <span className="tag running">默认</span>}
+                      {item && defaultValue !== item.id && (
+                        <button className="btn btn-text" onClick={() => void setDefaultRuntime(item.id)}>设为默认</button>
+                      )}
+                      {item && !item.current && (
+                        <button className="btn btn-text" onClick={() => void selectRuntime(item.id)}>启用</button>
+                      )}
+                      {item && !item.current && (
+                        <button className="btn btn-text danger" onClick={() => void deleteRuntime(item.id)}>删除</button>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+            {runtime && runtime.installed.length > 1 && (
+              <div style={{ padding: "6px 9px" }}>
+                <button className="btn btn-text" onClick={() => void rollbackRuntime()}>
+                  回滚到上一个版本
+                </button>
+              </div>
             )}
           </div>
         )}
