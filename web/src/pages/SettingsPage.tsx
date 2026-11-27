@@ -104,10 +104,10 @@ type SettingsTab =
   | "about";
 
 const TLS_SOURCE_LABEL: Record<string, string> = {
-  none: "来源未知",
+  none: "HTTP 明文",
   "self-signed": "自签证书",
-  uploaded: "证书文件（PEM）",
-  pkcs12: "证书文件（PKCS#12）",
+  uploaded: "上传证书（PEM）",
+  pkcs12: "上传证书（PKCS#12）",
   acme: "ACME 证书",
 };
 
@@ -1663,10 +1663,7 @@ function tlsSourceTag(source: string): { cls: string; label: string } {
     case "self-signed":
       return { cls: "warn", label: TLS_SOURCE_LABEL["self-signed"] };
     default:
-      // An HTTPS listener with an unrecorded source is still HTTPS; do not
-      // label it "HTTP 明文" — that is what produced the contradictory
-      // "HTTP 明文  HTTPS 已启用" line.
-      return { cls: "warn", label: TLS_SOURCE_LABEL["none"] };
+      return { cls: "plain", label: TLS_SOURCE_LABEL["none"] };
   }
 }
 
@@ -1794,7 +1791,11 @@ function TlsTab() {
   };
 
   const tag = tls
-    ? (tls.https ? tlsSourceTag(tls.source) : { cls: "plain", label: "HTTP 明文" })
+    ? (tls.https
+        // HTTPS 已启用但来源未记录时，不再给一个和事实冲突的标签；
+        // 状态行只显示「HTTPS 已启用」。
+        ? (tls.source === "none" ? null : tlsSourceTag(tls.source))
+        : { cls: "plain", label: "HTTP 明文" })
     : null;
 
   return (
@@ -1842,27 +1843,11 @@ function TlsTab() {
                 </span>
               </div>
             )}
-            {tls.https && tls.source === "none" && (
-              <div
-                style={{
-                  margin: "4px 8px 8px",
-                  padding: "8px 12px",
-                  border: "1px solid var(--monet-outline-variant)",
-                  borderRadius: 4,
-                  color: "var(--monet-on-surface-variant)",
-                  fontSize: 12,
-                  lineHeight: 1.6,
-                }}
-              >
-                HTTPS 已启用，但面板没有记录证书来源——可能是旧版本上传的证书、
-                server.yaml 里配置的证书，或由外部注入。下面显示的是实际生效的证书信息。
-              </div>
-            )}
             <div className="comp-row">
               <span className="comp-label">当前状态</span>
               <span className="comp-value">
-                <span className={`tag ${tag?.cls}`}>{tag?.label}</span>
-                <span style={{ fontSize: 12 }}>{tls.https ? "HTTPS 已启用" : "HTTPS 未启用"}</span>
+                {tag && <span className={`tag ${tag.cls}`}>{tag.label}</span>}
+                {tls.https && <span style={{ fontSize: 12 }}>HTTPS 已启用</span>}
               </span>
             </div>
             {tls.subject && (
