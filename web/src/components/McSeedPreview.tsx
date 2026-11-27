@@ -51,8 +51,8 @@ const SEED_SORT_LABELS: Record<SeedSortKey, string> = {
   quality: "清晰度（低→高）",
   radius: "范围（小→大）",
 };
-const SEED_SORT_KEYS: SeedSortKey[] = ["time", "version", "engine", "quality", "radius"];
-const SORT_LEVEL_LABELS = ["主", "次", "三", "四"] as const;
+const SEED_SORT_KEYS: SeedSortKey[] = ["time", "version", "engine", "radius"];
+const SORT_LEVEL_LABELS = ["主", "次", "三"] as const;
 
 /** 排序链的槽位：主排序之外可以留空。 */
 type SeedSortChoice = SeedSortKey | "none";
@@ -95,7 +95,9 @@ const sortSeedVariants = (variants: McSeedPreviewHistoryEntry[], choices: SeedSo
     return sorted.sort((left, right) => compareSeedField(left, right, "time"));
   }
   const chain = [...new Set(choices)]
-    .filter((key): key is SeedSortKey => key !== "none");
+    .filter((key): key is SeedSortKey => key !== "none" && key !== "quality");
+  // 清晰度固定为末级：先按版本/引擎/范围分组，条件相同再比较清晰度。
+  chain.push("quality");
   return sorted.sort((left, right) => {
     for (const key of chain) {
       const byKey = compareSeedField(left, right, key);
@@ -167,7 +169,7 @@ export function McSeedPreview({
   });
   const [expandedSeeds, setExpandedSeeds] = useState<Set<string>>(() => new Set());
   const [groupFilters, setGroupFilters] = useState<Record<string, SeedGroupFilter>>({});
-  const [historySort, setHistorySort] = useState<SeedSortChoice[]>(["time", "none", "none", "none"]);
+  const [historySort, setHistorySort] = useState<SeedSortChoice[]>(["time", "none", "none"]);
   const setSortLevel = (index: number, value: SeedSortChoice) =>
     setHistorySort((previous) => {
       const next = [...previous];
@@ -897,7 +899,7 @@ export function McSeedPreview({
             <span className="seed-sort-hint">
               {historySort[0] === "time"
                 ? "纯时间序：新→旧，其余键不参与"
-                : "按 主 → 次 → 三 → 四；同级内按时间新→旧兜底"}
+                : "主 → 次 → 三，末级固定比较清晰度，最后按时间新→旧兜底"}
             </span>
           </div>
 
