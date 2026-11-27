@@ -31,5 +31,7 @@ class AcmeApiServletMaskTest {
                 AcmeApiServlet.maskValue("accessKeySecret", "secret-value-abcd", true));
         assertEquals("example.com", AcmeApiServlet.maskValue("zone", "example.com", false));
         assertEquals("••••", AcmeApiServlet.maskValue("accessKeyId", "abc", false));
+        assertEquals("••••west",
+                AcmeApiServlet.maskValue("secretId", "AKIDtencent-cloud-northwest", false));
     }
 }

@@ -195,4 +195,9 @@ public final class DigitalOceanDnsProvider implements AcmeDnsProvider {
     private static String key(String fqdn, String value) {
         return fqdn + "\n" + value;
     }
+
+    @Override
+    public void test() throws AcmeDnsException {
+        request("GET", "/v2/domains?per_page=1", null);
+    }
 }

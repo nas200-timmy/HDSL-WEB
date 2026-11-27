@@ -273,4 +273,12 @@ public final class AliyunDnsProvider implements AcmeDnsProvider {
     private static String key(String fqdn, String value) {
         return fqdn + "\n" + value;
     }
+
+    @Override
+    public void test() throws AcmeDnsException {
+        Map<String, String> params = new LinkedHashMap<>();
+        params.put("Action", "DescribeDomains");
+        params.put("PageSize", "1");
+        call(params);
+    }
 }

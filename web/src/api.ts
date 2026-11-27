@@ -552,6 +552,12 @@ export const api = {
       jsonInit("PUT", { ...body, panelPassword: await encryptPassword(body.panelPassword) }),
     ),
 
+  testAcmeCredentials: async (body: { id?: string; provider: string; dns: Record<string, string> }) =>
+    request<{ ok: boolean; provider: string; message: string }>(
+      "/api/settings/acme/credentials/test",
+      jsonInit("POST", body),
+    ),
+
   clearAcmeCredentials: async (panelPassword: string, id?: string) =>
     request<{ ok: boolean; credentialConfigured: boolean; eabConfigured: boolean }>(
       "/api/settings/acme/credentials",

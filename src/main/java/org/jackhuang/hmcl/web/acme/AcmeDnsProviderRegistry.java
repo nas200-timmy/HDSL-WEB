@@ -57,8 +57,60 @@ public final class AcmeDnsProviderRegistry {
             Map.entry("subdomain", "acme-dns 分配给你的子域名。"),
             Map.entry("apiUrl", "acme-dns 服务地址，如 https://auth.acme-dns.io。"));
 
+    /// Per-provider "where do I get this and what is the least privilege"
+    /// paragraph. Kept next to the registry so the settings page can render it
+    /// without another source of truth.
+    private static final Map<String, String> PROVIDER_HINTS = Map.ofEntries(
+            Map.entry("cloudflare",
+                    "Cloudflare 控制台 → My Profile → API Tokens → Create Token；"
+                            + "权限只需 Zone → DNS → Edit，Zone Resources 限定到要签发的域名。"
+                            + "不要用 Global API Key（账号级权限）。"),
+            Map.entry("aliyun",
+                    "阿里云 RAM 控制台 → 用户 → 创建子用户并勾选「编程访问」，"
+                            + "只授予 AliyunDNSFullAccess（或自定义只含 DNS 解析读写的策略）；"
+                            + "不要用主账号 AccessKey。"),
+            Map.entry("dnspod",
+                    "DNSPod 控制台 → 用户中心 → 密钥管理 → 创建 Token（格式 id,token）。"
+                            + "这不是腾讯云 SecretId/SecretKey；腾讯云密钥请选"
+                            + "「腾讯云 DNSPod（API 3.0）」。"),
+            Map.entry("tencent",
+                    "腾讯云控制台 → 访问管理 → API 密钥管理 → 新建密钥；"
+                            + "建议绑定只允许 DNSPod 域名解析读写的 CAM 子用户策略，"
+                            + "不要用主账号密钥；测试凭证会调用 DescribeDomainList。"),
+            Map.entry("huawei",
+                    "华为云控制台 → 我的凭证 → 访问密钥；建议创建只授权 DNS 的 IAM 子用户。"),
+            Map.entry("route53",
+                    "AWS IAM → 用户 → 安全凭据 → 创建访问密钥；策略只授予 Route 53 所需的"
+                            + " ChangeResourceRecordSets / ListHostedZones / ListResourceRecordSets。"),
+            Map.entry("godaddy",
+                    "GoDaddy 开发者后台 → API Keys；只有 Production Key 能修改正式域名解析。"),
+            Map.entry("namecheap",
+                    "Namecheap → Profile → Tools → API Access；必须把面板的公网出口 IP 加入"
+                            + " Whitelisted IPs，否则一律拒绝。"),
+            Map.entry("digitalocean",
+                    "DigitalOcean 控制台 → API → Tokens → Generate New Token；"
+                            + "可只给 DNS 读写范围。"),
+            Map.entry("vultr",
+                    "Vultr 控制台 → Account → API Keys；建议为本面板单独创建一把 Key。"),
+            Map.entry("gandi",
+                    "Gandi 控制台 → 账户设置 → Personal Access Token；权限限定到 DNS。"),
+            Map.entry("porkbun",
+                    "Porkbun 控制台 → API Access；先开启 API Access，再创建 API Key/Secret。"),
+            Map.entry("rfc2136",
+                    "在 DNS 服务器上创建只允许更新 _acme-challenge 记录的 TSIG key；"
+                            + "不要复用管理员 key。"),
+            Map.entry("acme-dns",
+                    "acme-dns 服务注册后得到 username/password；它只处理 ACME challenge，"
+                            + "权限天然很小。"));
+
     public record Info(String id, String label, String group, boolean implemented,
                        List<Field> fields) {
+        /// One paragraph shown above the credential fields: which credential
+        /// type this provider expects, where to create it, and the minimum
+        /// permission. Empty for providers without a written guide.
+        public String credentialHint() {
+            return PROVIDER_HINTS.getOrDefault(id, "");
+        }
     }
 
     private static final List<Info> PROVIDERS = List.of(
@@ -69,9 +121,12 @@ public final class AcmeDnsProviderRegistry {
                     new Field("accessKeyId", "AccessKey ID", false, true),
                     new Field("accessKeySecret", "AccessKey Secret", true, true),
                     new Field("zone", "Zone（由证书决定）", false, false))),
-            new Info("dnspod", "DNSPod / 腾讯云", "Tier 1", true, List.of(
+            new Info("dnspod", "DNSPod（旧版 Token）", "Tier 1", true, List.of(
                     new Field("token", "API Token", true, true),
                     new Field("zone", "Zone（由证书决定）", false, false))),
+            new Info("tencent", "腾讯云 DNSPod（API 3.0）", "Tier 1", true, List.of(
+                    new Field("secretId", "SecretId", false, true),
+                    new Field("secretKey", "SecretKey", true, true))),
             new Info("huawei", "华为云 DNS", "Tier 1", false, List.of(
                     new Field("accessKeyId", "AccessKey ID", false, true),
                     new Field("accessKeySecret", "AccessKey Secret", true, true),
@@ -168,6 +223,8 @@ public final class AcmeDnsProviderRegistry {
                     values.get("accessKeyId"), values.get("accessKeySecret"), values.get("zone"));
             case "dnspod" -> new DnspodDnsProvider(
                     values.get("token"), values.get("zone"));
+            case "tencent" -> new TencentDnsProvider(
+                    values.get("secretId"), values.get("secretKey"), values.get("zone"));
             case "godaddy" -> new GoDaddyDnsProvider(
                     values.get("apiKey"), values.get("apiSecret"), values.get("zone"));
             case "digitalocean" -> new DigitalOceanDnsProvider(

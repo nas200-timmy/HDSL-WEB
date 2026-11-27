@@ -304,6 +304,8 @@ export interface AcmeProviderInfo {
   label: string;
   group: string;
   implemented: boolean;
+  /** 凭据类型、去哪申请、最小权限；旧后端不返回时为空。 */
+  credentialHint?: string;
   fields: AcmeProviderField[];
 }
 

@@ -356,9 +356,13 @@ HDSL_SMOKE_HTTPS=true ./scripts/security-smoke.sh <jar>    # 期望 PASS
 面板内置 ACME，默认关闭；启用后自己签发和续期，不需要 certbot，也不需要开放 80 端口。
 
 - 入口：设置 →「HTTPS 证书」→ ACME，或直接写 `server.yaml` 的 `https.acme`。
-- 已实现的 DNS provider：Cloudflare、阿里云 DNS、DNSPod / 腾讯云、GoDaddy、
+- 已实现的 DNS provider：Cloudflare、阿里云 DNS、DNSPod（旧版 `id,token`）、
+  腾讯云 DNSPod API 3.0（SecretId/SecretKey + TC3-HMAC-SHA256）、GoDaddy、
   DigitalOcean、Vultr。华为云、Route 53、Namecheap、Gandi、Porkbun、RFC 2136、
   acme-dns 出现在列表里但尚未实现，选了会 400。
+- 每家 provider 的凭据类型不同（Token / AccessKey / SecretId+SecretKey），
+  添加凭证时页面会显示「去哪申请 + 最小权限」的说明；保存前可用「测试凭证」
+  做一次只读校验，提前暴露凭据类型错误或权限不足。
 - CA：Let's Encrypt（含 staging）、ZeroSSL、Google Trust Services、Buypass、
   HARICA、SSL.com、自定义 ACME 目录；通配符靠 DNS-01，必须用支持通配符的 CA。
 - 只支持 DNS-01：不需要公网 80/443 入站，但需要能出站访问 CA 与 DNS provider API，

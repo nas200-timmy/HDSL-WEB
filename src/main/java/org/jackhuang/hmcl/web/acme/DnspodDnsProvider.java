@@ -244,4 +244,9 @@ public final class DnspodDnsProvider implements AcmeDnsProvider {
     private static String key(String fqdn, String value) {
         return fqdn + "\n" + value;
     }
+
+    @Override
+    public void test() throws AcmeDnsException {
+        call("Domain.List", Map.of("type", "all", "offset", "0", "length", "1"));
+    }
 }

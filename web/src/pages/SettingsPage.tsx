@@ -2196,6 +2196,7 @@ function AcmeCard() {
   const [credHmac, setCredHmac] = useState("");
   const [credPassword, setCredPassword] = useState("");
   const [credError, setCredError] = useState<string | null>(null);
+  const [credTesting, setCredTesting] = useState(false);
 
   // 删除凭证
   const [deleteCredId, setDeleteCredId] = useState<string | null>(null);
@@ -2490,6 +2491,23 @@ function AcmeCard() {
       setCredError(errMsg(e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const testCredential = async () => {
+    setCredError(null);
+    setCredTesting(true);
+    try {
+      const result = await withElevation(() => api.testAcmeCredentials({
+        id: credDialog?.mode === "edit" ? credDialog.id : undefined,
+        provider: credProvider,
+        dns: credDns,
+      }));
+      toast("success", result.message || "凭证可用");
+    } catch (e) {
+      setCredError(errMsg(e));
+    } finally {
+      setCredTesting(false);
     }
   };
 
@@ -3253,6 +3271,11 @@ function AcmeCard() {
               ))}
             </select>
             <span className="form-hint">域名的 DNS 托管在哪家就选哪家；编辑时不能换厂商，换厂商请新建一条。</span>
+            {credProviderInfo?.credentialHint && (
+              <span className="form-hint" style={{ lineHeight: 1.7 }}>
+                {credProviderInfo.credentialHint}
+              </span>
+            )}
             <span className="form-hint">
               Zone（主域名）不在这里填：申请证书时会自动使用证书的主域名，同一个凭证可以给多个主域名用。
             </span>
@@ -3304,8 +3327,11 @@ function AcmeCard() {
           </div>
           {credError && <div className="form-error">{credError}</div>}
           <div className="dialog-actions">
-            <button className="btn btn-text dim" disabled={busy} onClick={() => setCredDialog(null)}>取消</button>
-            <button className="btn btn-raised" disabled={busy} onClick={() => void saveCredential()}>
+            <button className="btn btn-text dim" disabled={busy || credTesting} onClick={() => setCredDialog(null)}>取消</button>
+            <button className="btn btn-outline" disabled={busy || credTesting} onClick={() => void testCredential()}>
+              {credTesting ? "测试中…" : "测试凭证"}
+            </button>
+            <button className="btn btn-raised" disabled={busy || credTesting} onClick={() => void saveCredential()}>
               {busy ? "保存中…" : "保存凭证"}
             </button>
           </div>
