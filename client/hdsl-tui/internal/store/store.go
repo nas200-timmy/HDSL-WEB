@@ -35,12 +35,15 @@ type Server struct {
 }
 
 // Session is the remembered login. Cookie is the value of the panel's session
-// cookie, never its name — the name is fixed by the protocol.
+// cookie; CookieName is the name it was issued under. Panels since v0.6.96 bind
+// the name to the installation and port (`hdsl_session_<id12>_<port>`), so the
+// name travels with the value; an empty name means the legacy `hdsl_session`.
 type Session struct {
-	Server   string    `json:"server"`
-	Username string    `json:"username,omitempty"`
-	Cookie   string    `json:"cookie"`
-	SavedAt  time.Time `json:"savedAt,omitempty"`
+	Server     string    `json:"server"`
+	Username   string    `json:"username,omitempty"`
+	CookieName string    `json:"cookieName,omitempty"`
+	Cookie     string    `json:"cookie"`
+	SavedAt    time.Time `json:"savedAt,omitempty"`
 }
 
 // Config is the whole file.
@@ -204,12 +207,13 @@ func (c *Config) Forget(url string) {
 	}
 }
 
-// Remember stores the session cookie for server.
-func (c *Config) Remember(server, username, cookie string, now time.Time) {
+// Remember stores the session cookie (and the name it was issued under) for
+// server.
+func (c *Config) Remember(server, username, cookieName, cookie string, now time.Time) {
 	if c == nil || cookie == "" || !c.RememberSession {
 		return
 	}
-	c.Session = &Session{Server: server, Username: username, Cookie: cookie, SavedAt: now}
+	c.Session = &Session{Server: server, Username: username, CookieName: cookieName, Cookie: cookie, SavedAt: now}
 }
 
 // ClearSession forgets the cookie but keeps the server list.

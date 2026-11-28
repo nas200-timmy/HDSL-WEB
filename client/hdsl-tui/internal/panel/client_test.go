@@ -55,6 +55,47 @@ func TestLoginCapturesSessionCookie(t *testing.T) {
 	}
 }
 
+func TestLoginCapturesPerInstanceSessionCookie(t *testing.T) {
+	server := fakeserver.New()
+	defer server.Close()
+	const name = "hdsl_session_abcdef123456_3080"
+	server.Handle("POST", "/api/auth/login", func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: name, Value: "bound-token", Path: "/", HttpOnly: true})
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"username":"admin"}`))
+	})
+	client := newClient(t, server)
+
+	if _, err := client.Login(context.Background(), "admin", "secret"); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	if client.Cookie() == nil || client.Cookie().Name != name {
+		t.Fatalf("cookie = %+v, want name %q", client.Cookie(), name)
+	}
+	if client.CookieName() != name {
+		t.Errorf("CookieName() = %q, want %q", client.CookieName(), name)
+	}
+	if !strings.Contains(client.Session(), name+"=bound-token") {
+		t.Errorf("Session() = %q", client.Session())
+	}
+}
+
+func TestSetSessionNamedReplaysTheBoundName(t *testing.T) {
+	server := fakeserver.New()
+	defer server.Close()
+	client := newClient(t, server)
+
+	const name = "hdsl_session_abcdef123456_3080"
+	client.SetSessionNamed(name, "bound-token")
+	if !strings.Contains(client.Session(), name+"=bound-token") {
+		t.Errorf("Session() = %q", client.Session())
+	}
+	client.SetSessionNamed("", "")
+	if client.CookieName() != panel.SessionCookie {
+		t.Errorf("CookieName() after clear = %q", client.CookieName())
+	}
+}
+
 func TestLoginRejectsBadCredentials(t *testing.T) {
 	server := fakeserver.New()
 	defer server.Close()

@@ -7,11 +7,17 @@ import (
 	"strings"
 )
 
-// SessionCookie is the cookie carrying the panel session. The HTTP client
-// holds it in memory; whether it reaches the config file is the user's choice
-// (store.RememberSession), and it is the only thing the file stores that
-// authenticates anything.
+// SessionCookie is the legacy name of the cookie carrying the panel session.
+// Since v0.6.96 the panel binds the name to the installation and port
+// (`hdsl_session_<id12>_<port>`), so two panels on one host stop overwriting
+// each other's login. [IsSessionCookie] matches both shapes.
 const SessionCookie = "hdsl_session"
+
+// IsSessionCookie reports whether name is the panel session cookie, in either
+// the legacy or the per-installation form.
+func IsSessionCookie(name string) bool {
+	return name == SessionCookie || strings.HasPrefix(name, SessionCookie+"_")
+}
 
 // APIError is an error body: every /api failure (except a bare transport
 // failure) is `{"error":"..."}`, and the interesting part is usually the

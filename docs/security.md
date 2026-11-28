@@ -341,7 +341,7 @@ SMB/NFS export、某些 Windows 共享卷同样如此）会把**共享属主**�
 | 数据 | 状态 |
 |---|---|
 | `/plain/login` 的 username / password | 明文 POST |
-| 登录后的 `hdsl_session` Cookie | 明文 Bearer（HTTP 下没有 `Secure`） |
+| 登录后的 `hdsl_session*` Cookie（v0.6.96 起带实例 id 与端口） | 明文 Bearer（HTTP 下没有 `Secure`） |
 | `/plain` 的会话列表、聊天正文、发送内容、附件 | 明文 |
 | `/plain/elevate` 的开发者密码 | 明文 POST |
 | SPA 的 HTML / JS、普通 API 响应、`/i/<id>/` 反代内容 | 明文 |

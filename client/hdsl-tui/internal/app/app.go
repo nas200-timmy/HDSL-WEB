@@ -652,7 +652,7 @@ func (a *App) restoreSession(ctx context.Context, server string) bool {
 	if !ok {
 		return false
 	}
-	a.client.SetSession(saved.Cookie)
+	a.client.SetSessionNamed(saved.CookieName, saved.Cookie)
 	if _, err := a.client.Instances(ctx); err == nil {
 		a.username = saved.Username
 		if a.username == "" {
@@ -764,7 +764,7 @@ func (a *App) login(ctx context.Context, server string) bool {
 		}
 		a.username = name
 		a.cfg.Touch(server, name, time.Now())
-		a.cfg.Remember(server, name, a.client.CookieValue(), time.Now())
+		a.cfg.Remember(server, name, a.client.CookieName(), a.client.CookieValue(), time.Now())
 		a.save()
 		a.logf("已登录，会话已保存（%s）", a.cfg.Path())
 		return true

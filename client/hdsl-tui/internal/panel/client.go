@@ -82,15 +82,35 @@ func (c *Client) CookieValue() string {
 	return c.cookie.Value
 }
 
+// CookieName is the name the panel bound the session cookie to, or the legacy
+// name before login. It is what must be stored alongside the value so a
+// remembered login can be replayed with the same name.
+func (c *Client) CookieName() string {
+	if c.cookie == nil {
+		return SessionCookie
+	}
+	return c.cookie.Name
+}
+
 // SetSession installs a session token captured earlier (or clears it when raw
-// is empty). The panel decides whether it is still valid; the first request
-// after this call is the probe.
+// is empty) under the legacy cookie name. Panels since v0.6.96 use a name bound
+// to the installation and port, so a remembered login must go through
+// [Client.SetSessionNamed].
 func (c *Client) SetSession(raw string) {
+	c.SetSessionNamed(SessionCookie, raw)
+}
+
+// SetSessionNamed installs a session token captured earlier under the name the
+// panel actually used.
+func (c *Client) SetSessionNamed(name, raw string) {
 	if raw == "" {
 		c.cookie = nil
 		return
 	}
-	c.cookie = &http.Cookie{Name: SessionCookie, Value: raw, Path: "/"}
+	if name == "" {
+		name = SessionCookie
+	}
+	c.cookie = &http.Cookie{Name: name, Value: raw, Path: "/"}
 }
 
 // URL resolves a panel-relative path against the base, keeping any prefix the
@@ -224,7 +244,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 
 func (c *Client) captureCookie(response *http.Response) {
 	for _, cookie := range response.Cookies() {
-		if cookie.Name == SessionCookie {
+		if IsSessionCookie(cookie.Name) {
 			c.cookie = cookie
 			return
 		}
@@ -272,7 +292,7 @@ func (c *Client) Login(ctx context.Context, username, password string) (string, 
 		return "", err
 	}
 	if c.cookie == nil {
-		return "", &TransportError{Op: "POST /api/auth/login", Err: fmt.Errorf("登录成功但没有收到 %s Cookie", SessionCookie)}
+		return "", &TransportError{Op: "POST /api/auth/login", Err: fmt.Errorf("登录成功但没有收到 %s* Cookie", SessionCookie)}
 	}
 	var body loginBody
 	if err := json.Unmarshal(data, &body); err != nil {

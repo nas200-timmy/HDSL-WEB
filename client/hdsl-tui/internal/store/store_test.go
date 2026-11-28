@@ -34,7 +34,7 @@ func TestSaveIsPrivateAndRoundTrips(t *testing.T) {
 	}
 	now := time.Date(2026, 10, 23, 20, 0, 0, 0, time.Local)
 	config.Touch("https://panel.example.com:8443", "admin", now)
-	config.Remember("https://panel.example.com:8443", "admin", "cookie-value", now)
+	config.Remember("https://panel.example.com:8443", "admin", "", "cookie-value", now)
 	if err := config.Save(); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -91,11 +91,11 @@ func TestTouchDeduplicatesAndSortsByRecentUse(t *testing.T) {
 func TestSavedSessionIsScopedToItsServer(t *testing.T) {
 	config, _ := Load(tempPath(t))
 	now := time.Now()
-	config.Remember("https://a.test", "admin", "cookie", now)
+	config.Remember("https://a.test", "admin", "hdsl_session_abc123_3080", "cookie", now)
 	if _, ok := config.SavedSession("https://b.test"); ok {
 		t.Error("a session must not leak to another panel")
 	}
-	if session, ok := config.SavedSession("https://a.test"); !ok || session.Cookie != "cookie" {
+	if session, ok := config.SavedSession("https://a.test"); !ok || session.Cookie != "cookie" || session.CookieName != "hdsl_session_abc123_3080" {
 		t.Errorf("session = %+v ok=%v", session, ok)
 	}
 	config.ClearSession()
@@ -107,7 +107,7 @@ func TestSavedSessionIsScopedToItsServer(t *testing.T) {
 func TestRememberObeysTheSwitch(t *testing.T) {
 	config, _ := Load(tempPath(t))
 	config.RememberSession = false
-	config.Remember("https://a.test", "admin", "cookie", time.Now())
+	config.Remember("https://a.test", "admin", "", "cookie", time.Now())
 	if _, ok := config.SavedSession("https://a.test"); ok {
 		t.Error("RememberSession=false still stored a cookie")
 	}
@@ -118,7 +118,7 @@ func TestForgetDropsServerAndItsSession(t *testing.T) {
 	now := time.Now()
 	config.Touch("https://a.test", "admin", now)
 	config.Touch("https://b.test", "admin", now)
-	config.Remember("https://a.test", "admin", "cookie", now)
+	config.Remember("https://a.test", "admin", "", "cookie", now)
 	config.Forget("https://a.test")
 	if len(config.RecentServers()) != 1 || config.RecentServers()[0].URL != "https://b.test" {
 		t.Errorf("servers = %+v", config.RecentServers())
