@@ -175,12 +175,10 @@
 
 - `./gradlew test --rerun-tasks`：1923 例、0 失败、0 错误、28 跳过（333 个测试类）；
 - `cd web && npm run typecheck && npm run build && npm run compat`：通过；
-- `cd client/hdsl-tui && go test -count=1 ./...`：9 个包全部 ok。
-
-发布前仍需补跑：
-
-- `./gradlew shadowJar -PreleaseVersion=0.6.96` 与 `scripts/api-smoke.py`；
-- `scripts/security-smoke.sh`（明文）与 `HDSL_SMOKE_HTTPS=true`。
+- `cd client/hdsl-tui && go test -count=1 ./...`：9 个包全部 ok；
+- `./gradlew shadowJar -PreleaseVersion=0.6.96`：成功，manifest `Implementation-Version: 0.6.96`；
+- `scripts/api-smoke.py`：43/43 PASS；
+- `scripts/security-smoke.sh`：明文 PASS（13 ok + 1 skip）；`HDSL_SMOKE_HTTPS=true`：PASS（22 ok）。
 
 开发期已实测：三容器（debian-slim / debian 标准 / 全配齐）冒烟；9 个品牌在三种
 环境的安装矩阵；hermes 在 full 环境安装 + 启动 + 反代 200；ffmpeg 全编码源码
