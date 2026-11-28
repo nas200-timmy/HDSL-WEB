@@ -17,15 +17,24 @@
  */
 package org.jackhuang.hmcl.web.brand;
 
+import kala.compress.archivers.tar.TarArchiveEntry;
+import kala.compress.archivers.tar.TarArchiveOutputStream;
+import org.jackhuang.hmcl.dsh.BuildToolchainManager;
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.zip.GZIPOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -37,6 +46,25 @@ class BrandInstallerTest {
 
     @TempDir
     Path root;
+
+    @Test
+    void hermesLockNamesItsPnpmVersion() throws Exception {
+        String platform = BrandInstaller.hermesPlatform();
+        org.junit.jupiter.api.Assumptions.assumeTrue(platform != null,
+                "no Hermes build for this platform");
+        Path release = Files.createDirectories(root.resolve("hermes-src"));
+        Files.createDirectories(release.resolve("pm"));
+        String sha = "0".repeat(64);
+        Files.writeString(release.resolve("pm").resolve("lock.json"), """
+                {"packages":{
+                  "uv":{"version":"0.9.9","artifacts":{"%s":{"sha256":"%s","url":"https://example/uv"}}},
+                  "python":{"version":"3.12.16","artifacts":{"%s":{"sha256":"%s","url":"https://example/py"}}},
+                  "pnpm":{"version":"12.15.0"}
+                }}
+                """.formatted(platform, sha, platform, sha));
+        BrandInstaller.HermesLock lock = BrandInstaller.readHermesLock(release);
+        assertEquals("12.15.0", lock.pnpmVersion());
+    }
 
     @Test
     void releasesAreNewestFirstAndFlagTheCurrentLink() throws IOException {
@@ -115,6 +143,134 @@ class BrandInstallerTest {
                 () -> BrandInstaller.extractZip(new java.io.ByteArrayInputStream(zip), target));
     }
 
+    /// A tar member name is only half of the escape: the link target of a
+    /// symbolic link is the other half, and it is just as untrusted. The panel
+    /// unpacks these as root, so a link to `../../../etc/cron.d/x` followed by
+    /// a member written through it is a root-owned file anywhere on the host.
+    @Test
+    void aTarLinkThatLeavesTheDestinationIsRefused() throws IOException {
+        for (String link : List.of("../../escaped", "/etc/passwd", "inside/../../escaped")) {
+            Path archive = root.resolve("link-" + Math.abs(link.hashCode()) + ".tar.gz");
+            try (OutputStream out = Files.newOutputStream(archive);
+                 GZIPOutputStream gzip = new GZIPOutputStream(out);
+                 TarArchiveOutputStream tar = new TarArchiveOutputStream(gzip)) {
+                TarArchiveEntry entry = new TarArchiveEntry("evil",
+                        kala.compress.archivers.tar.TarConstants.LF_SYMLINK);
+                entry.setLinkName(link);
+                entry.setMode(0777);
+                tar.putArchiveEntry(entry);
+                tar.closeArchiveEntry();
+            }
+            Path target = root.resolve("tar-target-" + Math.abs(link.hashCode()));
+
+            BrandException thrown = assertThrows(BrandException.class,
+                    () -> BrandInstaller.extractTarGz(archive, target, () -> false), link);
+            assertTrue(thrown.getMessage().contains("Refusing"), thrown.getMessage());
+            assertFalse(Files.exists(root.resolve("escaped")), link + " escaped");
+        }
+    }
+
+    /// A link that stays inside is the normal case — CPython's `bin/python3` is
+    /// one — so refusing everything would break every Hermes install.
+    @Test
+    void aTarLinkInsideTheDestinationIsKept() throws IOException, BrandException {
+        Path archive = root.resolve("good-link.tar.gz");
+        try (OutputStream out = Files.newOutputStream(archive);
+             GZIPOutputStream gzip = new GZIPOutputStream(out);
+             TarArchiveOutputStream tar = new TarArchiveOutputStream(gzip)) {
+            byte[] body = "real".getBytes(StandardCharsets.US_ASCII);
+            TarArchiveEntry file = new TarArchiveEntry("python3.12");
+            file.setSize(body.length);
+            file.setMode(0755);
+            tar.putArchiveEntry(file);
+            tar.write(body);
+            tar.closeArchiveEntry();
+
+            TarArchiveEntry link = new TarArchiveEntry("python3",
+                    kala.compress.archivers.tar.TarConstants.LF_SYMLINK);
+            link.setLinkName("python3.12");
+            link.setMode(0777);
+            tar.putArchiveEntry(link);
+            tar.closeArchiveEntry();
+        }
+        Path target = root.resolve("good-link-target");
+
+        BrandInstaller.extractTarGz(archive, target, () -> false);
+
+        assertTrue(Files.isSymbolicLink(target.resolve("python3")));
+        assertEquals("real", Files.readString(target.resolve("python3")));
+    }
+
+    /// The uv archive is unpacked by the panel's own tar reader, not by a
+    /// system `tar` a minimal image does not have. The production helper is
+    /// called directly, so this fails if the extraction path ever stops
+    /// producing `uv-<triple>/uv`.
+    @Test
+    void theUvTarballIsUnpackedInJava() throws IOException, BrandException {
+        Path archive = root.resolve("uv.tar.gz");
+        try (OutputStream out = Files.newOutputStream(archive);
+             GZIPOutputStream gzip = new GZIPOutputStream(out);
+             TarArchiveOutputStream tar = new TarArchiveOutputStream(gzip)) {
+            TarArchiveEntry entry = new TarArchiveEntry("uv-x86_64-unknown-linux-gnu/uv");
+            byte[] body = "#!/bin/sh\nexit 0\n".getBytes(StandardCharsets.US_ASCII);
+            entry.setSize(body.length);
+            entry.setMode(0755);
+            tar.putArchiveEntry(entry);
+            tar.write(body);
+            tar.closeArchiveEntry();
+        }
+        Path toolchain = root.resolve("toolchain");
+
+        Path uv = BrandInstaller.unpackUv(archive, toolchain, "x86_64-unknown-linux-gnu");
+
+        assertTrue(Files.isRegularFile(uv));
+        assertTrue(Files.isExecutable(uv));
+        assertEquals(toolchain.resolve("uv-x86_64-unknown-linux-gnu").resolve("uv"), uv);
+    }
+
+    /// A source build resolves the panel's build toolchain and gets its
+    /// compiler variables; a portable-archive install never asks for one.
+    @Test
+    void aSourceBuildGetsTheBuildToolchainsEnvironment() throws Exception {
+        Path bin = root.resolve("fake-build-bin");
+        Files.createDirectories(bin);
+        for (String name : List.of("cc", "c++", "make", "pkg-config", "nasm")) {
+            Path script = bin.resolve(name);
+            Files.writeString(script, "#!/bin/sh\nexit 0\n", StandardCharsets.UTF_8);
+            script.toFile().setExecutable(true, false);
+            Files.writeString(bin.resolve(name + ".exe"), "stub", StandardCharsets.UTF_8);
+        }
+        BuildToolchainManager manager = new BuildToolchainManager(
+                root.resolve("toolchains/build"), bin.toString());
+
+        BuildToolchainManager.Toolchain toolchain = BrandInstaller.ensureSourceBuildToolchain(
+                "Octop", line -> {
+                }, manager);
+
+        assertTrue(toolchain.usable(), toolchain.missingMessage());
+        String cc = OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS
+                ? bin.resolve("cc.exe").toString() : bin.resolve("cc").toRealPath().toString();
+        assertEquals(cc, toolchain.environment().get("CC"));
+        assertEquals(OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS
+                        ? bin.resolve("make.exe").toString() : bin.resolve("make").toRealPath().toString(),
+                toolchain.environment().get("MAKE"));
+    }
+
+    /// The failure is one the page can act on, not "install failed".
+    @Test
+    void aMissingSourceBuildToolchainIsAnActionableError() throws Exception {
+        Path notADirectory = root.resolve("not-a-directory");
+        Files.writeString(notADirectory, "x", StandardCharsets.UTF_8);
+        BuildToolchainManager manager = new BuildToolchainManager(notADirectory, "");
+
+        BrandException error = assertThrows(BrandException.class,
+                () -> BrandInstaller.ensureSourceBuildToolchain("Octop", line -> {
+                }, manager));
+
+        assertTrue(error.getMessage().startsWith("build_toolchain_missing:"), error.getMessage());
+        assertTrue(error.getMessage().contains("gcc/g++/make"), error.getMessage());
+    }
+
     /// A minimal zip holding the given path/content pairs.
     private static byte[] zipOf(String... pathsAndContents) throws IOException {
         java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
@@ -151,5 +307,18 @@ class BrandInstallerTest {
         Files.createDirectories(marker.getParent());
         Files.createFile(marker);
         return release;
+    }
+
+    /// The JVM's bare "unmappable characters" says nothing about why a `启动.cmd`
+    /// member cannot be unpacked; the locale is the missing piece, so the error
+    /// has to name it.
+    @Test
+    void anUnmappableArchiveNameBlamesTheLocale() {
+        BrandException explained = BrandInstaller.localeCannotRepresentNames(new IllegalArgumentException(
+                "Malformed input or input contains unmappable characters: 启动.cmd"));
+        assertNotNull(explained);
+        assertTrue(explained.getMessage().contains("sun.jnu.encoding"), explained.getMessage());
+        assertTrue(explained.getMessage().contains("locales"), explained.getMessage());
+        assertNull(BrandInstaller.localeCannotRepresentNames(new IllegalArgumentException("something else")));
     }
 }

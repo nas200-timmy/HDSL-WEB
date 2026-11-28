@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { PopupItem, PopupMenu, PopupSep } from "../../components/PopupMenu";
 import { ContentCopyIcon, DeleteIcon, EditIcon, MoreVertIcon, PersonIcon, RefreshIcon } from "../../components/icons";
 import type { ChatAttachment, ChatBlock, ChatMessage, ChatNode } from "../../types";
@@ -128,8 +128,30 @@ function BlockTimeline({ blocks }: { blocks: ChatBlock[] }) {
   );
 }
 
+/// During streaming the Markdown tree is re-parsed on every delta. Throttle the
+/// text handed to Markdown to ~8 fps: the chat still feels live, but a long
+/// answer no longer re-runs remark/rehype/highlight/KaTeX dozens of times a second.
+/// Completed messages never start the interval (streaming=false).
+export function useStreamText(value: string, streaming: boolean | undefined, intervalMs = 120): string {
+  const [shown, setShown] = useState(value);
+  const latest = useRef(value);
+  latest.current = value;
+  useEffect(() => {
+    if (!streaming) {
+      setShown(value);
+      return;
+    }
+    setShown(value);
+    const timer = window.setInterval(() => {
+      setShown((previous) => (previous === latest.current ? previous : latest.current));
+    }, intervalMs);
+    return () => window.clearInterval(timer);
+  }, [streaming, intervalMs]);
+  return streaming ? shown : value;
+}
+
 /** 一条消息（一个节点）。variant 切换、两种重生成、编辑与删除都在这里。 */
-export function MessageItem({
+function MessageItemImpl({
   node, assistant, user, editingNodeId, liveContent, liveReasoning, liveTool, liveBlocks, streaming,
   onRegenerate, onEdit, onDelete, onSwitchVariant, onOpenAttachment,
 }: {
@@ -159,26 +181,31 @@ export function MessageItem({
   const reasoningRef = useRef<HTMLDivElement | null>(null);
 
   const content = streaming && liveContent !== undefined ? liveContent : (message?.content ?? "");
+  const shownContent = useStreamText(content, streaming);
   const reasoning = streaming && liveReasoning !== undefined ? liveReasoning : (message?.reasoning ?? "");
   const toolRounds = streaming ? [] : (message?.tools ?? []);
   const runningTool = streaming ? liveTool : undefined;
   // 模型引用写的是短 id，渲染前换成真实 URL；否则会被 sanitize 当成非法协议删掉。
-  const citations: Record<string, string> = {};
-  let sourcePosition = 0;
-  for (const hit of message?.sources ?? []) {
-    sourcePosition += 1;
-    if (hit.id) citations[hit.id] = hit.url;
-    citations[String(sourcePosition)] = hit.url;
-  }
-  let toolPosition = 0;
-  for (const round of message?.tools ?? []) {
-    for (const hit of round.hits ?? []) {
-      toolPosition += 1;
-      if (hit.id) citations[hit.id] = hit.url;
-      // 模型有时写 index（1、2…）而不是短 id；按展示顺序兜底。
-      citations[String(toolPosition)] = hit.url;
+  // useMemo：内容没变时保持同一个对象，Markdown 的 memo 才能跳过整棵树的重解析。
+  const citations = useMemo(() => {
+    const map: Record<string, string> = {};
+    let sourcePosition = 0;
+    for (const hit of message?.sources ?? []) {
+      sourcePosition += 1;
+      if (hit.id) map[hit.id] = hit.url;
+      map[String(sourcePosition)] = hit.url;
     }
-  }
+    let toolPosition = 0;
+    for (const round of message?.tools ?? []) {
+      for (const hit of round.hits ?? []) {
+        toolPosition += 1;
+        if (hit.id) map[hit.id] = hit.url;
+        // 模型有时写 index（1、2…）而不是短 id；按展示顺序兜底。
+        map[String(toolPosition)] = hit.url;
+      }
+    }
+    return map;
+  }, [message?.sources, message?.tools]);
   const [expandedTools, setExpandedTools] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
@@ -278,7 +305,7 @@ export function MessageItem({
         )}
         {content ? (
           <div className="chat-bubble">
-            <Markdown content={content} streaming={streaming} citations={citations} sources={message.sources} />
+            <Markdown content={shownContent} streaming={streaming} citations={citations} sources={message.sources} />
             {streaming && <span className="chat-cursor" />}
           </div>
         ) : streaming ? (
@@ -461,3 +488,22 @@ export function MessageItem({
     </div>
   );
 }
+
+/// Completed messages keep the same data between stream deltas; their callbacks
+/// only set dialog state (or read the latest draft through a ref), so comparing
+/// the data props is enough. This is what keeps a long transcript from
+/// re-rendering every message on every token.
+function sameMessageItem(previous: Parameters<typeof MessageItemImpl>[0],
+                         next: Parameters<typeof MessageItemImpl>[0]): boolean {
+  return previous.node === next.node
+    && previous.assistant === next.assistant
+    && previous.user === next.user
+    && previous.editingNodeId === next.editingNodeId
+    && previous.streaming === next.streaming
+    && previous.liveContent === next.liveContent
+    && previous.liveReasoning === next.liveReasoning
+    && previous.liveTool === next.liveTool
+    && previous.liveBlocks === next.liveBlocks;
+}
+
+export const MessageItem = memo(MessageItemImpl, sameMessageItem);

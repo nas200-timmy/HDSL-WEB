@@ -10,6 +10,7 @@ import { SystemMonitorCard } from "../components/SystemMonitorCard";
 import { StorageCard } from "../components/StorageCard";
 import { PlainSurfaceCard } from "../components/PlainSurfaceCard";
 import { FileDropInput } from "../components/FileDropInput";
+import { ProgressBar } from "../components/ProgressBar";
 import {
   AddIcon,
   CheckCircleIcon,
@@ -61,6 +62,7 @@ import type {
   DeveloperStatus,
   DoctorCheck,
   DoctorReport,
+  BootstrapReport,
   EmergencyStopPreview,
   PanelInfo,
   PlatformCompatibility,
@@ -106,6 +108,7 @@ const TLS_SOURCE_LABEL: Record<string, string> = {
   "self-signed": "自签证书",
   uploaded: "上传证书（PEM）",
   pkcs12: "上传证书（PKCS#12）",
+  acme: "ACME 证书",
 };
 
 export function SettingsPage() {
@@ -196,7 +199,7 @@ export function SettingsPage() {
             items: [
               {
                 key: "doctor",
-                title: "环境体检",
+                title: "运行环境",
                 icon: <CheckCircleIcon size={20} />,
               },
               {
@@ -222,7 +225,7 @@ export function SettingsPage() {
         {tab === "brands" && <BrandManagementPanel />}
         {tab === "tls" && <TlsTab />}
         {tab === "developer" && <DeveloperTab />}
-        {tab === "doctor" && <DoctorTab />}
+        {tab === "doctor" && <RuntimeTab />}
         {tab === "about" && <AboutTab />}
       </div>
     </div>
@@ -1651,10 +1654,12 @@ function OutboundTlsCard() {
 /* ---------------- HTTPS 证书 ---------------- */
 
 function tlsSourceTag(source: string): { cls: string; label: string } {
-  switch ((source ?? "").toLowerCase()) {
+  const key = (source ?? "").toLowerCase();
+  switch (key) {
     case "uploaded":
     case "pkcs12":
-      return { cls: "running", label: TLS_SOURCE_LABEL[(source ?? "").toLowerCase()] ?? source };
+    case "acme":
+      return { cls: "running", label: TLS_SOURCE_LABEL[key] ?? key };
     case "self-signed":
       return { cls: "warn", label: TLS_SOURCE_LABEL["self-signed"] };
     default:
@@ -1717,7 +1722,7 @@ function TlsTab() {
 
   const pickP12 = (f: File | null) => {
     setP12File(f);
-    setTlsFormError(f && !/\.(p12|pfx)$/i.test(f.name) ? "证书文件应为 .p12 / .pfx" : null);
+    setTlsFormError(f && !/\.(p12|pfx|jks|keystore)$/i.test(f.name) ? "密钥库应为 .p12 / .pfx / .jks" : null);
   };
 
   const doUploadTls = async () => {
@@ -1785,7 +1790,13 @@ function TlsTab() {
     }
   };
 
-  const tag = tls ? tlsSourceTag(tls.source) : null;
+  const tag = tls
+    ? (tls.https
+        // HTTPS 已启用但来源未记录时，不再给一个和事实冲突的标签；
+        // 状态行只显示「HTTPS 已启用」。
+        ? (tls.source === "none" ? null : tlsSourceTag(tls.source))
+        : { cls: "plain", label: "HTTP 明文" })
+    : null;
 
   return (
     <>
@@ -1809,31 +1820,33 @@ function TlsTab() {
           </div>
         ) : tls ? (
           <>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "flex-start",
-                gap: 8,
-                margin: "4px 8px 8px",
-                padding: "10px 12px",
-                border: "1px solid var(--monet-error)",
-                borderRadius: 4,
-                color: "var(--monet-error)",
-                fontSize: 12,
-                lineHeight: 1.6,
-              }}
-            >
-              <WarningIcon size={16} style={{ flex: "none", marginTop: 2 }} />
-              <span>
-                <strong>自签名证书只是权宜之计。</strong>
-                浏览器会提示证书不受信任，它也无法证明服务器身份，只适合内网或临时使用。
-                正式部署请上传受信任证书，或把面板放到带证书的反向代理后面。
-              </span>
-            </div>
+            {tls.source === "self-signed" && (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: 8,
+                  margin: "4px 8px 8px",
+                  padding: "10px 12px",
+                  border: "1px solid var(--monet-error)",
+                  borderRadius: 4,
+                  color: "var(--monet-error)",
+                  fontSize: 12,
+                  lineHeight: 1.6,
+                }}
+              >
+                <WarningIcon size={16} style={{ flex: "none", marginTop: 2 }} />
+                <span>
+                  <strong>自签名证书只是权宜之计。</strong>
+                  浏览器会提示证书不受信任，它也无法证明服务器身份，只适合内网或临时使用。
+                  正式部署请上传受信任证书，或把面板放到带证书的反向代理后面。
+                </span>
+              </div>
+            )}
             <div className="comp-row">
               <span className="comp-label">当前状态</span>
               <span className="comp-value">
-                <span className={`tag ${tag?.cls}`}>{tag?.label}</span>
+                {tag && <span className={`tag ${tag.cls}`}>{tag.label}</span>}
                 {tls.https && <span style={{ fontSize: 12 }}>HTTPS 已启用</span>}
               </span>
             </div>
@@ -1896,7 +1909,7 @@ function TlsTab() {
                   </label>
                   <label className="input-check">
                     <input type="radio" checked={tlsMode === "p12"} onChange={() => { setTlsMode("p12"); setTlsFormError(null); }} />
-                    <span>PKCS#12（.p12）</span>
+                    <span>密钥库（.p12 / .pfx / .jks）</span>
                   </label>
                 </div>
                 {tlsMode === "pem" ? (
@@ -1913,15 +1926,15 @@ function TlsTab() {
                 ) : (
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                     <div className="form-row" style={{ flex: 1, minWidth: 200, marginBottom: 0 }}>
-                      <span className="form-label">证书文件（.p12 / .pfx）</span>
-                      <FileDropInput file={p12File} onFile={pickP12} accept=".p12,.pfx" hint="选择或拖入 PKCS#12 证书" disabled={tlsBusy} />
+                      <span className="form-label">密钥库文件（.p12 / .pfx / .jks）</span>
+                      <FileDropInput file={p12File} onFile={pickP12} accept=".p12,.pfx,.jks,.keystore" hint="选择或拖入 PKCS#12 / JKS" disabled={tlsBusy} />
                     </div>
                     <div className="form-row" style={{ flex: 1, minWidth: 200, marginBottom: 0 }}>
-                      <span className="form-label">导出密码</span>
+                      <span className="form-label">密钥库密码</span>
                       <input
                         className="input"
                         type="password"
-                        placeholder="创建 .p12 时设置的密码"
+                        placeholder="PKCS#12 / JKS 的密码"
                         value={p12Password}
                         onChange={(e) => setP12Password(e.target.value)}
                         autoComplete="off"
@@ -2183,6 +2196,7 @@ function AcmeCard() {
   const [credHmac, setCredHmac] = useState("");
   const [credPassword, setCredPassword] = useState("");
   const [credError, setCredError] = useState<string | null>(null);
+  const [credTesting, setCredTesting] = useState(false);
 
   // 删除凭证
   const [deleteCredId, setDeleteCredId] = useState<string | null>(null);
@@ -2477,6 +2491,23 @@ function AcmeCard() {
       setCredError(errMsg(e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const testCredential = async () => {
+    setCredError(null);
+    setCredTesting(true);
+    try {
+      const result = await withElevation(() => api.testAcmeCredentials({
+        id: credDialog?.mode === "edit" ? credDialog.id : undefined,
+        provider: credProvider,
+        dns: credDns,
+      }));
+      toast("success", result.message || "凭证可用");
+    } catch (e) {
+      setCredError(errMsg(e));
+    } finally {
+      setCredTesting(false);
     }
   };
 
@@ -3240,6 +3271,11 @@ function AcmeCard() {
               ))}
             </select>
             <span className="form-hint">域名的 DNS 托管在哪家就选哪家；编辑时不能换厂商，换厂商请新建一条。</span>
+            {credProviderInfo?.credentialHint && (
+              <span className="form-hint" style={{ lineHeight: 1.7 }}>
+                {credProviderInfo.credentialHint}
+              </span>
+            )}
             <span className="form-hint">
               Zone（主域名）不在这里填：申请证书时会自动使用证书的主域名，同一个凭证可以给多个主域名用。
             </span>
@@ -3291,8 +3327,11 @@ function AcmeCard() {
           </div>
           {credError && <div className="form-error">{credError}</div>}
           <div className="dialog-actions">
-            <button className="btn btn-text dim" disabled={busy} onClick={() => setCredDialog(null)}>取消</button>
-            <button className="btn btn-raised" disabled={busy} onClick={() => void saveCredential()}>
+            <button className="btn btn-text dim" disabled={busy || credTesting} onClick={() => setCredDialog(null)}>取消</button>
+            <button className="btn btn-outline" disabled={busy || credTesting} onClick={() => void testCredential()}>
+              {credTesting ? "测试中…" : "测试凭证"}
+            </button>
+            <button className="btn btn-raised" disabled={busy || credTesting} onClick={() => void saveCredential()}>
               {busy ? "保存中…" : "保存凭证"}
             </button>
           </div>
@@ -4645,7 +4684,224 @@ function DoctorRow({ check }: { check: DoctorCheck }) {
   );
 }
 
-function DoctorTab() {
+/** 自举：面板能自己补的组件，缺什么、从哪来、放哪儿。
+ *
+ * 平常是一行；一个可用组件都没有时默认展开——那种机器上用户不看见就走不下去。
+ * 安装永远是显式点击，进页面只读不写。 */
+function BootstrapCard() {
+  const [data, setData] = useState<BootstrapReport | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [autoExpanded, setAutoExpanded] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [taskMsg, setTaskMsg] = useState("");
+  const [taskFraction, setTaskFraction] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = async () => {
+    try {
+      setData(await api.bootstrap());
+      setError(null);
+    } catch (e) {
+      setError(isNotImplemented(e) ? "后端尚未支持自举接口" : errMsg(e));
+    }
+  };
+
+  /// A bootstrap task can outlive this card (tab switch, page reload). Reattach
+/// to the running one instead of showing "nothing is installing" and letting a
+/// second click start another download.
+  const resumeRunning = async () => {
+    try {
+      const list = await api.tasks();
+      const running = list.find((t) => t.kind.startsWith("bootstrap-")
+        && (t.state === "running" || t.state === "waiting_approval"));
+      if (running) {
+        setBusy(running.id);
+        setTaskMsg(running.message ?? "");
+        setTaskFraction(typeof running.fraction === "number" && running.fraction >= 0
+          ? running.fraction : null);
+      }
+    } catch {
+      // The report still renders; a later mount can try again.
+    }
+  };
+
+  useEffect(() => {
+    void load();
+    void resumeRunning();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!data || autoExpanded) return;
+    const usable = data.bundles.filter((b) => b.state !== "missing").length;
+    if (usable === 0) {
+      setExpanded(true);
+      setAutoExpanded(true);
+    }
+  }, [data, autoExpanded]);
+
+  useEffect(() => {
+    if (!busy) return;
+    const timer = setInterval(async () => {
+      try {
+        const list = await api.tasks();
+        const t = list.find((x) => x.id === busy);
+        if (!t) return;
+        setTaskMsg(t.message ?? "");
+        setTaskFraction(typeof t.fraction === "number" && t.fraction >= 0 ? t.fraction : null);
+        if (t.state === "done" || t.state === "failed") {
+          setBusy(null);
+          setTaskMsg("");
+          setTaskFraction(null);
+          toast(t.state === "done" ? "success" : "error",
+            t.message === "cancelled" ? "已取消" : (t.message ?? t.state));
+          void load();
+        }
+      } catch {
+        // 任务列表拉不到就下一轮再试，不打断安装。
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy]);
+
+  const install = async (bundle: string) => {
+    setBusy(bundle);
+    setTaskMsg("正在提交…");
+    setTaskFraction(null);
+    try {
+      const r = await withElevation(() => api.bootstrapInstall(bundle));
+      setBusy(r.taskId);
+    } catch (e) {
+      setBusy(null);
+      setTaskFraction(null);
+      toast("error", `启动安装失败：${errMsg(e)}`);
+    }
+  };
+
+  const bundles = data?.bundles ?? [];
+  const missing = bundles.filter((b) => b.state === "missing"
+      && b.id !== "toolchain-portable");
+  const summary = data == null
+    ? "读取中…"
+    : missing.length === 0
+      ? "无需干预 · 宿主已提供所需组件，未下载任何文件"
+      : `缺 ${missing.length} 项：${missing.map((b) => b.label).join("、")}`;
+  const dotColor = (state: string) =>
+    state === "ready"
+      ? "#2e7d32"
+      : state === "missing"
+        ? "#ed6c02"
+        : "var(--monet-on-surface-variant)";
+  const stateLabel = (state: string) =>
+    state === "ready" ? "就绪" : state === "missing" ? "缺失" : "不适用";
+
+  return (
+    <>
+      <div className="section-caption">
+        <DownloadIcon size={16} />
+        自举
+        <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          {data && (
+            <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+              目录：{data.catalog} · Python 策略：{data.pythonPolicy}
+            </span>
+          )}
+          <button className="btn btn-outline ripple-host" onClick={() => void load()}>
+            <RefreshIcon size={15} />
+            刷新
+          </button>
+        </span>
+      </div>
+      <div className="card" style={{ padding: 0 }}>
+        {error && !data ? (
+          <div className="empty-state">
+            <span style={{ fontSize: 20 }}>无法读取自举状态</span>
+            <span className="empty-sub">{error}</span>
+          </div>
+        ) : (
+          <>
+            <div
+              onClick={() => setExpanded((v) => !v)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "12px 16px",
+                cursor: "pointer",
+              }}
+            >
+              <span style={{ width: 8, height: 8, borderRadius: 4, background: dotColor(missing.length ? "missing" : "ready") }} />
+              <b>{summary}</b>
+              <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
+                {expanded ? "收起 ▾" : "展开 ▸"}
+              </span>
+            </div>
+            {expanded &&
+              bundles.map((b) => (
+                <div
+                  key={b.id}
+                  style={{
+                    display: "flex",
+                    gap: 12,
+                    padding: "12px 16px",
+                    alignItems: "flex-start",
+                    borderTop: "1px solid var(--monet-outline-variant)",
+                  }}
+                >
+                  <span style={{ width: 8, height: 8, borderRadius: 4, marginTop: 7, background: dotColor(b.state) }} />
+                  <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
+                    <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <b>{b.label}</b>
+                      <span className="tlli-subtitle">
+                        {b.id === "toolchain-portable" && b.state === "missing"
+                          ? "可选" : stateLabel(b.state)}
+                      </span>
+                      {b.canInstall && (
+                        <button
+                          className="btn btn-outline ripple-host"
+                          style={{ marginLeft: "auto" }}
+                          disabled={busy != null}
+                          onClick={() => void install(b.id)}
+                        >
+                          <DownloadIcon size={14} />
+                          安装
+                        </button>
+                      )}
+                    </span>
+                    <span className="tlli-subtitle">{b.detail}</span>
+                    <span className="tlli-subtitle">为什么：{b.why}</span>
+                    {b.source && <span className="tlli-subtitle">来源：{b.source}</span>}
+                    {b.sha256 && <span className="tlli-subtitle">SHA-256：{b.sha256}</span>}
+                    {b.destination && <span className="tlli-subtitle">位置：{b.destination}</span>}
+                  </span>
+                </div>
+              ))}
+            {busy && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6,
+                            padding: "10px 16px", borderTop: "1px solid var(--monet-outline-variant)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span className="spinner" />
+                  <span className="tlli-subtitle">{taskMsg || "正在安装…"}</span>
+                  <button className="btn btn-text danger" style={{ marginLeft: "auto" }}
+                          onClick={() => void api.cancelTask(busy)
+                            .then(() => toast("info", "已请求取消，正在停止下载…"))
+                            .catch((e) => toast("error", errMsg(e)))}>
+                    取消
+                  </button>
+                </div>
+                <ProgressBar fraction={taskFraction} />
+              </div>
+            )}
+          </>
+        )}
+      </div>
+      <div style={{ height: 16 }} />
+    </>
+  );
+}
+
+function RuntimeTab() {
   const [report, setReport] = useState<DoctorReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -4674,9 +4930,10 @@ function DoctorTab() {
 
   return (
     <>
+      <BootstrapCard />
       <div className="section-caption">
         <CheckCircleIcon size={16} />
-        环境体检
+        环境检查
         <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
           {report && (
             <span style={{ fontSize: 12, color: "var(--monet-on-surface-variant)" }}>
@@ -4774,6 +5031,15 @@ function AboutTab() {
         <div className="comp-row">
           <span className="comp-label">{I18N["about.java"]}</span>
           <span className="comp-value">{health?.java ? `Java ${health.java}` : "—"}</span>
+        </div>
+        <div className="comp-row">
+          <span className="comp-label">面板实例</span>
+          <span className="comp-value mono" style={{ fontSize: 12 }}>
+            {health?.instance || "—"}
+            <span style={{ color: "var(--monet-on-surface-variant)", marginLeft: 8, fontSize: 11 }}>
+              同机多面板时用它区分会话
+            </span>
+          </span>
         </div>
         <div className="comp-row">
           <span className="comp-label">说明</span>

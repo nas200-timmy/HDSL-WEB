@@ -970,6 +970,10 @@ public final class McRuntime {
             builder.redirectErrorStream(true);
             builder.environment().clear();
             builder.environment().putAll(childEnvironment(System.getenv()));
+            // A minimal image's `setpriv` lives in the bootstrap closure; the
+            // child is started through it and needs the closure's lib on its
+            // loader path before it can drop privileges.
+            org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(builder, false);
             process = builder.start();
         } catch (IOException e) {
             states.put(id, State.FAILED);

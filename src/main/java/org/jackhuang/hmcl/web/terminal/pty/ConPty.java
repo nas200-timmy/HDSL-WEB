@@ -47,6 +47,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -469,13 +470,27 @@ public final class ConPty implements Pty {
     /// (they start with `=`) are dropped: they are not variables and the block
     /// is not where they belong.
     static Memory environmentBlock(Map<String, String> environment) {
-        List<String> entries = new ArrayList<>();
+        // One entry per variable, case-insensitively: a caller that copied
+        // `System.getenv()` into an ordinary map and then wrote `PATH` beside
+        // Windows' own `Path` would otherwise hand `CreateProcessW` both, and
+        // which one the child saw was the block's ordering, not a decision
+        // anybody made. The case-insensitive sort puts the two spellings next
+        // to each other, so the first of them wins deterministically.
+        Map<String, String> unique = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
         environment.forEach((key, value) -> {
             if (key.isEmpty() || key.charAt(0) == '=' || value == null) {
                 return;
             }
-            entries.add(key + "=" + value);
+            // Two spellings of one variable only reach here when a caller built
+            // its own map instead of amending the one it was given. Every
+            // writer the panel has *prepends*, so the longer of the two is the
+            // one that still holds what the other had; keeping it loses nothing
+            // whichever order the map happened to iterate in.
+            unique.merge(key, value, (kept, candidate) ->
+                    candidate.length() > kept.length() ? candidate : kept);
         });
+        List<String> entries = new ArrayList<>();
+        unique.forEach((key, value) -> entries.add(key + "=" + value));
         entries.sort(String.CASE_INSENSITIVE_ORDER);
         long bytes = 2;
         for (String entry : entries) {

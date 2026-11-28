@@ -106,6 +106,14 @@ class TranscodeQueueTest {
             Path output = media.resolve(jobJson.get("output").getAsString());
             assertTrue(Files.isRegularFile(output));
             assertTrue(Files.size(output) > 0);
+            var runtime = module.queue().snapshot().getAsJsonObject("runtime");
+            assertEquals("path", runtime.get("kind").getAsString());
+            assertTrue(runtime.get("available").getAsBoolean());
+            assertTrue(runtime.get("version").getAsString().contains("7.1.5"));
+            var used = jobJson.getAsJsonObject("ffmpeg");
+            assertEquals("path", used.get("kind").getAsString());
+            assertEquals(runtime.get("path").getAsString(), used.get("path").getAsString());
+            assertTrue(used.get("version").getAsString().contains("7.1.5"));
             String log = module.queue().log(job.get("id").getAsString(), 100);
             assertTrue(log.contains("ffmpeg"), log);
             assertEquals(1.0, jobJson.get("fraction").getAsDouble(), 0.0001);
@@ -113,6 +121,82 @@ class TranscodeQueueTest {
             module.queue().stop();
         }
     }
+    /// Cancel must kill the encode even when it lands in the spawn window: the worker
+    /// assigns job.process under the queue lock and re-checks state, so a cancel that
+    /// raced builder.start() still terminates the child. Ten concurrent jobs are
+    /// cancelled right after the first spawn; a missed kill would let the fake encode
+    /// run to completion and leave a "finished" marker behind (2026-11 audit).
+    @Test
+    void cancelKillsEncodesEvenAroundTheSpawnWindow(@TempDir Path dir) throws Exception {
+        Assumptions.assumeFalse(OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS,
+                "the fake ffmpeg uses a POSIX shell script");
+
+        Path media = Files.createDirectory(dir.resolve("media"));
+        Files.writeString(media.resolve("input.mp4"), "source");
+        Path bin = Files.createDirectory(dir.resolve("bin"));
+        Path ffmpeg = bin.resolve("ffmpeg");
+        Path ffprobe = bin.resolve("ffprobe");
+        script(ffmpeg, """
+                #!/bin/sh
+                case "$*" in
+                  *-version*) echo "ffmpeg version 7.1.5"; exit 0 ;;
+                  *-encoders*) echo " V....D libx264 H.264"; exit 0 ;;
+                  *-hwaccels*) echo "Hardware acceleration methods:"; echo "vaapi"; exit 0 ;;
+                  *-filters*) echo " TSC scale V->V Scale"; exit 0 ;;
+                esac
+                for last; do :; done
+                mark=$(dirname "$last")
+                echo started >> "$mark/started.log"
+                sleep 4
+                echo finished >> "$mark/finished.log"
+                printf x > "$last"
+                exit 0
+                """);
+        script(ffprobe, """
+                #!/bin/sh
+                echo '{"streams":[{"codec_type":"video"},{"codec_type":"audio"}],"format":{"duration":"2.0"}}'
+                """);
+
+        ServerConfig config = new ServerConfig();
+        config.dataDir = dir.resolve("data");
+        config.transcode.ffmpegPath = ffmpeg.toString();
+        config.transcode.mediaRoot = media.toString();
+        config.transcode.maxConcurrent = 10;
+
+        TranscodeModule module = new TranscodeModule(config, new EventBus());
+        module.feature().enable(consent());
+        module.queue().start();
+        try {
+            var preset = module.presets().get("h264-quality").orElseThrow().preset();
+            java.util.List<String> ids = new java.util.ArrayList<>();
+            for (int i = 0; i < 10; i++) {
+                ids.add(module.queue().submit("input.mp4", "", "h264-quality", preset)
+                        .get("id").getAsString());
+            }
+            module.queue().startQueue();
+            // Wait for the first spawn so the assertions below are deterministic; the
+            // remaining cancels still race their own spawns at arbitrary points.
+            for (int i = 0; i < 40 && Files.notExists(media.resolve("started.log")); i++) {
+                Thread.sleep(50);
+            }
+            for (String id : ids) {
+                assertTrue(module.queue().cancel(id));
+            }
+            for (String id : ids) {
+                assertEquals("cancelled",
+                        module.queue().jobJson(id).orElseThrow().get("state").getAsString());
+            }
+            // Longer than the fake encode: a missed kill surfaces as a finished marker.
+            Thread.sleep(6000);
+            assertTrue(Files.exists(media.resolve("started.log")),
+                    "the encodes must actually have spawned");
+            assertTrue(Files.notExists(media.resolve("finished.log")),
+                    "a cancelled encode must not run to completion");
+        } finally {
+            module.queue().stop();
+        }
+    }
+
     @Test
     void fullAutoFallsBackFromVaapiToSoftware(@TempDir Path dir) throws Exception {
         Assumptions.assumeFalse(OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS,

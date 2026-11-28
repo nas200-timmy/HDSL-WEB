@@ -17,13 +17,20 @@
  */
 package org.jackhuang.hmcl.web.transcode;
 
+import org.jackhuang.hmcl.dsh.BuildToolchainManager;
 import org.jackhuang.hmcl.web.config.ServerConfig;
 import org.jackhuang.hmcl.web.event.EventBus;
 import org.jackhuang.hmcl.web.transcode.media.MediaBrowser;
 import org.jackhuang.hmcl.web.transcode.preset.PresetStore;
 import org.jackhuang.hmcl.web.transcode.quality.QualityService;
 import org.jackhuang.hmcl.web.transcode.queue.TranscodeQueue;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegBuildKit;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegFullBuildCatalog;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegFullBuildKit;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegCatalog;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegInstaller;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegRuntimeManager;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegToolchainManager;
 import org.jackhuang.hmcl.web.transcode.runtime.TranscodeRuntime;
 import org.jackhuang.hmcl.web.transcode.tools.TranscodeTools;
 import org.jetbrains.annotations.NotNullByDefault;
@@ -48,6 +55,12 @@ public final class TranscodeModule {
     private final TranscodeTools tools;
     private final QualityService quality;
     private final FfmpegInstaller installer;
+    private final FfmpegCatalog.Catalog catalog;
+    private final FfmpegRuntimeManager runtimeManager;
+    private final FfmpegToolchainManager toolchains;
+    private final FfmpegBuildKit buildKit;
+    private final FfmpegFullBuildCatalog.Catalog fullBuildCatalog;
+    private final FfmpegFullBuildKit fullBuildKit;
 
     public TranscodeModule(ServerConfig config, EventBus eventBus) {
         this.config = config;
@@ -58,6 +71,25 @@ public final class TranscodeModule {
         this.queue = new TranscodeQueue(this, eventBus);
         this.tools = new TranscodeTools(this);
         this.quality = new QualityService(this);
+        this.catalog = FfmpegCatalog.load(catalogPath(config));
+        this.runtimeManager = new FfmpegRuntimeManager(
+                TranscodePaths.dataDir(config).resolve("tools").resolve("ffmpeg"), catalog);
+        this.toolchains = new FfmpegToolchainManager(config.dataDir.resolve("toolchains"));
+        Path ffmpegToolsDir = TranscodePaths.dataDir(config).resolve("tools").resolve("ffmpeg");
+        Path transcodeLogsDir = TranscodePaths.dataDir(config).resolve("logs");
+        this.buildKit = new FfmpegBuildKit(
+                ffmpegToolsDir, runtimeManager, toolchains, transcodeLogsDir);
+        this.fullBuildCatalog = FfmpegFullBuildCatalog.load();
+        this.fullBuildKit = new FfmpegFullBuildKit(
+                ffmpegToolsDir, runtimeManager, toolchains, transcodeLogsDir);
+        this.runtimeManager.setBinaryMirror(() -> config.transcode.binaryMirror);
+        this.buildKit.setSourceMirror(() -> config.transcode.sourceMirror);
+        this.fullBuildKit.setSourceMirror(() -> config.transcode.sourceMirror);
+        this.toolchains.setToolchainMirror(() -> config.transcode.toolchainMirror);
+        // The bootstrap page installs the same portable toolchain through the
+        // shared manager, so it must see the same mirror prefix.
+        BuildToolchainManager.defaultManager()
+                .setMirror(() -> config.transcode.toolchainMirror);
         this.installer = new FfmpegInstaller(this);
         if (feature.enabled()) {
             queue.start();
@@ -98,6 +130,42 @@ public final class TranscodeModule {
 
     public FfmpegInstaller installer() {
         return installer;
+    }
+
+    public FfmpegCatalog.Catalog catalog() {
+        return catalog;
+    }
+
+    public FfmpegRuntimeManager runtimeManager() {
+        return runtimeManager;
+    }
+
+    public FfmpegToolchainManager toolchains() {
+        return toolchains;
+    }
+
+    public FfmpegBuildKit buildKit() {
+        return buildKit;
+    }
+
+    public FfmpegFullBuildCatalog.Catalog fullBuildCatalog() {
+        return fullBuildCatalog;
+    }
+
+    public FfmpegFullBuildKit fullBuildKit() {
+        return fullBuildKit;
+    }
+
+    private static @org.jetbrains.annotations.Nullable Path catalogPath(ServerConfig config) {
+        String configured = config.transcode.ffmpegCatalog;
+        if (configured == null || configured.isBlank()) {
+            return null;
+        }
+        try {
+            return Path.of(configured.trim());
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     public Path dataDir() {

@@ -157,6 +157,7 @@ public final class DshTui {
         if (declared != null) {
             environment.put(ACP_PROFILE_ENVIRONMENT_VARIABLE, declared);
         }
+        org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(environment);
         return environment;
     }
 

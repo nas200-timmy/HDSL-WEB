@@ -34,6 +34,7 @@ class AcmeDnsProviderRegistryTest {
         assertTrue(AcmeDnsProviderRegistry.find("cloudflare").implemented());
         assertTrue(AcmeDnsProviderRegistry.find("aliyun").implemented());
         assertTrue(AcmeDnsProviderRegistry.find("dnspod").implemented());
+        assertTrue(AcmeDnsProviderRegistry.find("tencent").implemented());
         assertFalse(AcmeDnsProviderRegistry.find("huawei").implemented());
     }
 
@@ -51,6 +52,13 @@ class AcmeDnsProviderRegistryTest {
                 () -> AcmeDnsProviderRegistry.create("cloudflare", Map.of()));
         assertThrows(AcmeDnsException.class,
                 () -> AcmeDnsProviderRegistry.create("aliyun", Map.of("accessKeyId", "a")));
+    }
+
+    @Test
+    void tencentIsConstructedFromItsApiKeys() throws Exception {
+        AcmeDnsProvider provider = AcmeDnsProviderRegistry.create("tencent",
+                Map.of("secretId", "sid", "secretKey", "skey", "zone", "example.com"));
+        assertEquals("tencent", provider.id());
     }
 
     @Test

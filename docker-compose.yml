@@ -17,7 +17,8 @@ services:
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org/}
         # 发布构建可传 -PreleaseVersion 的值；留空即开发版
         RELEASE_VERSION: ${RELEASE_VERSION:-}
-        # Node 官方 dist 基址：国内直连 nodejs.org 会 TLS 失败，默认走腾讯镜像（与官方一致，仍校验官方 SHASUMS256）
+        # Node 官方 dist 基址：国内直连 nodejs.org 会 TLS 失败，默认走腾讯镜像
+        # （tarball 走镜像；sha256 钉自官方清单，见 Dockerfile 的 NODE*_SHA256_* ARG）
         NODE_DIST_MIRROR: ${NODE_DIST_MIRROR:-https://mirrors.cloud.tencent.com/nodejs-release}
     image: hdsl-web:latest
     container_name: hdsl-web

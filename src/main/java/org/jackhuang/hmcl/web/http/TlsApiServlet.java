@@ -36,6 +36,8 @@ import org.jackhuang.hmcl.web.tls.CertificateManager;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
+import java.io.BufferedInputStream;
+import java.io.DataInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -43,7 +45,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.PosixFilePermission;
+import java.security.GeneralSecurityException;
+import java.security.Key;
+import java.security.KeyStore;
+import java.security.UnrecoverableKeyException;
 import java.util.EnumSet;
+import java.util.Enumeration;
 import java.util.Set;
 import java.util.function.Supplier;
 
@@ -52,7 +59,9 @@ import java.util.function.Supplier;
 /// - `GET  /api/settings/tls` — what the main connector currently serves:
 ///   `{https, source, subject?, issuer?, sans?, expires?, fingerprintSha256?}`
 /// - `POST /api/settings/tls` — upload an identity, multipart: `certFile` +
-///   `keyFile` (a PEM pair) or `p12File` + `password` (PKCS#12). The material
+///   `keyFile` (a PEM pair) or `p12File` + `password` (PKCS#12; a JKS/JCEKS
+///   keystore is accepted in the same field and normalized to PKCS#12 before
+///   it is stored). The material
 ///   is validated — parseable, key matching the certificate — stored under
 ///   `<data>/certs/uploaded.{pem,key,p12}` (0600), recorded in `server.yaml`,
 ///   and applied **without a restart**: a TLS server hot-reloads its
@@ -171,17 +180,32 @@ public final class TlsApiServlet extends HttpServlet {
         // yaml records the data-dir-relative form, so a moved volume still loads.
         if (isP12) {
             String password = request.getParameter("password");
+            String pass = password == null ? "" : password;
             Path stored = certsDir.resolve(CertificateManager.UPLOADED_PKCS12_FILE);
+            // `.jks` and PKCS#12 are different container formats. Store first,
+            // sniff the magic, and normalize a Java keystore to PKCS#12 — that
+            // is the format `https.pkcs12_file` reloads on the next start.
+            Path incoming = certsDir.resolve("uploaded.keystore.incoming");
+            boolean storedReplaced = false;
             try {
-                store(p12Part, stored);
-                certificates.installUploadedPkcs12(stored, password == null ? "" : password);
+                store(p12Part, incoming);
+                normalizeKeystore(incoming, stored, pass);
+                storedReplaced = true;
+                Files.deleteIfExists(incoming);
+                certificates.installUploadedPkcs12(stored, pass);
             } catch (ServerConfigLoader.ConfigException e) {
-                Files.deleteIfExists(stored);
+                Files.deleteIfExists(incoming);
+                // A rejected keystore before normalization leaves the previous
+                // upload alone; a failure after it replaced the file is the
+                // same rollback the PKCS#12 path always had.
+                if (storedReplaced) {
+                    Files.deleteIfExists(stored);
+                }
                 Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
                 return;
             }
             persistYaml(response, false, null, null,
-                    "certs/" + CertificateManager.UPLOADED_PKCS12_FILE, password == null ? "" : password);
+                    "certs/" + CertificateManager.UPLOADED_PKCS12_FILE, pass);
         } else {
             Path certFile = certsDir.resolve(CertificateManager.UPLOADED_CERT_FILE);
             Path keyFile = certsDir.resolve(CertificateManager.UPLOADED_KEY_FILE);
@@ -335,17 +359,94 @@ public final class TlsApiServlet extends HttpServlet {
 
     /// Writes a part to a file, owner-only: a private key and a PKCS#12 are
     /// credentials, and the certificate travels with them.
+    /// Java keystore magics (JKS / JCEKS). A `.jks` download is not a PKCS#12
+    /// file; the bytes decide, not the file name.
+    private static final int JKS_MAGIC = 0xFEEDFEED;
+    private static final int JCEKS_MAGIC = 0xCECECECE;
+
+    /// Moves a PKCS#12 upload into place, or converts a JKS/JCEKS one first.
+    ///
+    /// `server.yaml` records a single `pkcs12_file`, and that is what the next
+    /// start reloads; converting here keeps restart (and the hot reload path)
+    /// identical for every accepted container format.
+    private static void normalizeKeystore(Path incoming, Path stored, String password)
+            throws IOException {
+        int magic;
+        try (DataInputStream in = new DataInputStream(
+                new BufferedInputStream(Files.newInputStream(incoming)))) {
+            magic = in.readInt();
+        } catch (java.io.EOFException e) {
+            throw new ServerConfigLoader.ConfigException("the uploaded keystore is empty", e);
+        }
+        if (magic != JKS_MAGIC && magic != JCEKS_MAGIC) {
+            Files.move(incoming, stored, StandardCopyOption.REPLACE_EXISTING);
+            ownerOnly(stored);
+            return;
+        }
+        String type = magic == JCEKS_MAGIC ? "JCEKS" : "JKS";
+        char[] pass = password.toCharArray();
+        KeyStore source;
+        try (InputStream in = Files.newInputStream(incoming)) {
+            source = KeyStore.getInstance(type);
+            source.load(in, pass);
+        } catch (GeneralSecurityException | IOException e) {
+            throw new ServerConfigLoader.ConfigException(
+                    "Could not open the " + type + " keystore (wrong password?): " + e.getMessage(), e);
+        }
+        try {
+            KeyStore p12 = KeyStore.getInstance("PKCS12");
+            p12.load(null, null);
+            boolean copied = false;
+            for (Enumeration<String> aliases = source.aliases(); aliases.hasMoreElements(); ) {
+                String alias = aliases.nextElement();
+                if (!source.isKeyEntry(alias)) {
+                    continue;
+                }
+                Key key;
+                try {
+                    key = source.getKey(alias, pass);
+                } catch (UnrecoverableKeyException e) {
+                    throw new ServerConfigLoader.ConfigException(
+                            "The private key password differs from the keystore password; "
+                                    + "export PKCS#12 and upload that instead", e);
+                }
+                java.security.cert.Certificate[] chain = source.getCertificateChain(alias);
+                if (key == null || chain == null || chain.length == 0) {
+                    continue;
+                }
+                p12.setKeyEntry(copied ? alias : "server", key, pass, chain);
+                copied = true;
+            }
+            if (!copied) {
+                throw new ServerConfigLoader.ConfigException("The keystore contains no private key");
+            }
+            Path staging = stored.resolveSibling(stored.getFileName() + ".uploading");
+            try (OutputStream out = Files.newOutputStream(staging)) {
+                p12.store(out, pass);
+            }
+            ownerOnly(staging);
+            Files.move(staging, stored, StandardCopyOption.REPLACE_EXISTING);
+        } catch (GeneralSecurityException e) {
+            throw new ServerConfigLoader.ConfigException(
+                    "Could not convert the " + type + " keystore: " + e.getMessage(), e);
+        }
+    }
+
+    private static void ownerOnly(Path path) {
+        try {
+            Files.setPosixFilePermissions(path, Set.copyOf(EnumSet.of(
+                    PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE)));
+        } catch (IOException | UnsupportedOperationException e) {
+            // Best effort; non-POSIX filesystems cannot express this.
+        }
+    }
+
     private static void store(Part part, Path target) throws IOException {
         Path staging = target.resolveSibling(target.getFileName() + ".uploading");
         try (InputStream in = part.getInputStream(); OutputStream out = Files.newOutputStream(staging)) {
             in.transferTo(out);
         }
-        try {
-            Files.setPosixFilePermissions(staging, Set.copyOf(EnumSet.of(
-                    PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE)));
-        } catch (IOException | UnsupportedOperationException e) {
-            // Best effort; non-POSIX filesystems cannot express this.
-        }
+        ownerOnly(staging);
         Files.move(staging, target, StandardCopyOption.REPLACE_EXISTING);
     }
 }

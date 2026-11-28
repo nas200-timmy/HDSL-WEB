@@ -90,6 +90,9 @@ class AuthFlowTest {
                 config -> config.bindHost = "127.0.0.1")) {
             HttpClient client = TestSupport.client();
             String base = running.baseUrl();
+            assertTrue(org.jackhuang.hmcl.web.auth.SessionCookies.name()
+                    .startsWith(AuthFilter.SESSION_COOKIE + "_"),
+                    "the server must bind an instance cookie name, not the shared one");
 
             // The users file exists with the admin account, owner-only.
             Path usersFile = dataDir.resolve("auth/users.json");
@@ -111,7 +114,7 @@ class AuthFlowTest {
             assertTrue(body.get("ok").getAsBoolean());
             assertEquals("admin", body.get("username").getAsString());
             String setCookie = good.headers().firstValue("set-cookie").orElseThrow();
-            assertTrue(setCookie.startsWith(AuthFilter.SESSION_COOKIE + "="), setCookie);
+            assertTrue(setCookie.startsWith(org.jackhuang.hmcl.web.auth.SessionCookies.name() + "="), setCookie);
             assertTrue(setCookie.contains("HttpOnly"), setCookie);
             assertTrue(setCookie.contains("SameSite=Strict"), setCookie);
             assertTrue(setCookie.contains("Path=/"), setCookie);
@@ -131,7 +134,7 @@ class AuthFlowTest {
             HttpResponse<String> logout = post(client, base + "/api/auth/logout", "", cookie);
             assertEquals(200, logout.statusCode());
             String clear = logout.headers().firstValue("set-cookie").orElseThrow();
-            assertTrue(clear.contains(AuthFilter.SESSION_COOKIE) && clear.contains("Max-Age=0"), clear);
+            assertTrue(clear.contains(org.jackhuang.hmcl.web.auth.SessionCookies.name()) && clear.contains("Max-Age=0"), clear);
 
             // The old token no longer verifies.
             HttpResponse<String> after = get(client, base + "/api/auth/whoami", cookie);

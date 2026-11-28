@@ -76,10 +76,14 @@ class DeveloperGuardScopeTest {
         assertTrue(DeveloperGuardScope.instanceMutation("/api/zcode/instances/x/start", "POST"));
         assertTrue(DeveloperGuardScope.instanceMutation("/api/packs/install", "POST"));
         assertTrue(DeveloperGuardScope.instanceMutation("/api/settings/tls", "PUT"));
+        // Installing a runtime closure downloads and unpacks as root: the same
+        // authority as starting an instance, so the same door.
+        assertTrue(DeveloperGuardScope.instanceMutation("/api/bootstrap/install", "POST"));
         // Reads stay open: the list and the logs are how an operator sees what
         // is happening.
         assertFalse(DeveloperGuardScope.instanceMutation("/api/instances", "GET"));
         assertFalse(DeveloperGuardScope.instanceMutation("/api/instances/dsh-1/logs", "GET"));
+        assertFalse(DeveloperGuardScope.instanceMutation("/api/bootstrap", "GET"));
         // And unrelated surfaces are not instance mutations.
         assertFalse(DeveloperGuardScope.instanceMutation("/api/accounts", "POST"));
     }

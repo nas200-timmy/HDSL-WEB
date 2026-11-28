@@ -306,6 +306,86 @@ public final class ServerConfigWriter {
         writeAtomically(yamlFile, root);
     }
 
+    /// Records the ffmpeg download-mirror prefixes in `server.yaml`.
+    ///
+    /// Only `binary_mirror` / `source_mirror` are touched; every other key under
+    /// `transcode:` rides along untouched. The caller validates the prefixes, so
+    /// a bad value never reaches the file.
+    ///
+    /// @param dataDir      the directory `server.yaml` lives in
+    /// @param binaryMirror the prefix for binary downloads, `""` for official
+    /// @param sourceMirror the prefix for source archives, `""` for official
+    /// @throws IOException when the file cannot be read or written
+    public static void setTranscodeSources(Path dataDir, String binaryMirror, String sourceMirror)
+            throws IOException {
+        Path yamlFile = dataDir.resolve(ServerConfigLoader.YAML_FILE_NAME);
+        Map<String, Object> root = readExisting(yamlFile);
+        Map<String, Object> transcode = new LinkedHashMap<>();
+        Object existing = root.get("transcode");
+        if (existing instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                transcode.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+        }
+        transcode.put("binary_mirror", binaryMirror);
+        transcode.put("source_mirror", sourceMirror);
+        root.put("transcode", transcode);
+        writeAtomically(yamlFile, root);
+    }
+
+    /// Records all three download-mirror prefixes in `server.yaml`: ffmpeg
+    /// binaries, ffmpeg source archives, and build-toolchain artifacts
+    /// (Zig / w64devkit). The caller validates the prefixes, so a bad value
+    /// never reaches the file.
+    ///
+    /// @param dataDir         the directory `server.yaml` lives in
+    /// @param binaryMirror    the prefix for binary downloads, `""` for official
+    /// @param sourceMirror    the prefix for source archives, `""` for official
+    /// @param toolchainMirror the prefix for Zig/w64devkit, `""` for official
+    /// @throws IOException when the file cannot be read or written
+    public static void setTranscodeMirrors(Path dataDir, String binaryMirror,
+                                           String sourceMirror, String toolchainMirror)
+            throws IOException {
+        Path yamlFile = dataDir.resolve(ServerConfigLoader.YAML_FILE_NAME);
+        Map<String, Object> root = readExisting(yamlFile);
+        Map<String, Object> transcode = new LinkedHashMap<>();
+        Object existing = root.get("transcode");
+        if (existing instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                transcode.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+        }
+        transcode.put("binary_mirror", binaryMirror);
+        transcode.put("source_mirror", sourceMirror);
+        transcode.put("toolchain_mirror", toolchainMirror);
+        root.put("transcode", transcode);
+        writeAtomically(yamlFile, root);
+    }
+
+    /// Records which runtime the transcode queue uses in `server.yaml`.
+    ///
+    /// Only `default_runtime` is touched; every other key under `transcode:`
+    /// rides along untouched. The caller validates the value, so a bad one never
+    /// reaches the file.
+    ///
+    /// @param dataDir the directory `server.yaml` lives in
+    /// @param value   `auto`, `system`, or an installed runtime id
+    /// @throws IOException when the file cannot be read or written
+    public static void setTranscodeDefaultRuntime(Path dataDir, String value) throws IOException {
+        Path yamlFile = dataDir.resolve(ServerConfigLoader.YAML_FILE_NAME);
+        Map<String, Object> root = readExisting(yamlFile);
+        Map<String, Object> transcode = new LinkedHashMap<>();
+        Object existing = root.get("transcode");
+        if (existing instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                transcode.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+        }
+        transcode.put("default_runtime", value);
+        root.put("transcode", transcode);
+        writeAtomically(yamlFile, root);
+    }
+
     /// Records the log-retention windows in `server.yaml`'s `logs:` section.
     ///
     /// Only `audit_days` / `panel_days` are touched; any other key an operator

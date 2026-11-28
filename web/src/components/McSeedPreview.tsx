@@ -39,6 +39,74 @@ const formatEta = (seconds: number) =>
 const qualityLabel = (quality?: string) =>
   quality === "extreme" ? "极限" : quality === "ultra" ? "超清" : quality === "high" ? "高清" : "标准";
 
+/**
+ * 组内排序键。`time` 是纯粹的时间关系：被选为主排序时，其余键一律不参与。
+ * 其余键用于「把相似参数排在一起」——同版本、同引擎、同清晰度、同大小。
+ */
+type SeedSortKey = "time" | "version" | "engine" | "quality" | "radius";
+const SEED_SORT_LABELS: Record<SeedSortKey, string> = {
+  time: "时间（新→旧）",
+  version: "版本（新→旧）",
+  engine: "引擎（Java→MC）",
+  quality: "清晰度（低→高）",
+  radius: "范围（小→大）",
+};
+const SEED_SORT_KEYS: SeedSortKey[] = ["time", "version", "engine", "radius"];
+const SORT_LEVEL_LABELS = ["主", "次", "三"] as const;
+
+/** 排序链的槽位：主排序之外可以留空。 */
+type SeedSortChoice = SeedSortKey | "none";
+
+/** MC 版本号按数字段比较（`1.9` < `1.14`），而不是裸字典序。 */
+const compareSeedVersion = (left: string, right: string) =>
+  left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" });
+
+const compareSeedField = (
+  left: McSeedPreviewHistoryEntry,
+  right: McSeedPreviewHistoryEntry,
+  key: SeedSortKey,
+): number => {
+  switch (key) {
+    case "version":
+      return compareSeedVersion(right.version, left.version);
+    case "engine":
+      return (left.engine === "server" ? 1 : 0) - (right.engine === "server" ? 1 : 0);
+    case "quality":
+      return QUALITY_TIERS.findIndex((tier) => tier.id === (left.quality ?? "standard"))
+        - QUALITY_TIERS.findIndex((tier) => tier.id === (right.quality ?? "standard"));
+    case "radius":
+      return left.radius - right.radius;
+    case "time":
+      return Date.parse(right.generatedAt) - Date.parse(left.generatedAt);
+  }
+};
+
+/**
+ * 组内排序：按给定的优先级链逐级比较，最后以时间倒序兜底。
+ *
+ * 第一个槽位是主排序；为 `time` 时直接返回纯时间序——其余槽位被完全忽略，
+ * 不会因为"引擎相同"之类的原因重新洗牌。其余情况下每一级只在上一级打平时
+ * 生效，相同参数的记录里新记录在前。
+ */
+const sortSeedVariants = (variants: McSeedPreviewHistoryEntry[], choices: SeedSortChoice[]) => {
+  const sorted = [...variants];
+  const primary = choices[0] ?? "time";
+  if (primary === "time") {
+    return sorted.sort((left, right) => compareSeedField(left, right, "time"));
+  }
+  const chain = [...new Set(choices)]
+    .filter((key): key is SeedSortKey => key !== "none" && key !== "quality");
+  // 清晰度固定为末级：先按版本/引擎/范围分组，条件相同再比较清晰度。
+  chain.push("quality");
+  return sorted.sort((left, right) => {
+    for (const key of chain) {
+      const byKey = compareSeedField(left, right, key);
+      if (byKey !== 0) return byKey;
+    }
+    return compareSeedField(left, right, "time");
+  });
+};
+
 /** 正在看的是哪一张图：刚跑完的作业，还是历史里的一条。 */
 type View = {
   source: "job" | "history";
@@ -49,6 +117,20 @@ type View = {
   /** `biome` 是稀疏采样的群系速览，图很小，由浏览器平滑放大。 */
   mode: "detail" | "biome";
 };
+
+/** 单个种子组内部的筛选；与顶部的全局筛选叠加，互不改写。 */
+type SeedGroupFilter = {
+  version: string;
+  engine: string;
+  quality: string;
+  radius: string;
+};
+const EMPTY_GROUP_FILTER: SeedGroupFilter = { version: "", engine: "", quality: "", radius: "" };
+const matchesGroupFilter = (entry: McSeedPreviewHistoryEntry, filter: SeedGroupFilter) =>
+  (!filter.version || entry.version === filter.version)
+  && (!filter.engine || (entry.engine ?? "java") === filter.engine)
+  && (!filter.quality || (entry.quality ?? "standard") === filter.quality)
+  && (!filter.radius || String(entry.radius) === filter.radius);
 
 /**
  * 种子预览：给一个种子，出一张"这世界长什么样"的图。
@@ -85,6 +167,23 @@ export function McSeedPreview({
     quality: "",
     radius: "",
   });
+  const [expandedSeeds, setExpandedSeeds] = useState<Set<string>>(() => new Set());
+  const [groupFilters, setGroupFilters] = useState<Record<string, SeedGroupFilter>>({});
+  const [historySort, setHistorySort] = useState<SeedSortChoice[]>(["time", "none", "none"]);
+  const setSortLevel = (index: number, value: SeedSortChoice) =>
+    setHistorySort((previous) => {
+      const next = [...previous];
+      next[index] = value;
+      // 某一级被清空、或与更高级重复时，后面的级别不再有意义。
+      for (let level = 1; level < next.length; level++) {
+        if (next[level] !== "none"
+            && (next[level - 1] === "none" || next.slice(0, level).includes(next[level]))) {
+          next[level] = "none";
+        }
+      }
+      return next;
+    });
+  const [deleting, setDeleting] = useState<string | null>(null);
   const [radius, setRadius] = useState(512);
   const [caps, setCaps] = useState<McSeedPreviewCapabilities | null>(null);
   const [job, setJob] = useState<McSeedPreviewJob | null>(null);
@@ -221,6 +320,11 @@ export function McSeedPreview({
     setVersion(entry.version);
     setRadius(entry.radius);
     setEngine(entry.engine === "server" ? "server" : "java");
+    setExpandedSeeds((previous) => {
+      const next = new Set(previous);
+      next.add(entry.seed);
+      return next;
+    });
     if (entry.quality === "standard" || entry.quality === "high"
         || entry.quality === "ultra" || entry.quality === "extreme") {
       setQuality(entry.quality);
@@ -286,18 +390,91 @@ export function McSeedPreview({
 
   const flatHistory = useMemo(() => history.flatMap((group) => group.variants), [history]);
   const historyChoices = useMemo(() => ({
-    version: [...new Set(flatHistory.map((entry) => entry.version))].sort(),
+    version: [...new Set(flatHistory.map((entry) => entry.version))].sort(compareSeedVersion),
     engine: [...new Set(flatHistory.map((entry) => entry.engine ?? "java"))].sort(),
     quality: [...new Set(flatHistory.map((entry) => entry.quality ?? "standard"))].sort(),
     radius: [...new Set(flatHistory.map((entry) => String(entry.radius)))].sort((a, b) => Number(a) - Number(b)),
   }), [flatHistory]);
-  const filteredHistory = useMemo(() => flatHistory.filter((entry) =>
+  const matchesHistoryFilter = (entry: McSeedPreviewHistoryEntry) =>
     (!historyFilter.seed || entry.seed.includes(historyFilter.seed))
     && (!historyFilter.version || entry.version === historyFilter.version)
     && (!historyFilter.engine || (entry.engine ?? "java") === historyFilter.engine)
     && (!historyFilter.quality || (entry.quality ?? "standard") === historyFilter.quality)
-    && (!historyFilter.radius || String(entry.radius) === historyFilter.radius)
-  ), [flatHistory, historyFilter]);
+    && (!historyFilter.radius || String(entry.radius) === historyFilter.radius);
+  const filteredGroups = useMemo(() => {
+    const groups = history
+      .map((group) => ({
+        seed: group.seed,
+        variants: group.variants
+          .filter(matchesHistoryFilter)
+          .sort((left, right) => Date.parse(right.generatedAt) - Date.parse(left.generatedAt)),
+      }))
+      .filter((group) => group.variants.length > 0);
+    groups.sort((left, right) =>
+      Date.parse(right.variants[0].generatedAt) - Date.parse(left.variants[0].generatedAt));
+    return groups;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [history, historyFilter]);
+  const filteredCount = filteredGroups.reduce((total, group) => total + group.variants.length, 0);
+  const filtersActive = Object.values(historyFilter).some((value) => value !== "");
+  const updateGroupFilter = (seed: string, patch: Partial<SeedGroupFilter>) =>
+    setGroupFilters((previous) => ({
+      ...previous,
+      [seed]: { ...(previous[seed] ?? EMPTY_GROUP_FILTER), ...patch },
+    }));
+
+  const toggleSeed = (seed: string) => {
+    setExpandedSeeds((previous) => {
+      const next = new Set(previous);
+      if (next.has(seed)) next.delete(seed);
+      else next.add(seed);
+      return next;
+    });
+  };
+
+  const removeSeedGroup = async (seed: string, variants: McSeedPreviewHistoryEntry[]) => {
+    if (!window.confirm(`删除种子 ${seed} 的全部 ${variants.length} 条预览？`)) return;
+    setDeleting(`seed:${seed}`);
+    try {
+      for (const variant of variants) {
+        await api.mc.previewHistoryDelete(variant.id);
+      }
+      if (view?.source === "history" && variants.some((variant) => variant.id === view.id)) {
+        setView(null);
+        setMeta(null);
+      }
+      setExpandedSeeds((previous) => {
+        const next = new Set(previous);
+        next.delete(seed);
+        return next;
+      });
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setDeleting(null);
+      // Even a partial failure leaves some rows gone; re-read whatever is left.
+      await refreshHistory();
+    }
+  };
+
+  const clearHistory = async () => {
+    if (flatHistory.length === 0) return;
+    if (!window.confirm(`清空全部 ${flatHistory.length} 条种子预览？`)) return;
+    setDeleting("all");
+    try {
+      for (const entry of flatHistory) {
+        await api.mc.previewHistoryDelete(entry.id);
+      }
+      setView(null);
+      setMeta(null);
+      setExpandedSeeds(new Set());
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setDeleting(null);
+      await refreshHistory();
+    }
+  };
 
   const structureRows = meta ? Object.entries(meta.structureCounts).sort((a, b) => b[1] - a[1]) : [];
 
@@ -595,87 +772,298 @@ export function McSeedPreview({
       )}
 
       {flatHistory.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <div className="seed-history">
+          <div className="seed-history-head">
             <h4 style={{ margin: 0, fontSize: 13 }}>试过的种子</h4>
-            <span className="dim" style={{ fontSize: 12 }}>
-              {filteredHistory.length} / {flatHistory.length} 条（按列筛选）
+            <span className="seed-history-count">
+              {filteredGroups.length} / {history.length} 个种子 · {filteredCount} / {flatHistory.length} 条记录
+            </span>
+            <span className="seed-history-actions">
+              <button
+                className="btn btn-text"
+                onClick={() => setExpandedSeeds(new Set(filteredGroups.map((group) => group.seed)))}
+              >
+                全部展开
+              </button>
+              <button className="btn btn-text" onClick={() => setExpandedSeeds(new Set())}>
+                全部收起
+              </button>
+              <button
+                className="btn btn-text"
+                style={{ color: "#b3261e" }}
+                disabled={deleting !== null}
+                onClick={() => void clearHistory()}
+              >
+                {deleting === "all" ? "清空中…" : "清空全部"}
+              </button>
             </span>
           </div>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-            <thead>
-              <tr className="dim" style={{ textAlign: "left" }}>
-                <th>种子</th>
-                <th>版本</th>
-                <th>引擎</th>
-                <th>清晰度</th>
-                <th>范围</th>
-                <th>结构</th>
-                <th>时间</th>
-                <th></th>
-              </tr>
-              <tr>
-                <th style={{ paddingRight: 6 }}>
-                  <input
-                    className="input mono"
-                    value={historyFilter.seed}
-                    placeholder="筛选…"
-                    onChange={(e) => setHistoryFilter((f) => ({ ...f, seed: e.target.value }))}
-                    style={{ width: "100%", padding: "2px 6px", fontSize: 12 }}
-                  />
-                </th>
-                {(["version", "engine", "quality", "radius"] as const).map((key) => (
-                  <th key={key} style={{ paddingRight: 6 }}>
-                    <select
-                      className="input"
-                      value={historyFilter[key]}
-                      onChange={(e) => setHistoryFilter((f) => ({ ...f, [key]: e.target.value }))}
-                      style={{ width: "100%", padding: "2px 4px", fontSize: 12 }}
-                    >
-                      <option value="">全部</option>
-                      {historyChoices[key].map((value) => (
-                        <option key={value} value={value}>
-                          {key === "quality" ? qualityLabel(value)
-                            : key === "engine" ? (value === "java" ? "Java" : "MC")
-                            : key === "radius" ? `${(Number(value) * 2).toLocaleString()} 格`
-                            : value}
-                        </option>
-                      ))}
-                    </select>
-                  </th>
+
+          <div className="seed-filters">
+            <label className="seed-filter seed-filter-seed">
+              <span>种子</span>
+              <input
+                className="input mono"
+                value={historyFilter.seed}
+                placeholder="筛选…"
+                onChange={(e) => setHistoryFilter((f) => ({ ...f, seed: e.target.value }))}
+              />
+            </label>
+            <label className="seed-filter">
+              <span>版本</span>
+              <select
+                className="input"
+                value={historyFilter.version}
+                onChange={(e) => setHistoryFilter((f) => ({ ...f, version: e.target.value }))}
+              >
+                <option value="">全部</option>
+                {historyChoices.version.map((value) => (
+                  <option key={value} value={value}>{value}</option>
                 ))}
-                <th colSpan={3}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredHistory.map((entry) => {
-                const active = view?.source === "history" && view.id === entry.id;
-                return (
-                  <tr key={entry.id} style={{ background: active ? "rgba(78,111,255,.14)" : undefined }}>
-                    <td className="mono" style={{ padding: "2px 6px 2px 0" }}>{entry.seed}</td>
-                    <td>{entry.version}</td>
-                    <td>{entry.engine === "java" ? "Java" : "MC"}</td>
-                    <td>{qualityLabel(entry.quality)}</td>
-                    <td>{(entry.radius * 2).toLocaleString()} 格</td>
-                    <td className="dim">{entry.structures ?? "—"}</td>
-                    <td className="dim">{new Date(entry.generatedAt).toLocaleString()}</td>
-                    <td style={{ display: "flex", gap: 2 }}>
-                      <button className="btn btn-text" style={{ padding: "0 4px" }} onClick={() => void openHistory(entry)}>
-                        查看
-                      </button>
+              </select>
+            </label>
+            <label className="seed-filter">
+              <span>引擎</span>
+              <select
+                className="input"
+                value={historyFilter.engine}
+                onChange={(e) => setHistoryFilter((f) => ({ ...f, engine: e.target.value }))}
+              >
+                <option value="">全部</option>
+                {historyChoices.engine.map((value) => (
+                  <option key={value} value={value}>{value === "java" ? "Java" : "MC"}</option>
+                ))}
+              </select>
+            </label>
+            <label className="seed-filter">
+              <span>清晰度</span>
+              <select
+                className="input"
+                value={historyFilter.quality}
+                onChange={(e) => setHistoryFilter((f) => ({ ...f, quality: e.target.value }))}
+              >
+                <option value="">全部</option>
+                {historyChoices.quality.map((value) => (
+                  <option key={value} value={value}>{qualityLabel(value)}</option>
+                ))}
+              </select>
+            </label>
+            <label className="seed-filter">
+              <span>范围</span>
+              <select
+                className="input"
+                value={historyFilter.radius}
+                onChange={(e) => setHistoryFilter((f) => ({ ...f, radius: e.target.value }))}
+              >
+                <option value="">全部</option>
+                {historyChoices.radius.map((value) => (
+                  <option key={value} value={value}>{(Number(value) * 2).toLocaleString()} 格</option>
+                ))}
+              </select>
+            </label>
+            <button
+              className="btn btn-text"
+              disabled={!filtersActive}
+              onClick={() => setHistoryFilter({ seed: "", version: "", engine: "", quality: "", radius: "" })}
+            >
+              重置
+            </button>
+          </div>
+
+          <div className="seed-sort-row">
+            <span className="seed-sort-label">组内排序</span>
+            {SORT_LEVEL_LABELS.map((label, index) => (
+              <label className="seed-sort-field" key={label}>
+                <span>{label}</span>
+                <select
+                  className="input"
+                  value={historySort[index]}
+                  disabled={index > 0
+                    && (historySort[0] === "time" || historySort[index - 1] === "none")}
+                  onChange={(e) => setSortLevel(index, e.target.value as SeedSortChoice)}
+                >
+                  {index > 0 && (
+                    <option value="none">
+                      {historySort[0] === "time" ? "忽略" : "无"}
+                    </option>
+                  )}
+                  {SEED_SORT_KEYS
+                    .filter((key) => index === 0
+                      || (key !== "time" && !historySort.slice(0, index).includes(key)))
+                    .map((key) => (
+                      <option key={key} value={key}>{SEED_SORT_LABELS[key]}</option>
+                    ))}
+                </select>
+              </label>
+            ))}
+            <span className="seed-sort-hint">
+              {historySort[0] === "time"
+                ? "纯时间序：新→旧，其余键不参与"
+                : "主 → 次 → 三，末级固定比较清晰度，最后按时间新→旧兜底"}
+            </span>
+          </div>
+
+          {filteredGroups.length === 0 ? (
+            <div className="empty-state seed-empty">没有匹配的种子记录。</div>
+          ) : filteredGroups.map((group) => {
+            const expanded = expandedSeeds.has(group.seed);
+            const localFilter = groupFilters[group.seed] ?? EMPTY_GROUP_FILTER;
+            const visibleVariants = group.variants
+              .filter((entry) => matchesGroupFilter(entry, localFilter));
+            // 过滤结果本身按时间倒序（filteredGroups 里排好），最新一条仍在首位；
+            // 表格展示再按用户设的优先级链重排，两者互不干扰。
+            const sortedVariants = sortSeedVariants(visibleVariants, historySort);
+            const latest = visibleVariants[0] ?? group.variants[0];
+            const busy = deleting === `seed:${group.seed}`;
+            const localActive = Object.values(localFilter).some((value) => value !== "");
+            // 只给这一组用的选项：别的种子用过的版本/档位不该出现在这里。
+            const groupChoices = {
+              version: [...new Set(group.variants.map((entry) => entry.version))].sort(compareSeedVersion),
+              engine: [...new Set(group.variants.map((entry) => entry.engine ?? "java"))].sort(),
+              quality: [...new Set(group.variants.map((entry) => entry.quality ?? "standard"))].sort(),
+              radius: [...new Set(group.variants.map((entry) => String(entry.radius)))]
+                .sort((a, b) => Number(a) - Number(b)),
+            };
+            return (
+              <div className="seed-group" key={group.seed}>
+                <div className="seed-group-row">
+                  <button
+                    className="seed-group-toggle"
+                    aria-expanded={expanded}
+                    onClick={() => toggleSeed(group.seed)}
+                  >
+                    <span className="seed-group-caret">{expanded ? "▾" : "▸"}</span>
+                    <span className="seed-group-seed mono">{group.seed}</span>
+                    <span className="seed-group-meta">
+                      {localActive
+                        ? `${visibleVariants.length} / ${group.variants.length}`
+                        : group.variants.length} 条
+                      {visibleVariants.length > 0
+                        && ` · 最近 ${new Date(latest.generatedAt).toLocaleString()}`}
+                    </span>
+                  </button>
+                  <span className="seed-group-actions">
+                    <button className="btn btn-text" onClick={() => void openHistory(latest)}>
+                      查看最新
+                    </button>
+                    <button
+                      className="btn btn-text"
+                      style={{ color: "#b3261e" }}
+                      disabled={deleting !== null}
+                      onClick={() => void removeSeedGroup(group.seed, group.variants)}
+                    >
+                      {busy ? "删除中…" : "删除整组"}
+                    </button>
+                  </span>
+                </div>
+                {expanded && (
+                  <div className="seed-variants">
+                    <div className="seed-variant-head">
+                      <span className="seed-head-cell">
+                        <select
+                          className="seed-head-select"
+                          aria-label="按版本筛选"
+                          value={localFilter.version}
+                          onChange={(e) => updateGroupFilter(group.seed, { version: e.target.value })}
+                        >
+                          <option value="">版本</option>
+                          {groupChoices.version.map((value) => (
+                            <option key={value} value={value}>版本:{value}</option>
+                          ))}
+                        </select>
+                      </span>
+                      <span className="seed-head-cell">
+                        <select
+                          className="seed-head-select"
+                          aria-label="按引擎筛选"
+                          value={localFilter.engine}
+                          onChange={(e) => updateGroupFilter(group.seed, { engine: e.target.value })}
+                        >
+                          <option value="">引擎</option>
+                          {groupChoices.engine.map((value) => (
+                            <option key={value} value={value}>
+                              引擎:{value === "java" ? "Java" : "MC"}
+                            </option>
+                          ))}
+                        </select>
+                      </span>
+                      <span className="seed-head-cell">
+                        <select
+                          className="seed-head-select"
+                          aria-label="按清晰度筛选"
+                          value={localFilter.quality}
+                          onChange={(e) => updateGroupFilter(group.seed, { quality: e.target.value })}
+                        >
+                          <option value="">清晰度</option>
+                          {groupChoices.quality.map((value) => (
+                            <option key={value} value={value}>清晰度:{qualityLabel(value)}</option>
+                          ))}
+                        </select>
+                      </span>
+                      <span className="seed-head-cell">
+                        <select
+                          className="seed-head-select"
+                          aria-label="按范围筛选"
+                          value={localFilter.radius}
+                          onChange={(e) => updateGroupFilter(group.seed, { radius: e.target.value })}
+                        >
+                          <option value="">范围</option>
+                          {groupChoices.radius.map((value) => (
+                            <option key={value} value={value}>
+                              范围:{(Number(value) * 2).toLocaleString()} 格
+                            </option>
+                          ))}
+                        </select>
+                      </span>
+                      <span className="seed-head-static">结构</span>
+                      <span className="seed-head-static">时间</span>
                       <button
-                        className="btn btn-text"
-                        style={{ padding: "0 4px", color: "#b3261e" }}
-                        onClick={() => void removeHistory(entry)}
+                        className="btn btn-text seed-head-reset"
+                        disabled={!localActive}
+                        onClick={() => updateGroupFilter(group.seed, EMPTY_GROUP_FILTER)}
                       >
-                        删除
+                        重置
                       </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                    </div>
+                    {visibleVariants.length === 0 ? (
+                      <div className="empty-state seed-empty">这个种子下没有匹配的记录。</div>
+                    ) : sortedVariants.map((entry) => {
+                      const active = view?.source === "history" && view.id === entry.id;
+                      // The id comes from the server; a colliding pair used to
+                      // share this React key, and React then reused the wrong
+                      // row nodes (duplicates, stale rows after filtering).
+                      // generatedAt keeps the key unique even against an older
+                      // server that still computes ids from the recorded inputs.
+                      const rowKey = `${entry.id}:${entry.generatedAt}`;
+                      return (
+                        <div className={`seed-variant${active ? " active" : ""}`} key={rowKey}>
+                          <span className="seed-cell" data-label="版本">{entry.version}</span>
+                          <span className="seed-cell" data-label="引擎">{entry.engine === "server" ? "MC" : "Java"}</span>
+                          <span className="seed-cell" data-label="清晰度">{qualityLabel(entry.quality)}</span>
+                          <span className="seed-cell" data-label="范围">{(entry.radius * 2).toLocaleString()} 格</span>
+                          <span className="seed-cell" data-label="结构">{entry.structures ?? "—"}</span>
+                          <span className="seed-cell" data-label="时间">{new Date(entry.generatedAt).toLocaleString()}</span>
+                          <span className="seed-variant-actions">
+                            <button className="btn btn-text" onClick={() => void openHistory(entry)}>
+                              查看
+                            </button>
+                            <button
+                              className="btn btn-text"
+                              style={{ color: "#b3261e" }}
+                              disabled={deleting !== null}
+                              onClick={() => void removeHistory(entry)}
+                            >
+                              删除
+                            </button>
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

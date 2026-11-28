@@ -20,6 +20,7 @@ package org.jackhuang.hmcl.util.platform;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -72,15 +73,90 @@ class PrivilegesTest {
     void droppingPrefixesSetprivAndKeepsTheCommandIntact() {
         List<String> command = List.of("/opt/node/bin/node", "--version");
 
-        List<String> wrapped = Privileges.wrap(command, true);
+        List<String> wrapped = Privileges.wrap(command, true, List.of(44, 109));
 
         assertEquals("--reuid=" + Privileges.AGENT_UID, wrapped.get(1), wrapped.toString());
         assertEquals("--regid=" + Privileges.AGENT_UID, wrapped.get(2), wrapped.toString());
-        assertEquals("--init-groups", wrapped.get(3), wrapped.toString());
+        assertEquals("--groups=44,109", wrapped.get(3), wrapped.toString());
         assertEquals("--", wrapped.get(4), wrapped.toString());
         assertEquals(command, wrapped.subList(5, wrapped.size()),
                 "the agent's argv must arrive unchanged after the separator");
         assertTrue(wrapped.get(0).endsWith("setpriv"), wrapped.get(0));
+    }
+
+    /// A busybox applet named `setpriv` understands none of the options the
+    /// panel passes (`--reuid`/`--regid`/`--groups`), so a `PATH` that links
+    /// every busybox applet — the "complete busybox" image layout — breaks
+    /// every agent launch unless the shadow is skipped.
+    @Test
+    void aBusyboxSetprivIsNotASystemSetpriv(@TempDir Path directory) throws IOException {
+        assertTrue(Files.writeString(directory.resolve("busybox"), "fake") != null);
+        Path shadow = Files.createSymbolicLink(directory.resolve("setpriv"),
+                Path.of("busybox"));
+        assertFalse(Privileges.isRealSetpriv(shadow),
+                "a busybox multicall link is not util-linux's setpriv");
+
+        Path real = Files.writeString(directory.resolve("setpriv.real"), "fake");
+        assertTrue(Privileges.isRealSetpriv(real), "an ordinary file is kept");
+
+        Path chain = Files.createSymbolicLink(directory.resolve("link"),
+                Path.of("setpriv.real"));
+        assertTrue(Privileges.isRealSetpriv(chain), "a link to a real file is kept");
+    }
+
+    @Test
+    void noSupplementaryGroupsLeavesOnlyTheClearGroupsFlag() {
+        List<String> command = List.of("/opt/node/bin/node", "--version");
+
+        List<String> wrapped = Privileges.wrap(command, true, List.of());
+
+        assertEquals("--clear-groups", wrapped.get(3), wrapped.toString());
+        assertEquals("--", wrapped.get(4), wrapped.toString());
+        assertEquals(command, wrapped.subList(5, wrapped.size()));
+    }
+
+    @Test
+    void supplementaryGroupsComeFromTheGroupFile() {
+        String groups = """
+                root:x:0:
+                hdsl:x:1000:
+                video:x:44:hdsl
+                render:x:109:hdsl
+                docker:x:998:someone-else
+                """;
+        assertEquals(List.of(44, 109),
+                Privileges.supplementaryGids(groups, "hdsl", 1000, "Groups:\t0 1000 44 109"));
+    }
+
+    @Test
+    void anUnrelatedGroupRootCarriesDoesNotTravelToTheAgent() {
+        String groups = """
+                hdsl:x:1000:
+                video:x:44:hdsl
+                """;
+        // The group file exists and does not name 998; root's membership is not a
+        // reason to hand the agent a group the image never granted it.
+        assertEquals(List.of(44),
+                Privileges.supplementaryGids(groups, "hdsl", 1000, "Groups:\t0 1000 44 998"));
+    }
+
+    @Test
+    void withNoGroupFileTheContainersOwnGroupsAreTheOnlyEvidence() {
+        assertEquals(List.of(44, 109),
+                Privileges.supplementaryGids(null, null, 1000, "Groups:\t0 1000 44 109"));
+        assertEquals(List.of(),
+                Privileges.supplementaryGids("", "hdsl", 1000, "Groups:\t0 1000"));
+    }
+
+    @Test
+    void theAgentsNameIsReadFromPasswd() {
+        String passwd = """
+                root:x:0:0:root:/root:/bin/bash
+                hdsl:x:1001:1001::/home/hdsl:/bin/bash
+                """;
+        assertEquals("hdsl", Privileges.userNameForUid(passwd, 1001));
+        assertNull(Privileges.userNameForUid(passwd, 1002));
+        assertNull(Privileges.userNameForUid(null, 1000));
     }
 
     @Test
@@ -306,5 +382,50 @@ class PrivilegesTest {
 
         assertEquals(owner, Privileges.ownerOf(file));
         assertEquals(parentOwner, Privileges.ownerOf(operator));
+    }
+
+    @Test
+    void exactlyOneGroupOptionIsEverEmitted() {
+        // setpriv(1): --clear-groups / --keep-groups / --init-groups / --groups
+        // are mutually exclusive. Passing two makes every agent launch fail, and
+        // only a host whose supplementary groups are non-empty reaches the
+        // combination that used to do it.
+        java.util.List<java.util.List<Integer>> cases = java.util.List.of(
+                java.util.List.of(), java.util.List.of(44), java.util.List.of(44, 109));
+        for (java.util.List<Integer> groups : cases) {
+            java.util.List<String> wrapped = Privileges.wrap(
+                    java.util.List.of("true"), true, groups);
+            long options = wrapped.stream().filter(argument ->
+                    argument.equals("--clear-groups") || argument.equals("--keep-groups")
+                            || argument.equals("--init-groups") || argument.startsWith("--groups="))
+                    .count();
+            assertEquals(1, options, groups + " -> " + wrapped);
+        }
+    }
+
+    /// The mode transform behind [Privileges#keepRootExecutable]: the agent may
+    /// still read and run a sealed tool, but never rewrite it.
+    @Test
+    void sealingKeepsToolsUsableButNotRewritable() {
+        assertEquals(
+                java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"),
+                Privileges.sealed(java.nio.file.attribute.PosixFilePermissions
+                        .fromString("rwxrwxrwx"), false),
+                "an executable stays executable, group/other write goes");
+        assertEquals(
+                java.nio.file.attribute.PosixFilePermissions.fromString("rw-r--r--"),
+                Privileges.sealed(java.nio.file.attribute.PosixFilePermissions
+                        .fromString("rw-rw-r--"), false),
+                "a readable file stays readable");
+        assertEquals(
+                java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"),
+                Privileges.sealed(java.nio.file.attribute.PosixFilePermissions
+                        .fromString("rwxrwxr-x"), true),
+                "a directory stays traversable");
+        assertEquals(
+                java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"),
+                Privileges.sealed(java.nio.file.attribute.PosixFilePermissions
+                        .fromString("rw-------"), false),
+                "an owner-only file is not widened");
     }
 }

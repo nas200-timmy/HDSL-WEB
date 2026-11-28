@@ -1419,17 +1419,23 @@ public final class SeedPreviewService {
             String seed = body.get("seed").getAsString();
             int radius = body.get("radius").getAsInt();
             int biomeY = body.get("biomeY").getAsInt();
-            String engine = body.has("engine") ? body.get("engine").getAsString() : "server";
-            String quality = body.has("quality") ? body.get("quality").getAsString() : "standard";
+            // Older cache entries predate `engine`/`quality` in meta.json. The
+            // directory name still records them; defaulting to MC/标准 made
+            // those rows indistinguishable and also gave several directories
+            // the same history id.
+            String directory = variant.getFileName().toString();
+            VariantHints hints = variantHints(directory);
+            String engine = body.has("engine") ? body.get("engine").getAsString() : hints.engine();
+            String quality = body.has("quality") ? body.get("quality").getAsString() : hints.quality();
             JsonObject entry = new JsonObject();
-            entry.addProperty("id", historyId(version, seed, radius, biomeY, engine, quality));
+            entry.addProperty("id", historyId(version, seed, directory));
             entry.addProperty("version", version);
             entry.addProperty("seed", seed);
             entry.addProperty("radius", radius);
             entry.addProperty("biomeY", biomeY);
             entry.addProperty("generatedAt", body.get("generatedAt").getAsString());
             entry.addProperty("partial", body.get("partial").getAsBoolean());
-            entry.addProperty("mode", body.has("mode") ? body.get("mode").getAsString() : "detail");
+            entry.addProperty("mode", body.has("mode") ? body.get("mode").getAsString() : hints.mode());
             entry.addProperty("engine", engine);
             entry.addProperty("quality", quality);
             entry.addProperty("bytes", Files.size(png));
@@ -1442,10 +1448,34 @@ public final class SeedPreviewService {
         }
     }
 
-    /// A stable handle for a cached result: the same four inputs always name the
-    /// same picture, so a bookmark or a page reload keeps working.
-    public static String historyId(String version, String seed, int radius, int biomeY, String engine, String quality) {
-        String key = version + "|" + seed + "|" + radius + "|" + biomeY + "|" + engine + "|" + quality;
+    /// What the directory name still knows when `meta.json` predates a field.
+    ///
+    /// The name is built from the spec (`8192-63-biome-java-hd-v10`), so the
+    /// engine, quality and mode can be recovered for entries written before
+    /// those fields existed in metadata.
+    record VariantHints(String engine, String quality, String mode) {}
+
+    static VariantHints variantHints(String directoryName) {
+        String name = directoryName.replaceFirst("-v\\d+$", "");
+        List<String> parts = List.of(name.split("-"));
+        String engine = parts.contains("java") ? "java" : "server";
+        String quality = parts.contains("extreme") ? "extreme"
+                : parts.contains("ultra") ? "ultra"
+                : parts.contains("hd") ? "high" : "standard";
+        String mode = parts.contains("biome") ? "biome" : "detail";
+        return new VariantHints(engine, quality, mode);
+    }
+
+    /// A stable handle for a cached result: version + seed + the variant
+    /// directory name, which encodes every render input.
+    ///
+    /// The inputs alone are not unique. Legacy `meta.json` files predate
+    /// `engine`/`quality`, and the cache-generation suffix (`-v9`, `-v10`)
+    /// leaves sibling directories that record the same values. Colliding ids
+    /// also became colliding React keys in the history table — the rows then
+    /// duplicated and ignored filters until the group was remounted.
+    public static String historyId(String version, String seed, String variantDirectory) {
+        String key = version + "|" + seed + "|" + variantDirectory;
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256")
                     .digest(key.getBytes(StandardCharsets.UTF_8));

@@ -493,8 +493,8 @@ public final class TerminalWebSocket implements TerminalSink, TerminalSockets.So
                 for (String value : header.getValue()) {
                     for (String pair : value.split(";")) {
                         String trimmed = pair.trim();
-                        if (trimmed.startsWith(AuthFilter.SESSION_COOKIE + "=")) {
-                            return trimmed.substring(AuthFilter.SESSION_COOKIE.length() + 1);
+                        if (trimmed.startsWith(org.jackhuang.hmcl.web.auth.SessionCookies.name() + "=")) {
+                            return trimmed.substring(org.jackhuang.hmcl.web.auth.SessionCookies.name().length() + 1);
                         }
                     }
                 }

@@ -58,7 +58,9 @@ class ZcodeBuilderTest {
                 "",
                 fakePnpm(),
                 tarball.toString(),
-                false);
+                false,
+                fakeSharedPython(),
+                fakeToolchain());
 
         ZcodeBuilder.start(settings, "main");
         ZcodeBuilder.Status status = awaitTerminal(120);
@@ -86,7 +88,8 @@ class ZcodeBuilderTest {
         run(List.of("tar", "-czf", tarball.toString(), "-C", dir.toString(), "srcroot"));
 
         ZcodeBuilder.Settings settings = new ZcodeBuilder.Settings(
-                dir.resolve("root"), "", fakePnpm(), tarball.toString(), true);
+                dir.resolve("root"), "", fakePnpm(), tarball.toString(), true, fakeSharedPython(),
+                fakeToolchain());
 
         ZcodeBuilder.start(settings, "main");
         assertEquals(ZcodeBuilder.State.DONE, awaitTerminal(120).state());
@@ -107,7 +110,8 @@ class ZcodeBuilderTest {
     @Test
     void aMissingSourceTarballEndsInError() throws Exception {
         ZcodeBuilder.Settings settings = new ZcodeBuilder.Settings(
-                dir.resolve("root"), "", fakePnpm(), dir.resolve("missing.tar.gz").toString(), false);
+                dir.resolve("root"), "", fakePnpm(), dir.resolve("missing.tar.gz").toString(), false,
+                fakeSharedPython(), fakeToolchain());
 
         ZcodeBuilder.start(settings, "v9.9.9");
         ZcodeBuilder.Status status = awaitTerminal(60);
@@ -118,7 +122,7 @@ class ZcodeBuilderTest {
     @Test
     void rejectsARefNameThatIsNotARefName() throws Exception {
         ZcodeBuilder.Settings settings = new ZcodeBuilder.Settings(
-                dir.resolve("root"), "", fakePnpm(), "%s", false);
+                dir.resolve("root"), "", fakePnpm(), "%s", false, fakeSharedPython(), fakeToolchain());
         assertThrows(ZcodeException.class, () -> ZcodeBuilder.start(settings, "main; rm -rf /"));
     }
 
@@ -136,7 +140,8 @@ class ZcodeBuilderTest {
         String stub = fakePnpm();
         try {
             ZcodeBuilder.Settings builderSettings = new ZcodeBuilder.Settings(
-                    dir.resolve("root"), "", stub, tarball.toString(), false);
+                    dir.resolve("root"), "", stub, tarball.toString(), false, fakeSharedPython(),
+                    fakeToolchain());
             ZcodeBuilder.start(builderSettings, "main");
             ZcodeBuilder.Status status = awaitTerminal(120);
             assertEquals(ZcodeBuilder.State.DONE, status.state(),
@@ -155,6 +160,56 @@ class ZcodeBuilderTest {
         } finally {
             settings.setNpmRegistryPreset(NpmRegistry.ENVIRONMENT);
         }
+    }
+
+    /// node-gyp reads `npm_config_python`, uv reads `PYTHON`; both must name the
+    /// shared interpreter the builder ensured before the install started.
+    @Test
+    void theSharedPythonReachesTheInstallEnvironment() throws Exception {
+        copy(Path.of("src/test/resources/fake-zcode-source"), dir.resolve("srcroot"));
+        Path tarball = dir.resolve("zcode-source.tar.gz");
+        run(List.of("tar", "-czf", tarball.toString(), "-C", dir.toString(), "srcroot"));
+        Path pythonRoot = fakeSharedPython();
+        Path interpreter = pythonRoot.resolve("3.12.16/bin/python3").toAbsolutePath();
+
+        String stub = fakePnpm();
+        ZcodeBuilder.Settings builderSettings = new ZcodeBuilder.Settings(
+                dir.resolve("root"), "", stub, tarball.toString(), false, pythonRoot, fakeToolchain());
+        ZcodeBuilder.start(builderSettings, "main");
+        ZcodeBuilder.Status status = awaitTerminal(120);
+        assertEquals(ZcodeBuilder.State.DONE, status.state(),
+                status.message() + " | log: " + String.join("\n", ZcodeBuilder.tailLog(40)));
+
+        List<String> recorded = Files.readAllLines(Path.of(stub + ".args"), StandardCharsets.UTF_8);
+        assertTrue(recorded.contains("PYTHON=" + interpreter),
+                "the shared interpreter must reach node-gyp: " + recorded);
+        assertTrue(recorded.contains("npm_config_python=" + interpreter),
+                "node-gyp reads npm_config_python: " + recorded);
+        assertTrue(recorded.stream().anyMatch(line -> line.startsWith("CC=")),
+                "the build toolchain must reach pnpm/node-gyp: " + recorded);
+        assertTrue(recorded.stream().anyMatch(line -> line.startsWith("CXX=")),
+                "the build toolchain must reach pnpm/node-gyp: " + recorded);
+        assertTrue(recorded.stream().anyMatch(line -> line.startsWith("MAKE=")),
+                "the build toolchain must reach pnpm/node-gyp: " + recorded);
+    }
+
+    /// A source build that cannot get a compiler stops with the actionable
+    /// `build_toolchain_missing` error, before the long source download.
+    @Test
+    void aMissingBuildToolchainStopsBeforeTheDownload() throws Exception {
+        Path notADirectory = dir.resolve("not-a-directory");
+        Files.writeString(notADirectory, "x", StandardCharsets.UTF_8);
+        org.jackhuang.hmcl.dsh.BuildToolchainManager broken =
+                new org.jackhuang.hmcl.dsh.BuildToolchainManager(notADirectory, "");
+        ZcodeBuilder.Settings settings = new ZcodeBuilder.Settings(
+                dir.resolve("root"), "", fakePnpm(), "%s", false, fakeSharedPython(), broken);
+
+        ZcodeBuilder.start(settings, "main");
+        ZcodeBuilder.Status status = awaitTerminal(60);
+
+        assertEquals(ZcodeBuilder.State.ERROR, status.state());
+        assertNotNull(status.error());
+        assertTrue(status.error().contains("build_toolchain_missing"), status.error());
     }
 
     /// A pointer written as a text file — what [org.jackhuang.hmcl.util.io.Links]
@@ -214,6 +269,37 @@ class ZcodeBuilderTest {
         assertFalse(Files.exists(current, java.nio.file.LinkOption.NOFOLLOW_LINKS), "the pointer file is gone");
         assertTrue(Files.isRegularFile(release.resolve("bin/zcode.mjs")),
                 "the release the pointer named must survive the pointer file's deletion");
+    }
+
+    /// A build toolchain that never downloads: a directory of stub compilers is
+    /// handed to the manager as the system `PATH`, so the same answer is reached
+    /// on Linux and on a bare Windows test machine.
+    private org.jackhuang.hmcl.dsh.BuildToolchainManager fakeToolchain() throws IOException {
+        Path bin = dir.resolve("fake-build-bin");
+        Files.createDirectories(bin);
+        for (String name : List.of("cc", "c++", "make", "pkg-config", "nasm")) {
+            Path script = bin.resolve(name);
+            Files.writeString(script, "#!/bin/sh\nexit 0\n", StandardCharsets.UTF_8);
+            script.toFile().setExecutable(true, false);
+            // Windows resolves `cc` to `cc.exe`; the file is never run there,
+            // only found by the manager's probe.
+            Files.writeString(bin.resolve(name + ".exe"), "stub", StandardCharsets.UTF_8);
+        }
+        return new org.jackhuang.hmcl.dsh.BuildToolchainManager(
+                dir.resolve("toolchains/build"), bin.toString());
+    }
+
+    /// A shared CPython the builder reuses instead of downloading one. The
+    /// manager only requires the interpreter file to exist when a version is
+    /// already installed; nothing here is executed.
+    private Path fakeSharedPython() throws IOException {
+        Path root = dir.resolve("toolchains/python");
+        Path bin = root.resolve("3.12.16/bin");
+        Files.createDirectories(bin);
+        Path interpreter = bin.resolve("python3");
+        Files.writeString(interpreter, "#!/bin/sh\nexit 0\n", StandardCharsets.UTF_8);
+        interpreter.toFile().setExecutable(true, false);
+        return root;
     }
 
     /// The stub `pnpm`, copied somewhere writable with its executable bit set:

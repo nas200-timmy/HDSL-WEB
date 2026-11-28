@@ -1619,3 +1619,359 @@ select.input {
   background: var(--monet-error);
   pointer-events: none;
 }
+
+/* ---------------- 种子预览历史（按种子折叠的树） ---------------- */
+
+.seed-history {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.seed-history-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.seed-history-count {
+  font-size: 12px;
+  color: var(--monet-on-surface-variant);
+}
+
+.seed-history-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+
+.seed-filters {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--monet-outline-variant);
+  border-radius: 6px;
+  background: var(--monet-surface-container-low);
+}
+
+.seed-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 128px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--monet-on-surface-variant);
+}
+
+/* 种子输入需要完整数字/中文文本；宽度固定，和下面的下拉框成列。 */
+.seed-filter.seed-filter-seed {
+  width: 176px;
+}
+
+.seed-filter .input {
+  width: 100%;
+  font-size: 12px;
+  padding: 3px 6px;
+}
+
+/* 组内排序：主 → 次 → 再；时间排序时后两级禁用。 */
+.seed-sort-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--monet-outline-variant);
+  border-radius: 6px;
+  background: var(--monet-surface-container-low);
+  font-size: 11px;
+  color: var(--monet-on-surface-variant);
+}
+
+.seed-sort-label {
+  font-weight: 600;
+}
+
+.seed-sort-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.seed-sort-field .input {
+  width: 150px;
+  font-size: 12px;
+  padding: 3px 6px;
+}
+
+.seed-sort-field .input:disabled {
+  opacity: 0.55;
+}
+
+.seed-sort-hint {
+  margin-left: auto;
+}
+
+.seed-group {
+  border: 1px solid var(--monet-outline-variant);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--monet-surface-container-lowest);
+}
+
+.seed-group-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+}
+
+.seed-group-toggle {
+  font: inherit;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.seed-group-caret {
+  width: 12px;
+  flex: none;
+  color: var(--monet-on-surface-variant);
+}
+
+.seed-group-seed {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seed-group-meta {
+  font-size: 11px;
+  color: var(--monet-on-surface-variant);
+  white-space: nowrap;
+}
+
+.seed-group-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+.seed-group-actions .btn,
+.seed-variant-actions .btn {
+  font-size: 11px;
+  height: 26px;
+  padding: 0 6px;
+}
+
+.seed-variants {
+  /* 展开后的表格列；表头与每一行共用同一组列宽，才会真正对齐。
+     前四列比数据宽一点，因为表头本身就是筛选下拉（列名 + 当前值 + 三角）。 */
+  --seed-cols: 104px 92px 108px 132px 56px minmax(132px, 1fr) auto;
+  border-top: 1px solid var(--monet-outline-variant);
+}
+
+.seed-variant-head,
+.seed-variant {
+  display: grid;
+  grid-template-columns: var(--seed-cols);
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+}
+
+.seed-variant-head {
+  font-size: 11px;
+  color: var(--monet-on-surface-variant);
+  border-bottom: 1px solid var(--monet-outline-variant);
+}
+
+/* 表头即筛选：整格是一个原生 select，右侧一个小三角当提示。 */
+.seed-head-cell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.seed-head-select {
+  width: 100%;
+  min-width: 0;
+  padding: 2px 14px 2px 2px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+  appearance: none;
+  cursor: pointer;
+}
+
+.seed-head-select:hover,
+.seed-head-select:focus {
+  background: var(--monet-surface-container-highest);
+  outline: none;
+}
+
+.seed-head-cell::after {
+  content: "";
+  position: absolute;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+  pointer-events: none;
+}
+
+.seed-head-static {
+  white-space: nowrap;
+}
+
+.seed-head-reset {
+  justify-self: end;
+  font-size: 11px;
+  height: 22px;
+  padding: 0 4px;
+}
+
+.seed-variant {
+  font-size: 12px;
+}
+
+.seed-variant + .seed-variant {
+  border-top: 1px solid var(--monet-outline-variant);
+}
+
+.seed-variant.active {
+  background: color-mix(in srgb, var(--monet-primary) 10%, transparent);
+}
+
+.seed-cell {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.seed-variant-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  flex: none;
+}
+
+.seed-empty {
+  padding: 22px 12px;
+}
+
+@media (max-width: 760px) {
+  .seed-history-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .seed-filters {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .seed-filter {
+    width: auto;
+    min-width: 0;
+  }
+
+  .seed-filter.seed-filter-seed {
+    width: auto;
+  }
+
+  /* 排序条：两列放三个选择器，标签与说明各占整行。 */
+  .seed-sort-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .seed-sort-label,
+  .seed-sort-hint {
+    grid-column: 1 / -1;
+  }
+
+  .seed-sort-field .input {
+    width: 100%;
+  }
+
+  .seed-sort-hint {
+    margin-left: 0;
+  }
+
+  .seed-group-row {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .seed-group-meta {
+    white-space: normal;
+  }
+
+  .seed-group-actions {
+    width: 100%;
+    margin-left: 20px;
+  }
+
+  /* 窄屏：表头改成 2×2 的筛选格；结构/时间标签由行内 data-label 承担。 */
+  .seed-variant-head {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    padding: 8px 9px;
+  }
+
+  .seed-head-static {
+    display: none;
+  }
+
+  .seed-head-reset {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
+
+  .seed-variant {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 1px;
+  }
+
+  .seed-cell::before {
+    content: attr(data-label) " ";
+    font-weight: 600;
+    color: var(--monet-on-surface-variant);
+  }
+
+  .seed-variant-actions {
+    justify-content: flex-end;
+  }
+}

@@ -28,6 +28,7 @@ import org.jackhuang.hmcl.web.audit.AuditLog;
 import org.jackhuang.hmcl.web.auth.AuthFilter;
 import org.jackhuang.hmcl.web.auth.AuthService;
 import org.jackhuang.hmcl.web.config.ServerConfig;
+import org.jackhuang.hmcl.web.config.ServerConfigLoader;
 import org.jackhuang.hmcl.web.config.ServerConfigWriter;
 import org.jackhuang.hmcl.web.developer.DeveloperAuth;
 import org.jackhuang.hmcl.web.developer.DeveloperElevation;
@@ -38,7 +39,15 @@ import org.jackhuang.hmcl.web.transcode.preset.PresetSchema;
 import org.jackhuang.hmcl.web.transcode.preset.PresetStore;
 import org.jackhuang.hmcl.web.transcode.preset.PresetTransfer;
 import org.jackhuang.hmcl.web.transcode.preset.TranscodePreset;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegCapabilities;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegToolchainManager;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegInstaller;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegFullBuildCatalog;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegCatalog;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegLocator;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegProbe;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegRuntimeManager;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegSelector;
 import org.jackhuang.hmcl.web.transcode.runtime.HardwareProbe;
 import org.jackhuang.hmcl.web.transcode.command.CommandBuilder;
 import org.jetbrains.annotations.NotNullByDefault;
@@ -51,6 +60,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.BooleanSupplier;
 
@@ -62,6 +72,12 @@ import java.util.function.BooleanSupplier;
 /// is answered 404 by the filter.
 @NotNullByDefault
 public final class TranscodeApiServlet extends HttpServlet {
+
+    /// The encoders a transcode-capable build is expected to carry. The
+    /// settings ledger shows how many of these each runtime actually declares
+    /// or probes, so a "LGPL minimal" build is visibly different from a full one.
+    static final java.util.List<String> COMMON_FEATURES = java.util.List.of(
+            "libx264", "libx265", "libvpx", "libaom", "libsvtav1");
 
     private final TranscodeModule module;
     private final ServerConfig config;
@@ -134,6 +150,30 @@ public final class TranscodeApiServlet extends HttpServlet {
             qualityGet(request, response, path.substring("/tools/quality/".length()));
             return;
         }
+        if ("/runtime".equals(path)) {
+            runtimeJson(response, request.getParameter("major"));
+            return;
+        }
+        if ("/runtime/catalog".equals(path)) {
+            catalogJson(response);
+            return;
+        }
+        if ("/runtime/source".equals(path)) {
+            sourceJson(response);
+            return;
+        }
+        if ("/runtime/full-builds".equals(path)) {
+            fullBuildsJson(response);
+            return;
+        }
+        if ("/runtime/installs".equals(path)) {
+            installsJson(response);
+            return;
+        }
+        if (path.startsWith("/runtime/jobs/")) {
+            runtimeGet(response, path.substring("/runtime/jobs/".length()));
+            return;
+        }
         if (path.startsWith("/runtime/install/")) {
             runtimeGet(response, path.substring("/runtime/install/".length()));
             return;
@@ -178,10 +218,16 @@ public final class TranscodeApiServlet extends HttpServlet {
             case "/tools/extract" -> extractTool(request, response);
             case "/tools/quality" -> qualityTool(request, response);
             case "/runtime/install" -> runtimeInstall(request, response);
+            case "/runtime/select" -> runtimeSelect(request, response);
+            case "/runtime/rollback" -> runtimeRollback(request, response);
             case "/capabilities/probe" -> capabilityProbe(request, response);
             default -> {
                 if (path.startsWith("/queue/jobs/")) {
                     queueJobAction(request, response, path.substring("/queue/jobs/".length()));
+                } else if (path.startsWith("/runtime/jobs/") && path.endsWith("/cancel")) {
+                    String rest = path.substring("/runtime/jobs/".length(),
+                            path.length() - "/cancel".length());
+                    runtimeCancel(response, rest);
                 } else if (path.startsWith("/runtime/install/") && path.endsWith("/cancel")) {
                     String rest = path.substring("/runtime/install/".length(),
                             path.length() - "/cancel".length());
@@ -200,6 +246,10 @@ public final class TranscodeApiServlet extends HttpServlet {
     @Override
     protected void doPut(HttpServletRequest request, HttpServletResponse response) throws IOException {
         String path = path(request);
+        if ("/runtime/default".equals(path)) {
+            runtimeDefault(request, response);
+            return;
+        }
         if (!"/settings".equals(path)) {
             Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
             return;
@@ -207,6 +257,15 @@ public final class TranscodeApiServlet extends HttpServlet {
         JsonObject body = readJson(request);
         if (body == null) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must be a JSON object");
+            return;
+        }
+        // A download mirror decides where every later install fetches its
+        // bytes from. The digest still protects integrity, but the choice is
+        // an execution-shaped knob and belongs behind the same door as the
+        // install it feeds.
+        boolean changesMirror = body.has("binaryMirror") || body.has("sourceMirror")
+                || body.has("toolchainMirror");
+        if (changesMirror && !requireHumanElevation(request, response)) {
             return;
         }
         String policy = stringField(body, "failurePolicy");
@@ -221,15 +280,45 @@ public final class TranscodeApiServlet extends HttpServlet {
                     "failureTimeoutMinutes must be between 1 and 1440");
             return;
         }
+        String binaryMirror = config.transcode.binaryMirror;
+        String sourceMirror = config.transcode.sourceMirror;
+        String toolchainMirror = config.transcode.toolchainMirror;
         try {
+            if (body.has("binaryMirror")) {
+                binaryMirror = ServerConfigLoader.mirrorPrefix(stringField(body, "binaryMirror"),
+                        "binaryMirror");
+            }
+            if (body.has("sourceMirror")) {
+                sourceMirror = ServerConfigLoader.mirrorPrefix(stringField(body, "sourceMirror"),
+                        "sourceMirror");
+            }
+            if (body.has("toolchainMirror")) {
+                toolchainMirror = ServerConfigLoader.mirrorPrefix(
+                        stringField(body, "toolchainMirror"), "toolchainMirror");
+            }
+        } catch (ServerConfigLoader.ConfigException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+            return;
+        }
+        try {
+            ServerConfigWriter.setTranscodeMirrors(config.dataDir, binaryMirror, sourceMirror,
+                    toolchainMirror);
+            config.transcode.binaryMirror = binaryMirror;
+            config.transcode.sourceMirror = sourceMirror;
+            config.transcode.toolchainMirror = toolchainMirror;
             ServerConfigWriter.setTranscodeFailurePolicy(config.dataDir, policy,
                     body.has("failureTimeoutMinutes") ? timeout : config.transcode.failureTimeoutMinutes);
             config.transcode.failurePolicy = policy;
             if (body.has("failureTimeoutMinutes")) {
                 config.transcode.failureTimeoutMinutes = timeout;
             }
-            audit("transcode.settings.update", policy + "/"
-                    + config.transcode.failureTimeoutMinutes, "success", request);
+            // The mirror values are part of what changed, so they belong in
+            // the record; "policy/timeout" alone could not answer "was the
+            // download source rewritten?" after the fact.
+            String audited = policy + "/" + config.transcode.failureTimeoutMinutes
+                    + (changesMirror ? " mirrors=" + binaryMirror + "," + sourceMirror
+                            + "," + toolchainMirror : "");
+            audit("transcode.settings.update", audited, "success", request);
             featureJson(response);
         } catch (IOException e) {
             Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
@@ -252,6 +341,24 @@ public final class TranscodeApiServlet extends HttpServlet {
             }
             audit("transcode.queue.remove", id, "success", request);
             Json.write(response, module.queue().snapshot());
+            return;
+        }
+        if (path.startsWith("/runtime/")) {
+            if (!requireHumanElevation(request, response)) {
+                return;
+            }
+            String id = path.substring("/runtime/".length());
+            if (id.isBlank() || id.contains("/")) {
+                Json.error(response, HttpServletResponse.SC_NOT_FOUND, "not found");
+                return;
+            }
+            try {
+                module.runtimeManager().delete(id);
+                audit("transcode.runtime.delete", id, "success", request);
+                Json.write(response, Map.of("ok", true));
+            } catch (IOException e) {
+                Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
+            }
             return;
         }
         if (!path.startsWith("/presets/")) {
@@ -296,6 +403,9 @@ public final class TranscodeApiServlet extends HttpServlet {
         body.addProperty("maxQueue", config.transcode.maxQueue);
         body.addProperty("failurePolicy", config.transcode.failurePolicy);
         body.addProperty("failureTimeoutMinutes", config.transcode.failureTimeoutMinutes);
+        body.addProperty("binaryMirror", config.transcode.binaryMirror);
+        body.addProperty("sourceMirror", config.transcode.sourceMirror);
+        body.addProperty("toolchainMirror", config.transcode.toolchainMirror);
         body.addProperty("autoResume", config.transcode.autoResume);
         feature.consent().ifPresent(record -> {
             JsonObject consent = new JsonObject();
@@ -705,22 +815,437 @@ public final class TranscodeApiServlet extends HttpServlet {
     }
 
     private void runtimeInstall(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireHumanElevation(request, response)) {
+            return;
+        }
         JsonObject body = readJson(request);
         if (body == null) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "request body must be a JSON object");
             return;
         }
         try {
-            var job = module.installer().start(
-                    stringField(body, "kind"),
-                    stringField(body, "url"),
-                    stringField(body, "sha256"),
-                    stringField(body, "version"));
+            FfmpegToolchainManager.Preference compiler =
+                    FfmpegToolchainManager.Preference.parse(stringField(body, "compiler"));
+            FfmpegInstaller.InstallJob job;
+            String mode = stringField(body, "mode");
+            if (mode != null && !mode.isBlank()) {
+                job = switch (mode) {
+                    case "auto" -> module.installer().startAuto(features(body), stringField(body, "major"));
+                    case "artifact" -> module.installer().startArtifact(requiredField(body, "id"));
+                    case "custom" -> module.installer().startCustom(
+                            requiredField(body, "url"),
+                            requiredField(body, "sha256"),
+                            stringField(body, "version"));
+                    case "package" -> module.installer().start("package", null, null, null);
+                    case "source" -> {
+                        String id = stringField(body, "id");
+                        yield id != null && !id.isBlank()
+                                ? module.installer().startSourceArtifact(id, features(body), compiler)
+                                : module.installer().startSource(features(body),
+                                        stringField(body, "major"), compiler);
+                    }
+                    case "full-source" -> module.installer().startFullSource(
+                            requiredField(body, "id"), compiler);
+                    default -> throw new IOException("unknown ffmpeg install mode: " + mode);
+                };
+            } else {
+                // Backwards compatible with the old settings page: it posts
+                // `kind`, not `mode`.
+                job = module.installer().start(
+                        stringField(body, "kind"),
+                        stringField(body, "url"),
+                        stringField(body, "sha256"),
+                        stringField(body, "version"));
+            }
             audit("transcode.runtime.install", job.kind, "success", request);
             Json.write(response, job);
         } catch (IOException | IllegalArgumentException e) {
             Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
         }
+    }
+
+    private void runtimeSelect(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireHumanElevation(request, response)) {
+            return;
+        }
+        JsonObject body = readJson(request);
+        String version = body == null ? null : stringField(body, "version");
+        if (version == null || version.isBlank()) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "version is required");
+            return;
+        }
+        try {
+            module.runtimeManager().activate(version);
+            module.runtime().refresh();
+            audit("transcode.runtime.select", version, "success", request);
+            runtimeJson(response);
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
+        }
+    }
+
+    /// Chooses the runtime the transcode queue should use (`auto`, `system`, or
+    /// an installed id). Changing this is an execution-shaped decision, so it
+    /// takes the same developer elevation as selecting an installed runtime.
+    private void runtimeDefault(HttpServletRequest request, HttpServletResponse response)
+            throws IOException {
+        if (!requireHumanElevation(request, response)) {
+            return;
+        }
+        JsonObject body = readJson(request);
+        String value = body == null ? null : stringField(body, "value");
+        if (value == null || value.isBlank()) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "value is required");
+            return;
+        }
+        String normalized;
+        try {
+            normalized = ServerConfigLoader.defaultRuntime(value, "default_runtime");
+        } catch (ServerConfigLoader.ConfigException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+            return;
+        }
+        if (!"auto".equals(normalized) && !"system".equals(normalized)) {
+            boolean installed = module.runtimeManager().installed().stream()
+                    .anyMatch(item -> item.id().equals(normalized));
+            if (!installed) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "runtime_not_installed: " + normalized);
+                return;
+            }
+        }
+        try {
+            ServerConfigWriter.setTranscodeDefaultRuntime(config.dataDir, normalized);
+            config.transcode.defaultRuntime = normalized;
+            module.runtime().refresh();
+            audit("transcode.runtime.default", normalized, "success", request);
+            runtimeJson(response);
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+        }
+    }
+
+    private void runtimeRollback(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireHumanElevation(request, response)) {
+            return;
+        }
+        try {
+            module.runtimeManager().rollback();
+            module.runtime().refresh();
+            audit("transcode.runtime.rollback", "", "success", request);
+            runtimeJson(response);
+        } catch (IOException e) {
+            Json.error(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
+        }
+    }
+
+    private void runtimeJson(HttpServletResponse response) throws IOException {
+        runtimeJson(response, "auto");
+    }
+
+    private void runtimeJson(HttpServletResponse response, @Nullable String preferredMajor) throws IOException {
+        FfmpegRuntimeManager manager = module.runtimeManager();
+        FfmpegCapabilities.Host host = FfmpegCapabilities.detect();
+        JsonObject body = new JsonObject();
+        JsonObject hostJson = new JsonObject();
+        hostJson.addProperty("os", host.os());
+        hostJson.addProperty("arch", host.arch());
+        hostJson.addProperty("libc", host.libc());
+        hostJson.addProperty("libcVersion", host.libcVersion());
+        body.add("host", hostJson);
+
+        FfmpegRuntimeManager.Installed current = manager.current();
+        body.add("current", current == null ? null : installedJson(current));
+        JsonArray installed = new JsonArray();
+        for (FfmpegRuntimeManager.Installed entry : manager.installed()) {
+            installed.add(installedJson(entry));
+        }
+        body.add("installed", installed);
+
+        body.add("commonFeatures", strings(COMMON_FEATURES));
+        body.addProperty("default", config.transcode.defaultRuntime == null
+                ? "auto" : config.transcode.defaultRuntime);
+        FfmpegLocator.Resolution resolution = FfmpegLocator.resolve(config);
+        JsonObject resolved = new JsonObject();
+        resolved.addProperty("kind", resolution.kind());
+        if (resolution.id() != null) {
+            resolved.addProperty("id", resolution.id());
+        }
+        resolved.addProperty("ffmpeg", resolution.ffmpeg() == null
+                ? "" : resolution.ffmpeg().toString());
+        resolved.addProperty("ffprobe", resolution.ffprobe() == null
+                ? "" : resolution.ffprobe().toString());
+        body.add("resolved", resolved);
+
+        Path systemFfmpeg = FfmpegLocator.systemExecutable("ffmpeg");
+        Path systemFfprobe = FfmpegLocator.systemExecutable("ffprobe");
+        JsonObject system = new JsonObject();
+        system.addProperty("ffmpeg", systemFfmpeg == null ? "" : systemFfmpeg.toString());
+        system.addProperty("ffprobe", systemFfprobe == null ? "" : systemFfprobe.toString());
+        if (systemFfmpeg != null && systemFfprobe != null) {
+            FfmpegProbe.FfmpegInfo info = FfmpegProbe.probe(
+                    new FfmpegLocator.FfmpegPaths(systemFfmpeg, systemFfprobe));
+            system.addProperty("available", info.available());
+            system.addProperty("version", info.version());
+            system.addProperty("error", info.error() == null ? "" : info.error());
+            system.add("featuresProbed", strings(
+                    FfmpegRuntimeManager.probedFeatures(COMMON_FEATURES, info)));
+        } else {
+            system.addProperty("available", false);
+            system.addProperty("version", "");
+            system.addProperty("error", "ffmpeg/ffprobe not found on PATH");
+            system.add("featuresProbed", new JsonArray());
+        }
+        body.add("system", system);
+
+        JsonArray compilers = new JsonArray();
+        for (FfmpegToolchainManager.CompilerChoice choice : module.toolchains().compilers()) {
+            JsonObject item = new JsonObject();
+            item.addProperty("id", choice.id());
+            item.addProperty("label", choice.label());
+            item.addProperty("available", choice.available());
+            item.addProperty("detail", choice.detail());
+            compilers.add(item);
+        }
+        body.add("compilers", compilers);
+
+        JsonArray catalog = new JsonArray();
+        for (FfmpegCatalog.Entry entry : module.catalog().entries()) {
+            catalog.add(entryJson(entry));
+        }
+        body.add("catalog", catalog);
+
+        JsonArray majors = new JsonArray();
+        for (String major : module.catalog().majors()) {
+            majors.add(major);
+        }
+        body.add("majors", majors);
+
+        try {
+            FfmpegSelector.Recommendation recommendation = FfmpegSelector.select(
+                    module.catalog(), host, Set.of(), preferredMajor);
+            JsonObject recommended = new JsonObject();
+            recommended.add("entry", entryJson(recommendation.entry()));
+            recommended.addProperty("reason", recommendation.reason());
+            body.add("recommended", recommended);
+        } catch (IOException e) {
+            body.add("recommended", null);
+            body.addProperty("recommendationError", e.getMessage());
+        }
+        Json.write(response, body);
+    }
+
+    /// Read-only build precheck for the settings page: the source catalogue
+    /// entries plus what this host is missing. Starting the build still goes
+    /// through POST /runtime/install with `mode=source` and developer elevation.
+    private void sourceJson(HttpServletResponse response) throws IOException {
+        FfmpegCapabilities.Host host = FfmpegCapabilities.detect();
+        JsonObject body = new JsonObject();
+        JsonObject hostJson = new JsonObject();
+        hostJson.addProperty("os", host.os());
+        hostJson.addProperty("arch", host.arch());
+        hostJson.addProperty("libc", host.libc());
+        hostJson.addProperty("libcVersion", host.libcVersion());
+        body.add("host", hostJson);
+
+        JsonArray candidates = new JsonArray();
+        for (FfmpegCatalog.Entry entry : module.catalog().entries()) {
+            if (entry.isSource()) {
+                candidates.add(entryJson(entry));
+            }
+        }
+        body.add("candidates", candidates);
+
+        FfmpegToolchainManager.Toolchain toolchain = module.toolchains().detect();
+        body.add("toolchain", toolchainJson(toolchain));
+        boolean portableFallback = host.os().equals("windows") && host.arch().equals("x64");
+        body.addProperty("buildable", candidates.size() > 0 && (toolchain.usable() || portableFallback));
+        body.addProperty("portableFallback", portableFallback);
+        Json.write(response, body);
+    }
+
+    /// The managed full-codec recipes and whether this host can start one. The
+    /// installer still downloads cmake/nasm itself; the precheck only needs the
+    /// base compiler, make and disk space.
+    private void fullBuildsJson(HttpServletResponse response) throws IOException {
+        JsonObject body = new JsonObject();
+        JsonArray entries = new JsonArray();
+        for (FfmpegFullBuildCatalog.Entry entry : module.fullBuildCatalog().entries()) {
+            JsonObject item = new JsonObject();
+            item.addProperty("id", entry.id());
+            item.addProperty("profile", entry.profile());
+            item.addProperty("ffmpegVersion", entry.ffmpegVersion());
+            item.addProperty("license", entry.gpl() ? "GPL-2.0-or-later" : "LGPL-2.1-or-later");
+            item.addProperty("downloadBytes", entry.downloadBytes());
+            item.addProperty("buildMinutes", entry.buildMinutes());
+            item.addProperty("diskBytes", entry.diskBytes());
+            JsonArray features = new JsonArray();
+            entry.features().forEach(features::add);
+            item.add("features", features);
+            JsonArray dependencies = new JsonArray();
+            for (FfmpegFullBuildCatalog.Dependency dependency : entry.dependencies()) {
+                JsonObject dep = new JsonObject();
+                dep.addProperty("id", dependency.id());
+                dep.addProperty("kind", dependency.kind());
+                dep.addProperty("version", dependency.version());
+                dependencies.add(dep);
+            }
+            item.add("dependencies", dependencies);
+            entries.add(item);
+        }
+        body.add("entries", entries);
+        // The full build compiles its own dependency stack, so the only host
+        // requirement is a C/C++ compiler + make + pkg-config (cmake, nasm and
+        // every codec library are built by the kit). If the host has none, the
+        // portable Zig/w64devkit bundle is a valid answer — availability must
+        // not hinge on the system compiler alone.
+        FfmpegToolchainManager.Toolchain toolchain = module.toolchains().detect();
+        boolean systemUsable = toolchain.usable();
+        boolean portableAvailable = module.toolchains().compilers().stream()
+                .anyMatch(choice -> "portable".equals(choice.id()) && choice.available());
+        boolean available = systemUsable || portableAvailable;
+        body.addProperty("available", available);
+        body.addProperty("systemUsable", systemUsable);
+        body.addProperty("portableAvailable", portableAvailable);
+        body.addProperty("reason", available ? ""
+                : "需要 cc / c++ / make / pkg-config，或此平台可安装的便携工具链"
+                + "（Zig / w64devkit）；cmake、nasm 与编码库由面板自建");
+        Json.write(response, body);
+    }
+
+    private static JsonObject toolchainJson(FfmpegToolchainManager.Toolchain toolchain) {
+        JsonObject object = new JsonObject();
+        object.addProperty("os", toolchain.os());
+        object.addProperty("arch", toolchain.arch());
+        object.addProperty("usable", toolchain.usable());
+        object.addProperty("portable", toolchain.portable());
+        object.addProperty("binDir", toolchain.binDir() == null ? "" : toolchain.binDir().toString());
+        object.addProperty("detail", toolchain.detail());
+        object.addProperty("x86asm", toolchain.hasX86Asm());
+        JsonArray tools = new JsonArray();
+        for (FfmpegToolchainManager.Tool tool : toolchain.tools()) {
+            JsonObject item = new JsonObject();
+            item.addProperty("name", tool.name());
+            item.addProperty("path", tool.path() == null ? "" : tool.path());
+            item.addProperty("version", tool.version());
+            item.addProperty("present", tool.present());
+            tools.add(item);
+        }
+        object.add("tools", tools);
+        JsonArray dependencies = new JsonArray();
+        for (FfmpegToolchainManager.Dependency dependency : toolchain.dependencies()) {
+            JsonObject item = new JsonObject();
+            item.addProperty("feature", dependency.feature());
+            item.addProperty("module", dependency.module());
+            item.addProperty("package", dependency.packageName());
+            item.addProperty("present", dependency.present());
+            item.addProperty("version", dependency.version());
+            dependencies.add(item);
+        }
+        object.add("dependencies", dependencies);
+        object.add("missing", strings(toolchain.missing()));
+        JsonArray features = new JsonArray();
+        toolchain.features().forEach(features::add);
+        object.add("features", features);
+        return object;
+    }
+
+    private void catalogJson(HttpServletResponse response) throws IOException {
+        JsonArray catalog = new JsonArray();
+        for (FfmpegCatalog.Entry entry : module.catalog().entries()) {
+            catalog.add(entryJson(entry));
+        }
+        JsonObject body = new JsonObject();
+        body.add("entries", catalog);
+        Json.write(response, body);
+    }
+
+    private static JsonObject installedJson(FfmpegRuntimeManager.Installed installed) {
+        FfmpegRuntimeManager.RuntimeRecord record = installed.runtime();
+        JsonObject object = new JsonObject();
+        object.addProperty("id", installed.id());
+        object.addProperty("version", record.version);
+        object.addProperty("catalogId", record.catalogId);
+        object.addProperty("major", record.major == null ? "" : record.major);
+        object.addProperty("source", record.source);
+        object.addProperty("license", record.license);
+        object.addProperty("sha256", record.sha256);
+        object.addProperty("installedAt", record.installedAt);
+        object.addProperty("archive", record.archive);
+        object.addProperty("probeVersion", record.probeVersion);
+        object.addProperty("notes", record.notes);
+        object.addProperty("builtFrom", record.builtFrom == null ? "" : record.builtFrom);
+        object.addProperty("buildRecipe", record.buildRecipe == null ? "" : record.buildRecipe);
+        object.addProperty("toolchain", record.toolchain == null ? "" : record.toolchain);
+        object.addProperty("current", installed.current());
+        object.add("featuresDeclared", strings(record.featuresDeclared));
+        object.add("featuresProbed", strings(record.featuresProbed));
+        return object;
+    }
+
+    private static JsonObject entryJson(FfmpegCatalog.Entry entry) {
+        JsonObject object = new JsonObject();
+        object.addProperty("id", entry.id());
+        object.addProperty("os", entry.os());
+        object.addProperty("arch", entry.arch());
+        object.addProperty("libc", entry.libc());
+        object.addProperty("ffmpegVersion", entry.ffmpegVersion());
+        object.addProperty("license", entry.license());
+        object.addProperty("url", entry.url());
+        object.addProperty("sha256", entry.sha256());
+        object.addProperty("size", entry.size());
+        object.addProperty("archive", entry.archive());
+        object.addProperty("notes", entry.notes());
+        object.addProperty("kind", entry.kind());
+        object.addProperty("vendor", entry.vendor());
+        object.addProperty("major", entry.major());
+        object.addProperty("variant", entry.variant());
+        object.addProperty("minGlibc", entry.minGlibc());
+        object.addProperty("signatureUrl", entry.signatureUrl());
+        object.addProperty("buildRecipe", entry.buildRecipe());
+        object.add("mirrors", strings(entry.mirrors()));
+        object.add("features", strings(entry.features()));
+        return object;
+    }
+
+    private static JsonArray strings(List<String> values) {
+        JsonArray array = new JsonArray();
+        if (values != null) {
+            values.forEach(array::add);
+        }
+        return array;
+    }
+
+    private static Set<String> features(JsonObject body) {
+        Set<String> result = new LinkedHashSet<>();
+        if (body.has("features") && body.get("features").isJsonArray()) {
+            for (var element : body.getAsJsonArray("features")) {
+                if (element.isJsonPrimitive()) {
+                    result.add(element.getAsString());
+                }
+            }
+        }
+        return result;
+    }
+
+    private static String requiredField(JsonObject body, String name) {
+        String value = stringField(body, name);
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(name + " is required");
+        }
+        return value;
+    }
+
+    /// Running and recently finished installs, so a page switch can reattach to a
+/// download instead of showing "nothing is happening" and starting another.
+private void installsJson(HttpServletResponse response) throws IOException {
+        JsonArray jobs = new JsonArray();
+        for (FfmpegInstaller.InstallJob job : module.installer().jobs()) {
+            jobs.add(Json.GSON.toJsonTree(job));
+        }
+        JsonObject body = new JsonObject();
+        body.add("jobs", jobs);
+        Json.write(response, body);
     }
 
     private void runtimeGet(HttpServletResponse response, String id) throws IOException {
@@ -1061,6 +1586,18 @@ public final class TranscodeApiServlet extends HttpServlet {
         feature.disable();
         audit("transcode.feature.disable", "transcode feature", "success", request);
         featureJson(response);
+    }
+
+    /// Installing/switching ffmpeg executes a downloaded binary, so an agent
+    /// ticket is not enough even when its scope covers transcode. The runtime
+    /// page is a human-session operation.
+    private boolean requireHumanElevation(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (request.getAttribute(AuthFilter.AGENT_GRANT_ATTRIBUTE) != null) {
+            Json.error(response, HttpServletResponse.SC_FORBIDDEN,
+                    "ffmpeg_install_human_only: agent tickets cannot install or switch ffmpeg");
+            return false;
+        }
+        return requireElevation(request, response);
     }
 
     /// The same second-password check the Minecraft surface uses: only over TLS,

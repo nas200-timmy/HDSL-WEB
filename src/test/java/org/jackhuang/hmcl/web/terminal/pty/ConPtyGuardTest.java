@@ -20,10 +20,13 @@ package org.jackhuang.hmcl.web.terminal.pty;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -93,6 +96,39 @@ class ConPtyGuardTest {
         assertTrue(refused.getMessage().contains("npm.cmd")
                         || refused.getMessage().contains("Windows 10 1809"),
                 refused.getMessage());
+    }
+
+    /// One entry per variable in the block handed to `CreateProcessW`.
+    ///
+    /// A caller that copied `System.getenv()` into an ordinary map and then
+    /// wrote `PATH` beside Windows' own `Path` used to produce both, and which
+    /// one the child saw was the block's ordering rather than a decision
+    /// anybody made. Like the argv rules above, this is a string decision and
+    /// runs on every platform.
+    @Test
+    void theEnvironmentBlockCarriesEachVariableOnce() {
+        java.util.Map<String, String> environment = new java.util.LinkedHashMap<>();
+        environment.put("Path", "C:\\Windows\\system32");
+        environment.put("PATH", "C:\\tools;C:\\Windows\\system32");
+        environment.put("=C:", "C:\\");
+        environment.put("SYSTEMROOT", "C:\\Windows");
+
+        byte[] raw = ConPty.environmentBlock(environment).getByteArray(0,
+                (int) ConPty.environmentBlock(environment).size());
+        String block = new String(raw, StandardCharsets.UTF_16LE);
+        String[] entries = block.split("\0");
+
+        assertEquals(2, entries.length, block.replace('\0', '|'));
+        // The spelling is whatever the map iterated first — Windows names are
+        // case-insensitive, so what matters is that there is one entry and that
+        // it kept the value that still contains the other one.
+        String path = java.util.Arrays.stream(entries)
+                .filter(entry -> entry.regionMatches(true, 0, "PATH=", 0, 5))
+                .findFirst().orElse("");
+        assertEquals("Path=C:\\tools;C:\\Windows\\system32", path, block.replace('\0', '|'));
+        assertTrue(block.contains("SYSTEMROOT=C:\\Windows"), block.replace('\0', '|'));
+        assertTrue(java.util.Arrays.stream(entries).noneMatch(entry -> entry.startsWith("=")),
+                "a drive's current directory is not a variable: " + block.replace('\0', '|'));
     }
 
     private static void assertRefused(String program, String suffix) {

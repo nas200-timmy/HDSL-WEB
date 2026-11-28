@@ -100,6 +100,26 @@ public final class ChatCryptoService {
         return new Descriptor(id, serverPublic, expiresAt);
     }
 
+    /// Whether this exact channel is still the one the server holds.
+    ///
+    /// A WebSocket binds a `Channel` object at `chat-hello`; when the channel
+    /// is evicted or expires, REST re-handshakes and the browser switches to
+    /// a new key, while the socket keeps the old object. Pushing with it made
+    /// the client fail to decrypt and drop the frame silently. The send path
+    /// asks this first and tells the client to bind again instead.
+    ///
+    /// @param channel the object a socket bound earlier
+    /// @return whether the map still holds it and it has not expired
+    public boolean isCurrent(@Nullable Channel channel) {
+        if (channel == null) {
+            return false;
+        }
+        if (Instant.now().isAfter(channel.expiresAt)) {
+            return false;
+        }
+        return channels.get(channel.id()) == channel;
+    }
+
     public @Nullable Channel channel(String id) {
         if (id == null || id.isBlank()) {
             return null;

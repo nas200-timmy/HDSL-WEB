@@ -1,4 +1,35 @@
 /** 状态归一化：后端枚举大小写未知，统一转大写比较 */
+/// Runs `attempt` immediately and retries while it resolves `false`, with
+/// exponential backoff (5s → 30s by default). Returns a cancel function.
+/// `attempt` should resolve `true` when there is nothing left to retry, and
+/// is responsible for not touching state after its caller cancelled.
+export function retryWithBackoff(
+  attempt: () => Promise<boolean>,
+  options: { baseMs?: number; maxMs?: number } = {},
+): () => void {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let delay = Math.max(1000, options.baseMs ?? 5000);
+  const max = Math.max(delay, options.maxMs ?? 30000);
+  const run = async () => {
+    if (stopped) return;
+    let done = false;
+    try {
+      done = await attempt();
+    } catch {
+      done = false;
+    }
+    if (stopped || done) return;
+    timer = setTimeout(() => { void run(); }, delay);
+    delay = Math.min(Math.round(delay * 1.8), max);
+  };
+  void run();
+  return () => {
+    stopped = true;
+    if (timer !== undefined) clearTimeout(timer);
+  };
+}
+
 export function normState(s: string | null | undefined): string {
   return (s ?? "").toUpperCase();
 }

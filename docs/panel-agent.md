@@ -88,7 +88,7 @@ agent 密码**不是**一条独立的路。用它换票之前，必须已经有�
 | `instances` | 建/删/启停**别的**实例 |
 | `config` | 账号、模型、TLS、网络、Node 运行时、壁纸 |
 | `plugins` | 装/卸插件、整合包、技能 |
-| `transcode` | 转码队列、预设、启停与日志 |
+| `transcode` | 转码队列、预设、启停与日志；队列快照的 `runtime` 与任务的 `ffmpeg` 对只读票可见 |
 | `transcode-raw` | 媒体根浏览、原始参数、破坏性文件操作 |
 | `chat-read` | 助手、会话、消息、来源与附件下载 |
 | `chat-write` | 建会话、发/编辑/重生成/取消、附件；受 `agentChatMaxInputTokens` 上限 |

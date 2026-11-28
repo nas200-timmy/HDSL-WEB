@@ -17,13 +17,19 @@
  */
 package org.jackhuang.hmcl.web.brand;
 
+import org.jackhuang.hmcl.dsh.BootstrapRuntimeManager;
+import org.jackhuang.hmcl.dsh.BuildToolchainManager;
 import org.jackhuang.hmcl.dsh.DshNodeRuntime;
 import org.jackhuang.hmcl.dsh.NodeRuntime;
 import org.jackhuang.hmcl.dsh.NodeRuntimeManager;
 import org.jackhuang.hmcl.dsh.NodeSemver;
 import org.jackhuang.hmcl.dsh.NpmRegistry;
+import org.jackhuang.hmcl.dsh.PythonResolver;
+import org.jackhuang.hmcl.dsh.PythonRuntimeManager;
+import org.jackhuang.hmcl.dsh.UvRuntime;
 import org.jackhuang.hmcl.util.io.FileUtils;
 import org.jackhuang.hmcl.util.io.Links;
+import org.jackhuang.hmcl.util.io.SafePaths;
 import org.jackhuang.hmcl.util.platform.Architecture;
 import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.jackhuang.hmcl.util.platform.Privileges;
@@ -911,10 +917,12 @@ public final class BrandInstaller {
     static final String PREVIOUS_SUFFIX = ".previous";
     private static final String CURRENT_LINK = "current";
     private static final String INSTALL_LOG = "install.log";
-    /// Pinned uv release for the source fallback. `latest/download` redirects
-    /// through a host that times out on this network; a pinned tag serves the
-    /// asset directly.
-    private static final String UV_VERSION = "0.7.13";
+    /// The pinned uv release, from the bootstrap catalogue. The digest of the
+    /// executable it produces lives beside it; a release without a digest is
+    /// refused rather than installed unverified.
+    private static String uvVersion() {
+        return UvRuntime.version();
+    }
 
     /// The HTTP client for GitHub source downloads — its own instance, with a
     /// longer connect timeout than the catalog's (an 11 MB body in the default
@@ -1533,6 +1541,11 @@ public final class BrandInstaller {
             extractZip(download(url, message, "下载源码"), target, message::cancelled);
         });
 
+        // A source build compiles the dashboard and, through uv, whatever wheels
+        // this machine has no binary for. Resolve the toolchain before the
+        // expensive npm/uv work, not after it fails in node-gyp or gcc.
+        BuildToolchainManager.Toolchain toolchain = ensureSourceBuildToolchain("Octop", message);
+
         stage(message, 1, total, "应用 dashboard 补丁", 0.05, 0.02, 5, () -> {
             Path patch = target.resolve(".hdsl-octop.patch");
             try (InputStream in = BrandInstaller.class.getResourceAsStream("/octop/octop-runtime-base.patch")) {
@@ -1551,6 +1564,7 @@ public final class BrandInstaller {
         Path dashboard = target.resolve("dashboard");
         Map<String, String> npmEnv = new HashMap<>();
         npmEnv.put("NPM_CONFIG_REGISTRY", registry);
+        toolchain.applyTo(npmEnv);
         stage(message, 2, total, "安装前端依赖（npm ci）", 0.07, 0.35, 240, () ->
                 runWithPackageCount(dashboard.resolve("node_modules"), dashboard.resolve("package-lock.json"),
                         message, "npm ci", () ->
@@ -1573,15 +1587,16 @@ public final class BrandInstaller {
         BrandSources.Effective pythonMirror = BrandSources.python();
         Path[] uvHolder = new Path[1];
         stage(message, 4, total, "准备 uv", 0.57, 0.08, 30, () ->
-                uvHolder[0] = ensureUv(brandRoot, log, message));
+                uvHolder[0] = ensureUv(brandRoot, message));
         Path uv = uvHolder[0];
         message.accept("下载源：PyPI=" + pypi.url() + " (" + pypi.source() + ") · CPython="
                 + pythonMirror.url() + " (" + pythonMirror.source() + ")");
         Map<String, String> pythonEnv = new HashMap<>();
         pythonEnv.put("UV_CACHE_DIR", brandRoot.resolve("cache/uv").toString());
-        pythonEnv.put("UV_PYTHON_INSTALL_DIR", brandRoot.resolve("toolchain/python").toString());
         pythonEnv.put("UV_LINK_MODE", "copy");
         pythonEnv.put("PYTHONDONTWRITEBYTECODE", "1");
+        toolchain.applyTo(pythonEnv);
+        pinUvPythonDownloads(pythonEnv);
         // uv reads both names; the deprecated one is kept for older toolchains and for the
         // build scripts some dependencies run themselves.
         pythonEnv.put("UV_DEFAULT_INDEX", pypi.url());
@@ -1589,11 +1604,14 @@ public final class BrandInstaller {
         if (!BrandSources.PYTHON_DEFAULT.equals(pythonMirror.url())) {
             pythonEnv.put("UV_PYTHON_INSTALL_MIRROR", pythonMirror.url());
         }
-        stage(message, 5, total, "安装 Python 依赖（uv sync + CPython 3.12）", 0.65, 0.30, 300, () -> {
+        stage(message, 5, total, "安装 Python 依赖（uv sync + 共享 CPython 3.12）", 0.65, 0.30, 300, () -> {
+            Path pythonInterpreter = buildPython(PythonRuntimeManager.defaultVersion(), message);
+            pythonEnv.put("PYTHON", pythonInterpreter.toString());
             UvWatcher uvProgress = new UvWatcher(message, brandRoot,
                     target.resolve(".venv"), brandRoot.resolve("cache/uv/archive-v0"));
             try (uvProgress) {
-                runChecked(List.of(uv.toString(), "sync", "--frozen", "--no-dev", "--python", "3.12"),
+                runChecked(List.of(uv.toString(), "sync", "--frozen", "--no-dev",
+                                "--python", pythonInterpreter.toString()),
                         target, pythonEnv, log, uvProgress, "installing the Python environment");
             }
         });
@@ -1608,6 +1626,53 @@ public final class BrandInstaller {
         message.report("Installed Octop " + version + " from source · 100%", 1.0);
     }
 
+
+    /// Resolves the C/C++ toolchain a source build needs, installing the
+    /// panel's portable one when the host has none.
+    ///
+    /// Only source builds call this: a portable archive or a published npm
+    /// package needs no compiler, and downloading a toolchain for it would be
+    /// a surprise. The returned toolchain is merged into the npm/uv/node
+    /// environments by the caller.
+    ///
+    /// @param label the brand's name, for the error message
+    /// @param message the install log
+    /// @return the resolved toolchain
+    /// @throws BrandException `build_toolchain_missing` when nothing can be provided
+    static BuildToolchainManager.Toolchain ensureSourceBuildToolchain(String label,
+                                                                      Consumer<String> message)
+            throws BrandException {
+        return ensureSourceBuildToolchain(label, message, BuildToolchainManager.defaultManager());
+    }
+
+    /// The same, with the manager named so a test can drive it without a network.
+    ///
+    /// @param label the brand's name, for the error message
+    /// @param message the install log
+    /// @param manager the manager to resolve through
+    /// @return the resolved toolchain
+    /// @throws BrandException `build_toolchain_missing` when nothing can be provided
+    static BuildToolchainManager.Toolchain ensureSourceBuildToolchain(String label,
+                                                                      Consumer<String> message,
+                                                                      BuildToolchainManager manager)
+            throws BrandException {
+        try {
+            BuildToolchainManager.Toolchain toolchain = manager.ensureForBuild(
+                    (line, fraction) -> message.accept("[toolchain] " + line), () -> false);
+            message.accept("构建工具链：" + toolchain.describe());
+            return toolchain;
+        } catch (IOException e) {
+            String detail = e.getMessage() == null ? "" : e.getMessage().trim();
+            String prefix = "build_toolchain_missing:";
+            if (detail.startsWith(prefix)) {
+                detail = detail.substring(prefix.length()).trim();
+            }
+            throw new BrandException("build_toolchain_missing: " + label
+                    + " 的源码构建需要 C/C++ 编译器与 make，但面板无法提供（" + detail
+                    + "）。联网后重试即可：Windows 会安装 w64devkit，Linux x64 会安装"
+                    + " Zig + GNU make 组合；也可以先自行安装 gcc/g++/make。", e);
+        }
+    }
 
     // ---------------------------------------------------------------- Hermes --
     //
@@ -1662,7 +1727,8 @@ public final class BrandInstaller {
     }
 
     /// What `pm/lock.json` pins for one Hermes version.
-    record HermesLock(String uvVersion, HermesArtifact uv, String pythonVersion, HermesArtifact python) {
+    record HermesLock(String uvVersion, HermesArtifact uv, String pythonVersion,
+                      HermesArtifact python, @Nullable String pnpmVersion) {
     }
 
     /// Where upstream publishes every artifact it pins, by content address
@@ -1688,11 +1754,16 @@ public final class BrandInstaller {
             JsonObject packages = root.getAsJsonObject("packages");
             JsonObject uv = packages.getAsJsonObject("uv");
             JsonObject python = packages.getAsJsonObject("python");
+            JsonObject pnpm = packages.getAsJsonObject("pnpm");
+            String pnpmVersion = pnpm != null && pnpm.has("version")
+                    && pnpm.get("version").isJsonPrimitive()
+                    ? pnpm.get("version").getAsString() : null;
             return new HermesLock(
                     uv.get("version").getAsString(),
                     artifactOf(uv, platform),
                     python.get("version").getAsString(),
-                    artifactOf(python, platform));
+                    artifactOf(python, platform),
+                    pnpmVersion);
         } catch (IOException | RuntimeException e) {
             throw new BrandException("Could not read " + file + ": " + e.getMessage(), e);
         }
@@ -1764,18 +1835,49 @@ public final class BrandInstaller {
                 if (cancelled.getAsBoolean()) {
                     throw new BrandException("Install cancelled");
                 }
-                Path target = resolveInside(destination, entry.getName());
+                Path target = SafePaths.resolveArchiveEntry(destination, entry.getName());
                 if (target == null) {
-                    continue;
+                    throw new BrandException("Refusing to unpack `" + entry.getName()
+                            + "`: it does not stay inside " + destination.getFileName());
                 }
                 if (entry.isDirectory()) {
-                    Files.createDirectories(target);
+                    SafePaths.createDirectories(destination, target);
                     continue;
                 }
-                Files.createDirectories(target.getParent());
+                SafePaths.createDirectories(destination, target.getParent());
                 if (entry.isSymbolicLink()) {
+                    // The link target is as untrusted as the name: an absolute or
+                    // `../` target turns every later member that walks through this
+                    // link into a write outside the destination, and this runs as
+                    // root. `PythonRuntimeManager.extractTar` refuses the same two.
+                    String link = entry.getLinkName() == null ? "" : entry.getLinkName().trim();
+                    if (link.isEmpty()) {
+                        throw new BrandException("The archive gives `" + entry.getName() + "` no link target");
+                    }
+                    if (Path.of(link).isAbsolute() || link.contains("..")) {
+                        throw new BrandException("Refusing to link `" + entry.getName() + "` to `" + link
+                                + "`: only a relative link inside the archive is unpacked");
+                    }
+                    Path resolved = target.getParent().resolve(link).normalize();
+                    if (!resolved.startsWith(destination.toAbsolutePath().normalize())) {
+                        throw new BrandException("Refusing to link `" + entry.getName() + "` to `" + link
+                                + "`: it leaves " + destination.getFileName());
+                    }
                     Files.deleteIfExists(target);
-                    Files.createSymbolicLink(target, Path.of(entry.getLinkName()));
+                    Files.createSymbolicLink(target, Path.of(link));
+                    continue;
+                }
+                if (entry.isLink()) {
+                    Path source = SafePaths.resolveArchiveEntry(destination, entry.getLinkName());
+                    if (source == null || !Files.isRegularFile(source)) {
+                        throw new BrandException("The archive hard-links `" + entry.getName()
+                                + "` to a member that is not there");
+                    }
+                    try {
+                        Files.createLink(target, source);
+                    } catch (IOException | UnsupportedOperationException e) {
+                        Files.copy(source, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    }
                     continue;
                 }
                 try (OutputStream out = Files.newOutputStream(target,
@@ -1793,12 +1895,13 @@ public final class BrandInstaller {
             }
         } catch (IOException e) {
             throw new BrandException("Could not unpack " + archive.getFileName() + ": " + e.getMessage(), e);
+        } catch (IllegalArgumentException e) {
+            BrandException explained = localeCannotRepresentNames(e);
+            if (explained != null) {
+                throw explained;
+            }
+            throw e;
         }
-    }
-
-    private static @Nullable Path resolveInside(Path root, String name) {
-        Path candidate = root.resolve(name).normalize();
-        return candidate.startsWith(root.normalize()) ? candidate : null;
     }
 
     /// The install itself: eleven stages, each one a step the panel shows.
@@ -1845,6 +1948,7 @@ public final class BrandInstaller {
 
         HermesLock lock = readHermesLock(target);
         message.accept("Lock: uv " + lock.uvVersion() + " · CPython " + lock.pythonVersion());
+        BuildToolchainManager.Toolchain toolchain = ensureSourceBuildToolchain("Hermes", message);
 
         BrandSources.Effective pypi = BrandSources.pypi();
         message.accept("下载源：PyPI=" + pypi.url() + " (" + pypi.source() + ") · npm="
@@ -1859,13 +1963,13 @@ public final class BrandInstaller {
 
         Path[] uvHolder = new Path[1];
         stage(message, 1, total, "准备 uv " + lock.uvVersion(), 0.10, 0.03, 30, () -> ioStep(() -> {
-            Path toolchain = toolchainDirectory(brandRoot);
-            Path uv = toolchain.resolve("uv");
+            Path toolchainDir = toolchainDirectory(brandRoot);
+            Path uv = toolchainDir.resolve("uv");
             if (!Files.isRegularFile(uv)) {
-                Path archiveFile = Files.createTempFile(toolchain, "uv", ".tar.gz");
+                Path archiveFile = Files.createTempFile(toolchainDir, "uv", ".tar.gz");
                 try {
                     downloadArtifact(lock.uv(), archiveFile, message);
-                    Path unpacked = Files.createTempDirectory(toolchain, "uv-");
+                    Path unpacked = Files.createTempDirectory(toolchainDir, "uv-");
                     extractTarGz(archiveFile, unpacked, message::cancelled);
                     Path binary;
                     try (Stream<Path> walk = Files.walk(unpacked, 3)) {
@@ -1886,26 +1990,45 @@ public final class BrandInstaller {
         }));
 
         Path[] pythonHolder = new Path[1];
-        stage(message, 2, total, "准备 CPython " + lock.pythonVersion(), 0.13, 0.12, 120, () -> ioStep(() -> {
-            Path pythonRoot = toolchainDirectory(brandRoot).resolve("python");
-            Files.createDirectories(pythonRoot);
-            Path destination = pythonRoot.resolve(lock.pythonVersion());
-            Path python = findInterpreter(destination);
-            if (python == null) {
-                Path archiveFile = Files.createTempFile(pythonRoot, "python", ".tar.gz");
-                try {
-                    downloadArtifact(lock.python(), archiveFile, message);
-                    extractTarGz(archiveFile, destination, message::cancelled);
-                } finally {
-                    Files.deleteIfExists(archiveFile);
-                }
-                python = findInterpreter(destination);
-            }
-            if (python == null) {
-                throw new BrandException("the CPython archive holds no interpreter under " + destination);
-            }
-            pythonHolder[0] = python;
-        }));
+        stage(message, 2, total, "准备 CPython " + lock.pythonVersion() + "（共享缓存）", 0.13, 0.12, 120,
+                () -> ioStep(() -> {
+                    PythonRuntimeManager.Artifact artifact;
+                    try {
+                        artifact = new PythonRuntimeManager.Artifact(
+                                lock.python().url(), lock.python().sha256(), 0, null);
+                    } catch (IllegalArgumentException e) {
+                        throw new BrandException("python_runtime_missing: the release pins no usable CPython"
+                                + " artifact (" + e.getMessage() + ")", e);
+                    }
+                    PythonResolver.Interpreter host = PythonResolver.forVersion(
+                            PythonResolver.majorMinor(lock.pythonVersion()));
+                    if (host != null) {
+                        message.accept("使用系统 Python " + host.version()
+                                + "（不下载锁定的 CPython）：" + host.executable());
+                        pythonHolder[0] = host.executable();
+                        return;
+                    }
+                    if (!PythonResolver.managedAllowed()) {
+                        throw new BrandException("python_runtime_unavailable: no system Python "
+                                + PythonResolver.majorMinor(lock.pythonVersion())
+                                + " and HDSL_PYTHON_POLICY=" + PythonResolver.policy().name()
+                                .toLowerCase(java.util.Locale.ROOT)
+                                + " forbids downloading the locked CPython; install it or set"
+                                + " HDSL_PYTHON");
+                    }
+                    try {
+                        PythonRuntimeManager.Installed installed = PythonRuntimeManager.ensure(
+                                lock.pythonVersion(), artifact,
+                                hermesPythonSource(lock.python(), message),
+                                (line, fraction) -> message.accept(line));
+                        message.accept("CPython " + lock.pythonVersion() + " 复用共享缓存 "
+                                + installed.directory());
+                        pythonHolder[0] = installed.interpreter();
+                    } catch (IOException e) {
+                        throw new BrandException("python_runtime_missing: could not install CPython "
+                                + lock.pythonVersion() + " into the shared cache: " + e.getMessage(), e);
+                    }
+                }));
 
         Path[] lockBackup = new Path[1];
         stage(message, 3, total, "改写 lock 的下载源", 0.25, 0.02, 20, () -> ioStep(() -> {
@@ -1934,6 +2057,8 @@ public final class BrandInstaller {
         pythonEnv.put("PYTHONDONTWRITEBYTECODE", "1");
         pythonEnv.put("UV_NO_PROGRESS", "1");
         pythonEnv.put("PIP_INDEX_URL", BrandSources.pypi().url());
+        toolchain.applyTo(pythonEnv);
+        pinUvPythonDownloads(pythonEnv);
         stage(message, 4, total, "安装 Python 依赖（uv sync --extra all）", 0.27, 0.49, 300, () ->
                 runChecked(List.of(uvHolder[0].toString(), "sync", "--frozen", "--no-dev",
                                 "--python", pythonHolder[0].toString(), "--extra", "all"),
@@ -1977,6 +2102,7 @@ public final class BrandInstaller {
         }
         Map<String, String> nodeEnv = new HashMap<>(node.pathEnvironment());
         nodeEnv.put("npm_config_registry", NpmRegistry.effective().registry());
+        toolchain.applyTo(nodeEnv);
         Path products = brandRoot.resolve("products").resolve(version);
         Path icons = products.resolve("icons");
         Path tuiOut = products.resolve("tui");
@@ -1991,11 +2117,18 @@ public final class BrandInstaller {
                     target, env, log, message, "generating the icons");
         }));
 
-        stage(message, 7, total, "安装前端依赖（node-deps）", 0.81, 0.08, 120, () ->
-                runChecked(List.of("node", "scripts/build/node-deps.mjs",
-                                "--source", target.toString(),
-                                "--workspace", "ui-tui", "--workspace", "web"),
-                        target, nodeEnv, log, message, "installing the front-end dependencies"));
+        stage(message, 7, total, "安装前端依赖（node-deps）", 0.81, 0.08, 120, () -> {
+            if (lock.pnpmVersion() != null && !lock.pnpmVersion().isBlank()) {
+                Path pnpmBin = ensureHermesPnpm(lock.pnpmVersion(), node, brandRoot,
+                        nodeEnv, log, message);
+                String path = nodeEnv.getOrDefault("PATH", "");
+                nodeEnv.put("PATH", pnpmBin + java.io.File.pathSeparator + path);
+            }
+            runChecked(List.of("node", "scripts/build/node-deps.mjs",
+                            "--source", target.toString(),
+                            "--workspace", "ui-tui", "--workspace", "web"),
+                    target, nodeEnv, log, message, "installing the front-end dependencies");
+        });
 
         stage(message, 8, total, "构建 web 工作台", 0.89, 0.06, 120, () ->
                 runChecked(List.of("node", "scripts/build/web.mjs",
@@ -2047,12 +2180,66 @@ public final class BrandInstaller {
     /// an `npm ci` failure. Building on a different runtime would make the
     /// install succeed and the start fail — the failure the panel exists to
     /// prevent, just moved one step later.
+    /// Installs the pnpm version a Hermes release pins in `pm/lock.json` into the
+    /// brand's own toolchain directory and returns its `node_modules/.bin`.
+    ///
+    /// Hermes' front-end build checks the exact pnpm version in `pm/lock.json`;
+    /// the managed Node's pnpm is whatever the panel installed (11.x), so the
+    /// build fails with "pnpm 12.15.0 is required ... found 11.29.0" before it
+    /// reads a source file. A per-brand pnpm keeps every other brand on the
+    /// shared runtime.
+    private static Path ensureHermesPnpm(String version, DshNodeRuntime node, Path brandRoot,
+                                         Map<String, String> env, Path log, Sink message)
+            throws BrandException {
+        if (!version.matches("[0-9][0-9A-Za-z.+-]*")) {
+            throw new BrandException("pm/lock.json pins an unusable pnpm version: " + version);
+        }
+        Path dir = brandRoot.resolve("toolchain").resolve("pnpm-" + version);
+        // pnpm 11 shipped `node_modules/pnpm/bin/pnpm.cjs`; pnpm 12 uses a
+        // native launcher, and npm exposes it as `node_modules/.bin/pnpm` —
+        // the exact entry point the build's PATH will find. Checking the old
+        // path made a successful install look like a broken one.
+        Path cli = dir.resolve("node_modules").resolve(".bin").resolve("pnpm");
+        Path bin = dir.resolve("node_modules").resolve(".bin");
+        if (!Files.isRegularFile(cli)) {
+            if (node.npm() == null) {
+                throw new BrandException("Hermes needs pnpm " + version
+                        + ", but the selected Node runtime has no npm to install it with");
+            }
+            FileUtils.deleteDirectoryQuietly(dir);
+            try {
+                Files.createDirectories(dir);
+            } catch (IOException e) {
+                throw new BrandException("Could not create " + dir + ": " + e.getMessage(), e);
+            }
+            message.accept("Installing pnpm " + version + " for Hermes");
+            runChecked(List.of(node.npm().toString(), "install", "--prefix", dir.toString(),
+                            "pnpm@" + version, "--no-audit", "--no-fund", "--loglevel=error",
+                            "--registry=" + NpmRegistry.effective().registry()),
+                    brandRoot, env, log, message, "installing pnpm " + version);
+        }
+        if (!Files.isRegularFile(cli)) {
+            throw new BrandException("pnpm " + version + " installed without its entry point under "
+                    + dir);
+        }
+        message.accept("pnpm " + version + " ready at " + bin);
+        return bin;
+    }
+
     private static DshNodeRuntime requireHermesNode(Brand brand, String version, String range)
             throws BrandException {
         org.jackhuang.hmcl.dsh.NodeSelection.Resolution current = BrandRuntime.currentNode(brand);
         if (current.runtime() != null
                 && NodeSemver.satisfies(current.runtime().nodeVersion(), range)) {
             return current.runtime();
+        }
+        // The auto resolution prefers the system Node; when that one misses the
+        // release's range but a compatible managed runtime is installed, building
+        // on it is exactly what the guidance would tell the user to do by hand.
+        // Do it, and let the launcher's own fallback keep the two in step.
+        DshNodeRuntime compatible = BrandRuntime.managedSatisfying(range);
+        if (compatible != null) {
+            return compatible;
         }
         throw new BrandException(hermesNodeGuidance(version, range, current));
     }
@@ -2080,6 +2267,107 @@ public final class BrandInstaller {
         return "Hermes " + version + " 要求 Node " + range
                 + "（上游 .npmrc 开了 engine-strict，Node 版本不对时 npm ci 会直接失败）。"
                 + "当前使用的是 " + now + "。" + fix + "，然后重新安装。";
+    }
+
+    /// The shared 3.12 interpreter, downloaded once for every brand that needs one.
+    ///
+    /// The configured CPython mirror is applied to the pinned archive's address;
+    /// its SHA-256 is unchanged, so a mirror that serves other bytes fails rather
+    /// than becoming trusted.
+    ///
+    /// @param message progress sink
+    /// @return the installed interpreter
+    /// @throws BrandException when the platform has no pinned archive or the
+    ///                          download fails
+    /// The interpreter a source build should use: a host Python of the same
+    /// `major.minor` first, the shared line only when the host has none.
+    ///
+    /// The policy decides what happens when neither exists: `system-only` fails
+    /// with the command that would fix it, `auto` downloads the pinned line.
+    ///
+    /// @param requiredVersion the build's pinned version, e.g. `3.12.16`
+    /// @param message progress sink
+    /// @return the interpreter to put in `PYTHON` and pass to uv
+    /// @throws BrandException `python_runtime_unavailable` when policy forbids
+    ///                        the download and the host has no match
+    static Path buildPython(String requiredVersion, Consumer<String> message) throws BrandException {
+        String majorMinor = PythonResolver.majorMinor(requiredVersion);
+        PythonResolver.Interpreter host = PythonResolver.forVersion(majorMinor);
+        if (host != null) {
+            message.accept("使用系统 Python " + host.version() + "（不下载共享 CPython）："
+                    + host.executable());
+            return host.executable();
+        }
+        if (!PythonResolver.managedAllowed()) {
+            throw new BrandException("python_runtime_unavailable: no system Python " + majorMinor
+                    + " and HDSL_PYTHON_POLICY="
+                    + PythonResolver.policy().name().toLowerCase(java.util.Locale.ROOT)
+                    + " forbids downloading the shared CPython; install python" + majorMinor
+                    + " or set HDSL_PYTHON");
+        }
+        return ensureSharedPython(message).interpreter();
+    }
+
+    static PythonRuntimeManager.Installed ensureSharedPython(Consumer<String> message)
+            throws BrandException {
+        PythonRuntimeManager.Artifact artifact = PythonRuntimeManager.defaultArtifact();
+        if (artifact == null) {
+            throw new BrandException("python_runtime_missing: this build pins no CPython "
+                    + PythonRuntimeManager.defaultVersion() + " for "
+                    + OperatingSystem.CURRENT_OS + "/" + Architecture.CURRENT_ARCH);
+        }
+        BrandSources.Effective mirror = BrandSources.python();
+        if (!BrandSources.PYTHON_DEFAULT.equals(mirror.url())) {
+            try {
+                artifact = PythonRuntimeManager.relocated(artifact, mirror.url());
+            } catch (IllegalArgumentException e) {
+                throw new BrandException("python_runtime_missing: the configured CPython mirror ("
+                        + mirror.url() + ") is not usable: " + e.getMessage(), e);
+            }
+        }
+        BootstrapRuntimeManager.ArtifactSource source = (url, target) -> {
+            message.accept("Downloading " + url);
+            try (InputStream in = download(url)) {
+                Files.copy(in, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            } catch (BrandException e) {
+                throw new IOException(e.getMessage(), e);
+            }
+        };
+        try {
+            return PythonRuntimeManager.ensure(PythonRuntimeManager.defaultVersion(), artifact,
+                    source, (line, fraction) -> message.accept(line));
+        } catch (IOException e) {
+            throw new BrandException("python_runtime_missing: could not install CPython "
+                    + PythonRuntimeManager.defaultVersion() + " into the shared cache: "
+                    + e.getMessage(), e);
+        }
+    }
+
+    /// Hermes' CPython download, keeping its content-addressed CDN first.
+    ///
+    /// The lock names a fallback URL; the CDN is keyed by the digest and is the
+    /// address that measured 1.9 MB/s against the origins' 41 KB/s. Both paths
+    /// verify the lock's SHA-256 before [PythonRuntimeManager] sees the file.
+    static BootstrapRuntimeManager.ArtifactSource hermesPythonSource(HermesArtifact artifact,
+                                                                     Consumer<String> message) {
+        return (url, target) -> {
+            String fromCdn = HERMES_CDN + artifact.sha256();
+            try {
+                message.accept("Downloading " + fromCdn);
+                try (InputStream in = download(fromCdn)) {
+                    copyVerified(in, target, artifact.sha256());
+                }
+                return;
+            } catch (BrandException e) {
+                message.accept("Upstream CDN did not serve it (" + e.getMessage()
+                        + "); trying " + artifact.url());
+            }
+            try (InputStream in = download(artifact.url())) {
+                copyVerified(in, target, artifact.sha256());
+            } catch (BrandException e) {
+                throw new IOException(e.getMessage(), e);
+            }
+        };
     }
 
     /// The interpreter inside an unpacked CPython artifact (`python/bin/python3.14`
@@ -2182,32 +2470,93 @@ public final class BrandInstaller {
         }
     }
 
-    /// Finds a usable `uv`: PATH first, then a per-brand copy downloaded from
-    /// the official release tarball. The copy lives under the persisted brand
-    /// directory, so a later reinstall does not fetch it again.
-    private static Path ensureUv(Path brandRoot, Path log, Consumer<String> message) throws BrandException {
-        Path toolchain = brandRoot.resolve("toolchain");
-        Path binary = toolchain.resolve("uv");
+    /// Installs the shared, pinned uv without a brand install.
+    ///
+    /// The runtime page provisions the same copy a source build would use; it
+    /// verifies before publishing, so a second call is a cache hit.
+    ///
+    /// @param message progress sink
+    /// @return the verified executable
+    /// @throws BrandException when the platform is unpinned or the download fails
+    public static Path ensureSharedUv(Consumer<String> message) throws BrandException {
+        return ensureUv(null, message);
+    }
+
+    /// Stops uv from fetching an interpreter of its own.
+    ///
+    /// uv's default is `automatic`: asked for a version the host does not have,
+    /// it downloads one into its own directory — outside the panel's pin, its
+    /// logs and its disk accounting. A source build that needs a specific
+    /// version already ensured one, so `automatic` adds only a second,
+    /// unverified copy. An operator who set the variable keeps their value.
+    static void pinUvPythonDownloads(Map<String, String> environment) {
+        String existing = System.getenv("UV_PYTHON_DOWNLOADS");
+        if (existing == null || existing.isBlank()) {
+            environment.putIfAbsent("UV_PYTHON_DOWNLOADS", "manual");
+        }
+    }
+
+    /// Finds a usable `uv`: a verified shared copy first, then one on `PATH`,
+    /// then a download into `<toolchains>/uv/<version>`.
+    ///
+    /// One copy serves every brand. The per-brand copy older builds left under
+    /// `<brandRoot>/toolchain/uv` is adopted after the same digest check rather
+    /// than downloaded again, and a cache entry that fails its digest is
+    /// deleted rather than quietly used.
+    private static Path ensureUv(@Nullable Path brandRoot, Consumer<String> message)
+            throws BrandException {
+        Path binary = UvRuntime.sharedBinary();
+        // The version directory is root-owned (see below), but replacing it
+        // only needs write permission on its parent — so the parent is sealed
+        // too, and a tree that no longer belongs to root is not trusted.
+        org.jackhuang.hmcl.dsh.BootstrapRuntimeManager.ensureToolchainsRoot();
+        Privileges.keepRootOwnedDirectory(UvRuntime.root());
+        // A brand's own copy is only adopted when a brand asked: the runtime page
+        // provisions the shared one and has no directory of its own to look in.
+        Path legacy = brandRoot == null ? null
+                : brandRoot.resolve("toolchain").resolve(UvRuntime.executableName());
         if (Files.isRegularFile(binary)) {
-            return binary;
+            if (UvRuntime.verified(binary)
+                    && Privileges.useAsRoot(binary.getParent(), binary)) {
+                org.jackhuang.hmcl.dsh.BootstrapTrace.reused("uv", UvRuntime.version(), binary);
+                return binary;
+            }
+            message.accept("the shared uv does not match its pinned digest; fetching it again");
+            try {
+                Files.deleteIfExists(binary);
+            } catch (IOException e) {
+                throw new BrandException("could not replace the shared uv: " + e.getMessage(), e);
+            }
+        }
+        if (legacy != null && Files.isRegularFile(legacy) && UvRuntime.verified(legacy)) {
+            try {
+                Files.createDirectories(binary.getParent());
+                Files.move(legacy, binary, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                message.accept("adopted the verified uv from " + legacy + " into " + binary);
+                org.jackhuang.hmcl.dsh.BootstrapTrace.reused("uv", UvRuntime.version(), binary);
+                return binary;
+            } catch (IOException e) {
+                message.accept("could not adopt the old uv (" + e.getMessage()
+                        + "); downloading it instead");
+            }
         }
         try {
-            Process probe = new ProcessBuilder("uv", "--version")
-                    .redirectErrorStream(true).start();
-            if (probe.waitFor(10, java.util.concurrent.TimeUnit.SECONDS) && probe.exitValue() == 0) {
-                return Path.of("uv");
-            }
-            probe.destroyForcibly();
-        } catch (IOException | InterruptedException ignored) {
-            if (ignored instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
-            }
+            // Root-owned on purpose, and *not* handed to the agent: `uv sync`
+            // below runs as the panel, so an agent-writable `uv` would be an
+            // agent-writable program that root executes. The agent needs to run
+            // it, not to replace it, and 0755 gives it that. Its cache lives
+            // under the brand root (`UV_CACHE_DIR`), which is agent territory.
+            Files.createDirectories(binary.getParent());
+            makeRootExecutableDirectory(binary.getParent());
+        } catch (IOException e) {
+            throw new BrandException("could not create " + binary.getParent() + ": "
+                    + e.getMessage(), e);
         }
         // The configured index first: a mirror serves the same wheel, and on the deployment this was
         // written for the official CDN answers at about 40 KB/s while domestic mirrors do ~6.6 MB/s.
         BrandSources.Effective index = BrandSources.pypi();
         try {
-            return installUvFromIndex(index.url(), toolchain, binary, message);
+            return installUvFromIndex(index.url(), binary.getParent(), binary, message);
         } catch (BrandException e) {
             message.accept("uv from " + index.url() + " unavailable (" + e.getMessage() + ")");
         }
@@ -2215,50 +2564,107 @@ public final class BrandInstaller {
             // PyPI's JSON API is not mirrored by most mirrors, so trying it after a failed
             // mirror is only worth it when the index was not pypi.org itself.
             try {
-                return installUvFromPyPI(toolchain, binary, message);
+                return installUvFromPyPI(binary.getParent(), binary, message);
             } catch (BrandException e) {
                 message.accept("PyPI uv unavailable (" + e.getMessage() + "); trying GitHub");
             }
         } else {
             message.accept("PyPI uv unavailable; trying GitHub");
         }
-        String arch = switch (Architecture.CURRENT_ARCH) {
-            case X86_64 -> "x86_64";
-            case ARM64 -> "aarch64";
-            default -> throw new BrandException("no uv release for " + Architecture.CURRENT_ARCH);
-        };
         // The GitHub fallback has to name the right triple: the old hardcoded
         // `unknown-linux-gnu` downloaded a Linux binary on macOS and then failed
-        // with an exec error instead of saying what was wrong.
-        String triple = switch (OperatingSystem.CURRENT_OS) {
-            case LINUX -> arch + "-unknown-linux-gnu";
-            case MACOS -> arch + "-apple-darwin";
-            default -> throw new BrandException(
-                    "uv has no GitHub release for " + OperatingSystem.CURRENT_OS);
-        };
-        String url = "https://github.com/astral-sh/uv/releases/download/" + UV_VERSION + "/uv-"
+        // with an exec error instead of saying what was wrong. Windows publishes
+        // a `.zip` there rather than a tarball, and reaches uv through PyPI.
+        String triple = UvRuntime.githubTriple();
+        if (triple == null) {
+            return lastResortUv(message, "uv's GitHub fallback is not used on "
+                    + OperatingSystem.CURRENT_OS + " (the release there is a .zip);"
+                    + " PyPI and the configured index are its transports");
+        }
+        String url = "https://github.com/astral-sh/uv/releases/download/" + uvVersion() + "/uv-"
                 + triple + ".tar.gz";
-        Path archive = toolchain.resolve("uv.tar.gz");
+        Path archive = binary.getParent().resolve("uv-" + java.util.UUID.randomUUID() + ".tar.gz");
         try {
-            Files.createDirectories(toolchain);
             message.accept("Downloading uv " + url);
             try (InputStream in = download(url)) {
                 Files.copy(in, archive, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             }
-            runChecked(List.of("tar", "-xzf", archive.toString(), "-C", toolchain.toString()),
-                    toolchain, Map.of(), log, message, "unpacking uv");
-            Path extracted = toolchain.resolve("uv-" + triple).resolve("uv");
-            if (!Files.isRegularFile(extracted)) {
-                throw new BrandException("uv archive did not contain uv-" + triple + "/uv");
-            }
+            Path extracted = unpackUv(archive, binary.getParent(), triple);
+            // The digest is checked before the binary is allowed to take the
+            // name `uv`, so a mismatched download can never be executed later.
+            UvRuntime.verify(extracted, url);
             Files.move(extracted, binary, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            Files.setPosixFilePermissions(binary,
-                    java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"));
+            // The tarball's `uv-<triple>/` wrapper is now empty; leaving it made
+            // the toolchain directory list a folder that holds nothing.
+            FileUtils.deleteDirectoryQuietly(binary.getParent().resolve("uv-" + triple));
+            org.jackhuang.hmcl.dsh.BootstrapTrace.installed("uv", "brand-build", url,
+                    "pinned-sha256:" + UvRuntime.binarySha256(), binary);
+            try {
+                Files.setPosixFilePermissions(binary, PosixFilePermissions.fromString("rwxr-xr-x"));
+            } catch (UnsupportedOperationException ignored) {
+                // Windows: no POSIX mode bits.
+            }
             Files.deleteIfExists(archive);
+            makeRootExecutableDirectory(binary.getParent());
             return binary;
         } catch (IOException e) {
-            throw new BrandException("Could not install uv: " + e.getMessage(), e);
+            return lastResortUv(message, "Could not install uv: " + e.getMessage());
         }
+    }
+
+    /// The `uv` on `PATH`, when every pinned transport has failed.
+    ///
+    /// Last rather than first: a host `uv` is outside the panel's pin, so it is
+    /// only better than no build at all. It is resolved to an absolute path
+    /// before it is handed back — the callers build a command line with it, and
+    /// a bare `uv` would be resolved again later against whatever `PATH` that
+    /// child happens to have.
+    ///
+    /// @param message the install log
+    /// @param why     why the pinned copy was not used, reported when there is no host copy either
+    /// @return the absolute path of a `uv` that answers `--version`
+    /// @throws BrandException when the host has no working `uv` either
+    private static Path lastResortUv(Consumer<String> message, String why) throws BrandException {
+        Path found = org.jackhuang.hmcl.util.platform.Executables.resolve(UvRuntime.executableName())
+                .orElse(null);
+        if (found != null) {
+            try {
+                ProcessBuilder probeBuilder = new ProcessBuilder(found.toString(), "--version");
+                probeBuilder.redirectErrorStream(true);
+                org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(probeBuilder);
+                Process probe = probeBuilder.start();
+                if (probe.waitFor(10, java.util.concurrent.TimeUnit.SECONDS) && probe.exitValue() == 0) {
+                    message.accept("using the host's uv at " + found + " (not the pinned copy): " + why);
+                    return found;
+                }
+                probe.destroyForcibly();
+            } catch (IOException e) {
+                message.accept("the host's uv at " + found + " would not run: " + e.getMessage());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        throw new BrandException(why);
+    }
+
+    /// Unpacks a uv release tarball with the panel's own reader.
+    ///
+    /// Not the system `tar`: a minimal image has none, and Windows' bsdtar is
+    /// whichever one is first on `PATH`. The archive holds exactly one
+    /// `uv-<triple>/uv` member.
+    ///
+    /// @param archive  the downloaded `uv-<triple>.tar.gz`
+    /// @param toolchain the directory to unpack into
+    /// @param triple   the target triple naming the archive's top-level member
+    /// @return the `uv` binary inside `toolchain`
+    /// @throws BrandException when the archive is unreadable or has no `uv`
+    static Path unpackUv(Path archive, Path toolchain, String triple) throws BrandException {
+        extractTarGz(archive, toolchain, () -> false);
+        Path extracted = toolchain.resolve("uv-" + triple).resolve("uv");
+        if (!Files.isRegularFile(extracted)) {
+            throw new BrandException("uv archive did not contain uv-" + triple + "/uv");
+        }
+        return extracted;
     }
 
     /// Downloads the uv wheel from PyPI and extracts `uv` from
@@ -2267,12 +2673,7 @@ public final class BrandInstaller {
     /// release-asset redirect is not.
     private static Path installUvFromPyPI(Path toolchain, Path binary, Consumer<String> message)
             throws BrandException {
-        String arch = switch (Architecture.CURRENT_ARCH) {
-            case X86_64 -> "x86_64";
-            case ARM64 -> "aarch64";
-            default -> throw new BrandException("no uv wheel for " + Architecture.CURRENT_ARCH);
-        };
-        String jsonUrl = "https://pypi.org/pypi/uv/" + UV_VERSION + "/json";
+        String jsonUrl = "https://pypi.org/pypi/uv/" + uvVersion() + "/json";
         try {
             HttpRequest request = HttpRequest.newBuilder(URI.create(jsonUrl))
                     .timeout(Duration.ofSeconds(30))
@@ -2286,20 +2687,25 @@ public final class BrandInstaller {
             JsonObject document = JsonParser.parseString(response.body()).getAsJsonObject();
             JsonArray urls = document.getAsJsonArray("urls");
             String chosen = null;
+            String declared = null;
             for (com.google.gson.JsonElement element : urls) {
                 JsonObject file = element.getAsJsonObject();
                 String filename = file.get("filename").getAsString();
-                if (filename.endsWith(".whl") && filename.contains("manylinux")
-                        && filename.contains(arch)) {
+                if (UvRuntime.matchesWheel(filename)) {
                     chosen = file.get("url").getAsString();
+                    if (file.has("digests") && file.getAsJsonObject("digests").has("sha256")) {
+                        declared = file.getAsJsonObject("digests").get("sha256").getAsString();
+                    }
                     break;
                 }
             }
             if (chosen == null) {
-                throw new BrandException("no manylinux " + arch + " uv wheel on PyPI");
+                throw new BrandException("no uv " + uvVersion() + " wheel for "
+                        + UvRuntime.platformTag() + " on PyPI");
             }
-            message.accept("Downloading uv from PyPI " + chosen);
-            return extractUvWheel(chosen, toolchain, binary, message);
+            message.accept("Downloading uv from PyPI " + chosen
+                    + (declared == null ? "" : " (index sha256 " + declared.substring(0, 12) + "…)"));
+            return extractUvWheel(chosen, declared, toolchain, binary, message);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new BrandException("uv download was interrupted", e);
@@ -2315,13 +2721,8 @@ public final class BrandInstaller {
     /// itself has to come from the mirror's own index.
     private static Path installUvFromIndex(String index, Path toolchain, Path binary, Consumer<String> message)
             throws BrandException {
-        String arch = switch (Architecture.CURRENT_ARCH) {
-            case X86_64 -> "x86_64";
-            case ARM64 -> "aarch64";
-            default -> throw new BrandException("no uv wheel for " + Architecture.CURRENT_ARCH);
-        };
         String pageUrl = index.replaceAll("/$", "") + "/uv/";
-        message.accept("Looking for uv " + UV_VERSION + " on " + pageUrl);
+        message.accept("Looking for uv " + uvVersion() + " on " + pageUrl);
         String html;
         try {
             HttpRequest request = HttpRequest.newBuilder(URI.create(pageUrl))
@@ -2341,56 +2742,123 @@ public final class BrandInstaller {
             throw new BrandException("could not read " + pageUrl + ": " + e.getMessage(), e);
         }
 
-        String prefix = "uv-" + UV_VERSION + "-";
         java.util.regex.Matcher link = java.util.regex.Pattern.compile("href=\"([^\"]+)\"").matcher(html);
         while (link.find()) {
-            String href = link.group(1);
-            // Simple pages may carry the hash in a fragment; mirrors may hand out relative links
-            // (`../../packages/…`), which have to be resolved against the page they came from.
-            String file = href.contains("#") ? href.substring(0, href.indexOf('#')) : href;
-            String name = file.substring(file.lastIndexOf('/') + 1);
-            if (!name.startsWith(prefix) || !name.endsWith(".whl")
-                    || !name.contains("manylinux") || !name.contains(arch)) {
+            UvWheelLink wheel = uvWheelLink(pageUrl, link.group(1));
+            if (wheel == null) {
                 continue;
             }
-            String url = URI.create(pageUrl).resolve(file).toString();
-            message.accept("Downloading uv from " + url);
-            return extractUvWheel(url, toolchain, binary, message);
+            message.accept("Downloading uv from " + wheel.url()
+                    + (wheel.sha256() == null
+                    ? " (no index digest: relying on the pinned binary digest)"
+                    : " (index sha256 " + wheel.sha256().substring(0, 12) + "…)"));
+            return extractUvWheel(wheel.url(), wheel.sha256(), toolchain, binary, message);
         }
-        throw new BrandException("no manylinux " + arch + " uv " + UV_VERSION + " wheel on " + index);
+        throw new BrandException("no uv " + uvVersion() + " wheel for " + UvRuntime.platformTag()
+                + " on " + index);
     }
 
-    /// Downloads one uv wheel and extracts `uv` from `uv-<version>.data/scripts/uv`.
+    /// One uv wheel link taken from a simple index page.
     ///
-    /// The wheel is the same static binary as GitHub's tarball, but it comes from whichever index
-    /// answered — which is the whole point of pointing this at a mirror.
-    private static Path extractUvWheel(String url, Path toolchain, Path binary, Consumer<String> message)
+    /// A simple page carries each wheel's digest in the URL fragment
+    /// (`…whl#sha256=…`); mirrors may hand out relative links
+    /// (`../../packages/…`), resolved against the page they came from. Both
+    /// facts are the point: the fragment is the only integrity information a
+    /// PEP 503 page offers, and losing it is how a mirror download stops being
+    /// verifiable.
+    ///
+    /// @param pageUrl the page the href was found on
+    /// @param href    the raw href
+    /// @return the resolved URL and the declared digest, or `null` when the link
+    ///         is not this platform's uv wheel
+    static @Nullable UvWheelLink uvWheelLink(String pageUrl, String href) {
+        String declared = null;
+        int marker = href.indexOf("#sha256=");
+        if (marker >= 0) {
+            declared = href.substring(marker + 8);
+            href = href.substring(0, marker);
+        } else if (href.contains("#")) {
+            href = href.substring(0, href.indexOf('#'));
+        }
+        String name = href.substring(href.lastIndexOf('/') + 1);
+        if (!UvRuntime.matchesWheel(name)) {
+            return null;
+        }
+        return new UvWheelLink(URI.create(pageUrl).resolve(href).toString(), declared);
+    }
+
+    /// A wheel link resolved against its index page.
+    ///
+    /// @param url         the absolute wheel URL
+    /// @param sha256      the digest the index declared, or `null`
+    record UvWheelLink(String url, @Nullable String sha256) {
+    }
+
+    /// Downloads one uv wheel and extracts `uv` (or `uv.exe`) from it.
+    ///
+    /// Three things hold before the file is allowed to take the name `uv`: the
+    /// archive matches the digest the index declared (when it declared one), the
+    /// executable matches the panel's pin, and only then is it moved into place.
+    /// A wheel served by a mirror is trusted exactly as far as its bytes.
+    ///
+    /// @param url         where the wheel comes from
+    /// @param declaredSha the index's SHA-256 for the archive, or `null`
+    /// @param toolchain   the directory to download into
+    /// @param binary      the final executable path
+    /// @param message     progress sink
+    private static Path extractUvWheel(String url, @Nullable String declaredSha,
+                                       Path toolchain, Path binary, Consumer<String> message)
             throws BrandException {
+        Path wheel = toolchain.resolve("uv-" + java.util.UUID.randomUUID() + ".whl");
+        Path staged = toolchain.resolve("uv.extract-" + java.util.UUID.randomUUID());
         try {
             Files.createDirectories(toolchain);
-            Path wheel = toolchain.resolve("uv.whl");
-            try (InputStream in = download(url)) {
-                Files.copy(in, wheel, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            if (declaredSha == null) {
+                message.accept("uv: the index declared no digest; the pinned binary digest decides");
+                try (InputStream in = download(url)) {
+                    Files.copy(in, wheel, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                }
+            } else {
+                copyVerified(download(url), wheel, declaredSha);
             }
+            String executable = UvRuntime.executableName();
             try (ZipInputStream zip = new ZipInputStream(Files.newInputStream(wheel))) {
                 ZipEntry entry;
                 boolean found = false;
                 while ((entry = zip.getNextEntry()) != null) {
-                    if (!entry.isDirectory() && entry.getName().endsWith("/uv")) {
-                        Files.copy(zip, binary, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    if (!entry.isDirectory() && entry.getName().endsWith("/" + executable)) {
+                        Files.copy(zip, staged, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
                         found = true;
                         break;
                     }
                 }
                 if (!found) {
-                    throw new BrandException("uv wheel did not contain scripts/uv");
+                    throw new BrandException("uv wheel did not contain scripts/" + executable);
                 }
             }
-            Files.setPosixFilePermissions(binary, PosixFilePermissions.fromString("rwxr-xr-x"));
+            UvRuntime.verify(staged, url);
+            Files.move(staged, binary, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            org.jackhuang.hmcl.dsh.BootstrapTrace.installed("uv", "brand-build", url,
+                    (declaredSha == null ? "pinned-sha256:" : "index+pinned-sha256:")
+                            + UvRuntime.binarySha256(), binary);
+            try {
+                Files.setPosixFilePermissions(binary, PosixFilePermissions.fromString("rwxr-xr-x"));
+            } catch (UnsupportedOperationException ignored) {
+                // Windows: no POSIX mode bits; executability is implicit.
+            }
             Files.deleteIfExists(wheel);
+            message.accept("uv " + uvVersion() + " installed from " + url
+                    + " (sha256 " + UvRuntime.binarySha256() + ")");
+            makeRootExecutableDirectory(binary.getParent());
             return binary;
         } catch (IOException e) {
             throw new BrandException("Could not unpack uv from " + url + ": " + e.getMessage(), e);
+        } finally {
+            try {
+                Files.deleteIfExists(staged);
+            } catch (IOException ignored) {
+                // A leftover staging file is not a uv; the next attempt replaces it.
+            }
         }
     }
 
@@ -2562,7 +3030,35 @@ public final class BrandInstaller {
             }
         } catch (java.io.IOException e) {
             throw new BrandException("Could not unpack the source archive: " + e.getMessage(), e);
+        } catch (IllegalArgumentException e) {
+            BrandException explained = localeCannotRepresentNames(e);
+            if (explained != null) {
+                throw explained;
+            }
+            throw e;
         }
+    }
+
+    /// Rephrases the JVM's path-encoding failure when an archive member carries a
+    /// non-ASCII file name.
+    ///
+    /// `sun.jnu.encoding` decides what a path may contain. On an image without
+    /// locale data it degrades to ASCII, and a member named `启动.cmd` — the
+    /// claude-web source ships one — fails inside `UnixPath` with a bare
+    /// "Malformed input or input contains unmappable characters". That reads like
+    /// a corrupt archive; it is a missing system locale.
+    ///
+    /// @param e the path failure
+    /// @return the actionable exception, or `null` when this is not that failure
+    static @Nullable BrandException localeCannotRepresentNames(IllegalArgumentException e) {
+        String message = String.valueOf(e.getMessage());
+        if (!message.contains("unmappable characters")) {
+            return null;
+        }
+        return new BrandException("The archive contains a file name this machine's locale cannot"
+                + " represent (sun.jnu.encoding=" + System.getProperty("sun.jnu.encoding") + "): "
+                + message + " — install a UTF-8 locale (Debian: apt-get install locales;"
+                + " /usr/lib/locale/C.utf8 must exist) and run the panel with LANG=C.UTF-8.", e);
     }
 
     /// Runs one install command, streaming its merged output to the log and
@@ -2815,6 +3311,24 @@ public final class BrandInstaller {
     /// A no-op outside a container, where the panel and the agent are the same user.
     ///
     /// @param target the release directory
+    /// Keeps a directory the panel itself executes programs from root-owned.
+    ///
+    /// `<toolchains>/uv` is the case: `uv sync` runs as the panel, so a
+    /// directory an instance could write is a directory an instance could put a
+    /// program in for root to run. 0755 leaves it readable and executable by
+    /// the agent, which is all the agent needs — its own scratch space is
+    /// `UV_CACHE_DIR` under the brand root.
+    ///
+    /// @param dir the directory to keep panel-owned
+    private static void makeRootExecutableDirectory(Path dir) {
+        try {
+            Files.setPosixFilePermissions(dir, PosixFilePermissions.fromString("rwxr-xr-x"));
+        } catch (UnsupportedOperationException | IOException ignored) {
+            // Windows has no mode bits, and a directory the panel just created
+            // is already the panel's.
+        }
+    }
+
     private static void handReleaseToAgent(Path target) {
         int handed = Privileges.handTreeToAgent(target);
         if (handed > 0) {
@@ -2854,6 +3368,7 @@ public final class BrandInstaller {
                 org.jackhuang.hmcl.util.platform.Executables.startable(command, environment.get("PATH")));
         builder.directory(directory.toFile());
         builder.environment().putAll(environment);
+        org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(builder);
         builder.redirectErrorStream(true);
         Process process = builder.start();
         output.attach(process);

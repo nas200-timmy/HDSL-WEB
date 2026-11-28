@@ -17,6 +17,7 @@
  */
 package org.jackhuang.hmcl.web.transcode.runtime;
 
+import org.jackhuang.hmcl.dsh.BootstrapEnvironment;
 import org.jackhuang.hmcl.util.platform.Privileges;
 import org.jackhuang.hmcl.web.transcode.TranscodeModule;
 import org.jetbrains.annotations.NotNullByDefault;
@@ -85,7 +86,7 @@ public final class HardwareProbe {
         command.add(info.ffmpeg().toString());
         command.addAll(args);
         try {
-            Process process = new ProcessBuilder(Privileges.asAgent(command))
+            Process process = BootstrapEnvironment.agentProcess(command)
                     .redirectErrorStream(true)
                     .start();
             String output;

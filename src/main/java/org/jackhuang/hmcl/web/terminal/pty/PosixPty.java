@@ -177,6 +177,12 @@ final class PosixPty implements Pty {
         // place, so the child is still the program itself — the process group the
         // terminal kills, and the "no shell in the chain" rule, are both unchanged.
         List<String> effective = Privileges.asAgent(command);
+        // The PTY hands the child its complete environment; the adapter may have
+        // missed the bootstrap bundle (a third-party adapter, a future one), so
+        // the closure's PATH/LD_LIBRARY_PATH/CA roots are applied here too.
+        // `environment` may be immutable, hence the copy.
+        java.util.Map<String, String> childEnvironment = new java.util.HashMap<>(environment);
+        org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(childEnvironment);
         String program = effective.get(0);
         IntByReference master = new IntByReference();
         IntByReference slave = new IntByReference();
@@ -247,7 +253,7 @@ final class PosixPty implements Pty {
 
             IntByReference childPid = new IntByReference();
             String[] argv = effective.toArray(new String[0]);
-            String[] envp = environment.entrySet().stream()
+            String[] envp = childEnvironment.entrySet().stream()
                     .map(entry -> entry.getKey() + "=" + entry.getValue())
                     .toArray(String[]::new);
             int spawned = LibC.INSTANCE.posix_spawn(childPid, program, fileActions, attributes, argv, envp);

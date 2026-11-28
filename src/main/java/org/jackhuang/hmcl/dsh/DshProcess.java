@@ -168,6 +168,7 @@ public final class DshProcess {
         ProcessBuilder builder = new ProcessBuilder(Privileges.asAgent(plan.command()));
         builder.directory(plan.workingDirectory().toFile());
         builder.environment().putAll(plan.environment());
+        BootstrapEnvironment.apply(builder);
 
         try {
             this.process = new ManagedProcess(builder);

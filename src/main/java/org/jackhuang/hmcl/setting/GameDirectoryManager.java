@@ -444,7 +444,13 @@ public final class GameDirectoryManager {
     }
 
     /// Initializes this class on first use.
-    private static void ensureInitialized() {
+    ///
+    /// Must hold the same monitor as [init]: init() sets `initialized` before it
+    /// builds the folder list, so an unsynchronized check here lets a second
+    /// thread skip init() and read the still-empty `mergedGameDirectories`
+    /// (`.get(0)` → ArrayIndexOutOfBoundsException under concurrent instance
+    /// creation, 2026-11 audit). The monitor also publishes init()'s writes.
+    private static synchronized void ensureInitialized() {
         if (!initialized) {
             init();
         }

@@ -97,6 +97,10 @@ public final class AuthFilter implements Filter {
     /// 同一个域名下挂两个面板（`/a/`、`/b/`）时，Path=/ 的同名 Cookie 会互相覆盖，
     /// 表现为「登录 A 之后 B 掉线」。
     private final String cookiePath;
+    /// The instance-specific session cookie name. Cookies ignore the port, so
+    /// `hdsl_session` on `host:3080` and `host:3081` is the same key; the name
+    /// carries the panel id/port instead (see [SessionCookies]).
+    private final String sessionCookieName;
 
     /// @param authDisabled  when true, the filter passes everything through
     ///                      without a session (only legal on loopback binds)
@@ -124,7 +128,7 @@ public final class AuthFilter implements Filter {
                       boolean agentRemoteNeedsSession,
                       boolean agentLoopbackOnly) {
         this(authService, authDisabled, secureRequest, ttlSeconds, basePath, elevation, identity,
-                agentRemoteNeedsSession, agentLoopbackOnly, java.util.Set::of);
+                agentRemoteNeedsSession, agentLoopbackOnly, java.util.Set::of, SESSION_COOKIE);
     }
 
     public AuthFilter(AuthService authService, boolean authDisabled,
@@ -135,6 +139,21 @@ public final class AuthFilter implements Filter {
                       boolean agentRemoteNeedsSession,
                       boolean agentLoopbackOnly,
                       java.util.function.Supplier<java.util.Set<String>> trustedProxies) {
+        this(authService, authDisabled, secureRequest, ttlSeconds, basePath, elevation, identity,
+                agentRemoteNeedsSession, agentLoopbackOnly, trustedProxies, SESSION_COOKIE);
+    }
+
+    /// @param sessionCookieName the name from [SessionCookies#forInstance];
+    ///                          blank falls back to the legacy `hdsl_session`
+    public AuthFilter(AuthService authService, boolean authDisabled,
+                      java.util.function.Predicate<HttpServletRequest> secureRequest, int ttlSeconds,
+                      String basePath,
+                      org.jackhuang.hmcl.web.developer.DeveloperElevation elevation,
+                      PeerIdentity identity,
+                      boolean agentRemoteNeedsSession,
+                      boolean agentLoopbackOnly,
+                      java.util.function.Supplier<java.util.Set<String>> trustedProxies,
+                      String sessionCookieName) {
         this.authService = authService;
         this.authDisabled = authDisabled;
         this.secureRequest = secureRequest;
@@ -145,6 +164,8 @@ public final class AuthFilter implements Filter {
         this.agentRemoteNeedsSession = agentRemoteNeedsSession;
         this.agentLoopbackOnly = agentLoopbackOnly;
         this.trustedProxies = trustedProxies;
+        this.sessionCookieName = sessionCookieName == null || sessionCookieName.isBlank()
+                ? SESSION_COOKIE : sessionCookieName;
     }
 
     /// 这次请求的客户端地址：配置了可信反代时才采纳 `X-Forwarded-For`，否则就是
@@ -210,7 +231,7 @@ public final class AuthFilter implements Filter {
             return;
         }
 
-        String token = cookieValue(req, SESSION_COOKIE);
+        String token = cookieValue(req, sessionCookieName);
         Optional<AuthService.Session> session = token == null ? Optional.empty() : authService.verify(token);
         if (session.isPresent()) {
             req.setAttribute(SESSION_ATTRIBUTE, session.get());
@@ -492,7 +513,7 @@ public final class AuthFilter implements Filter {
     }
 
     private boolean hasLiveSession(HttpServletRequest request) {
-        String token = cookieValue(request, SESSION_COOKIE);
+        String token = cookieValue(request, sessionCookieName);
         return token != null && !token.isBlank() && authService.verify(token).isPresent();
     }
 
@@ -524,8 +545,15 @@ public final class AuthFilter implements Filter {
     /// attributes can never drift apart between the two places that set it.
     ///
     /// @param request the request the cookie will answer, for `Secure`
+    /// This panel's session cookie name (instance id + port), not the shared
+    /// legacy constant. Servlets that parse the Cookie header themselves must
+    /// use this, or [SessionCookies#name] for the process-wide value.
+    public String sessionCookieName() {
+        return sessionCookieName;
+    }
+
     public Cookie sessionCookie(HttpServletRequest request, String token) {
-        Cookie cookie = new Cookie(SESSION_COOKIE, token);
+        Cookie cookie = new Cookie(sessionCookieName, token);
         cookie.setPath(cookiePath);
         cookie.setHttpOnly(true);
         cookie.setMaxAge(cookieMaxAgeSeconds);
@@ -539,7 +567,7 @@ public final class AuthFilter implements Filter {
     ///
     /// @param request the request the cookie will answer, for `Secure`
     public Cookie clearedSessionCookie(HttpServletRequest request) {
-        Cookie cookie = new Cookie(SESSION_COOKIE, "");
+        Cookie cookie = new Cookie(sessionCookieName, "");
         cookie.setPath(cookiePath);
         cookie.setHttpOnly(true);
         cookie.setMaxAge(0);

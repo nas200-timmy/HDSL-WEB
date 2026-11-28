@@ -97,6 +97,13 @@ export function chatChannelId(): string | null {
   return channel?.channelId ?? null;
 }
 
+/** 丢弃缓存通道。服务端通道是内存态：面板重启即丢、TTL 12h、超压随机驱逐，
+ * 过期 id 会换来 401 chat_key_required——那不是会话失效。调用方（REST 重试、
+ * WS 重绑、登出）丢弃后，下一次 ensureChatChannel() 重新握手。 */
+export function resetChatChannel(): void {
+  channel = null;
+}
+
 export function encryptChatJson(plain: string): string {
   if (!channel) throw new Error("chat key is not ready");
   const nonce = randomBytes(12);
@@ -106,11 +113,13 @@ export function encryptChatJson(plain: string): string {
   return JSON.stringify({ v: "1", n: b64(nonce), ct: b64(ciphertext) });
 }
 
-export function decryptChatJson(plain: string): string {
-  if (!channel) throw new Error("chat key is not ready");
+/// 解密默认用当前通道；并发重试可能在响应回来前换掉通道，发送方应把
+/// 发送时用的通道传进来，避免拿新钥匙开旧锁。
+export function decryptChatJson(plain: string, key: ChatChannel | null = channel): string {
+  if (!key) throw new Error("chat key is not ready");
   const envelope = JSON.parse(plain) as { n?: string; ct?: string };
   if (!envelope.n || !envelope.ct) throw new Error("加密聊天响应格式不正确");
-  const bytes = chacha20poly1305(channel.s2c, fromB64(envelope.n), INFO).decrypt(
+  const bytes = chacha20poly1305(key.s2c, fromB64(envelope.n), INFO).decrypt(
     fromB64(envelope.ct),
   );
   return new TextDecoder().decode(bytes);

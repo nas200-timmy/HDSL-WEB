@@ -139,6 +139,7 @@ public final class DshAcpClient implements AutoCloseable {
         ProcessBuilder builder = new ProcessBuilder(Privileges.asAgent(command));
         builder.directory(workingDirectory.toFile());
         builder.environment().putAll(environment);
+        BootstrapEnvironment.apply(builder);
 
         try {
             this.process = new ManagedProcess(builder);

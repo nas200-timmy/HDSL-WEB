@@ -147,6 +147,43 @@ public final class DshDoctor {
         }
         out.println();
 
+        out.println("Python");
+        PythonResolver.Interpreter python = PythonResolver.resolve();
+        out.println("  interpreter: " + formatPython(python));
+        PythonRuntimeManager.Installed managed = PythonRuntimeManager.currentShared();
+        out.println("  managed:     " + (managed == null
+                ? "not installed (downloaded only when an install needs a version the host lacks)"
+                : managed.version() + " " + managed.directory()));
+        out.println("  policy:      HDSL_PYTHON/PYTHON wins, then a system python3, then the"
+                + " managed line; PATH is only touched for the managed one");
+        out.println();
+
+        out.println("Bootstrap");
+        out.println("  catalog:         " + BootstrapCatalog.origin().describe());
+        BootstrapRuntimeManager.Installed closure = BootstrapRuntimeManager.currentRuntimeClosure();
+        // The library closure is a glibc concern: Windows and macOS Node builds do
+        // not link libstdc++/libatomic, so asking on those hosts reports a failure
+        // that is not one.
+        boolean linux = org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
+                == org.jackhuang.hmcl.util.platform.OperatingSystem.LINUX;
+        out.println("  runtime closure: " + (linux
+                ? formatClosure(closure, BootstrapRuntimeManager.missingNodeLibraries(), true)
+                : formatClosure(closure, java.util.List.of(), false)));
+        BootstrapRuntimeManager.CaInstalled ca = BootstrapRuntimeManager.currentCaBundle();
+        out.println("  ca bundle:       " + (ca == null
+                ? "not installed (child processes fall back to the JVM's trust store)"
+                : "installed " + ca.version() + " " + ca.file()));
+        // A partial operator catalogue is a real possibility, and the doctor is
+        // the one place that has to survive it: a missing section is reported,
+        // not thrown.
+        // `detect()` merges the host's own compilers with the portable bundle;
+        // `currentInstalled()` only knows the managed one, which made this row
+        // say "none" over a machine with gcc on PATH.
+        out.println("  build toolchain: " + safe(() ->
+                formatToolchain(BuildToolchainManager.defaultManager().detect())));
+        out.println("  uv:              " + safe(UvRuntime::summary));
+        out.println();
+
         out.println("File watchers");
         if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
                 == org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
@@ -198,6 +235,67 @@ public final class DshDoctor {
         out.println(runtimeOk ? "Result: ready to install DeepSeek Harness versions."
                 : "Result: the JavaScript toolchain is incomplete.");
         return runtimeOk ? 0 : 1;
+    }
+
+    /// Runs a row that may depend on a catalogue section an operator left out.
+    static String safe(java.util.function.Supplier<String> row) {
+        try {
+            return row.get();
+        } catch (RuntimeException e) {
+            return "unavailable: " + e.getMessage();
+        }
+    }
+
+    /// The Python row: version, path, origin and the two capabilities that decide
+    /// whether a brand's `uv sync` can work at all.
+    static String formatPython(PythonResolver.Interpreter python) {
+        if (!python.usable()) {
+            return "none (" + python.detail() + ")";
+        }
+        return python.version() + "  " + python.executable()
+                + "  [" + python.origin().name().toLowerCase(java.util.Locale.ROOT) + "]"
+                + "  venv=" + (python.venv() ? "yes" : "no")
+                + "  pep668=" + (python.externallyManaged() ? "yes" : "no")
+                + (python.detail().isEmpty() ? "" : "  (" + python.detail() + ")");
+    }
+
+    /// The closure row: what the loader can see, and whether anything was fetched.
+    ///
+    /// @param closure the managed closure, or `null`
+    /// @param missing the Node.js libraries the loader cannot find (Linux only)
+    /// @param linux   whether the host is Linux, where the question applies at all
+    static String formatClosure(@Nullable BootstrapRuntimeManager.Installed closure,
+                                java.util.List<String> missing, boolean linux) {
+        if (!linux) {
+            return "not applicable  [the Node.js build for this OS does not link"
+                    + " libstdc++/libatomic]"
+                    + (closure == null ? "" : "  (managed bundle present: " + closure.version() + ")");
+        }
+        if (!missing.isEmpty()) {
+            return "MISSING " + String.join(", ", missing)
+                    + "  [a Node.js binary would not start]";
+        }
+        if (closure == null) {
+            return "not installed  [the host's loader finds the libraries; nothing downloaded]";
+        }
+        return "installed " + closure.version() + "  " + closure.directory();
+    }
+
+    /// The build-toolchain row: a portable bundle or the host's own programs.
+    static String formatToolchain(@Nullable BuildToolchainManager.Toolchain toolchain) {
+        if (toolchain == null) {
+            return "none  [no host cc/c++/make and no portable bundle]";
+        }
+        if (toolchain.portable() && toolchain.directory() != null) {
+            return "portable " + toolchain.os() + "-" + toolchain.arch() + "  "
+                    + toolchain.directory()
+                    + (toolchain.usable() ? "" : "  [INCOMPLETE: " + String.join(", ",
+                    toolchain.missing()) + "]");
+        }
+        return "host " + toolchain.os() + "-" + toolchain.arch()
+                + "  cc=" + String.valueOf(toolchain.pathOf("cc"))
+                + (toolchain.usable() ? "" : "  [MISSING: " + String.join(", ",
+                        toolchain.missing()) + "]");
     }
 
     /// Prints the kernel's file-watch budget as a section of the report.

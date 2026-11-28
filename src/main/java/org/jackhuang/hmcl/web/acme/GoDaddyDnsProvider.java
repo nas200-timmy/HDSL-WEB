@@ -205,4 +205,13 @@ public final class GoDaddyDnsProvider implements AcmeDnsProvider {
         }
         return "unknown error";
     }
+
+    @Override
+    public void test() throws AcmeDnsException {
+        HttpResponse<String> response = send("GET", "/v1/domains?limit=1", null);
+        if (response.statusCode() / 100 != 2) {
+            throw new AcmeDnsException("GoDaddy credential check failed ("
+                    + response.statusCode() + "): " + errorMessage(response.body()));
+        }
+    }
 }

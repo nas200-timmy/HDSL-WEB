@@ -168,7 +168,10 @@ public final class StaticServlet extends HttpServlet {
             return "/plain";
         }
         if (ua.contains("msie") || ua.contains("trident/")) {
-            return "/plain/old";
+            // IE11 can run the ES5 poller; the plain surface is its chat, not a
+            // notice page. `/plain/old` stays reachable for links and for
+            // browsers that cannot submit a form at all.
+            return "/plain";
         }
         return null;
     }

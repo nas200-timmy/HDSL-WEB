@@ -39,6 +39,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.io.OutputStreamWriter;
 import java.math.BigInteger;
 import java.net.URI;
@@ -185,6 +186,46 @@ class TlsUploadTest {
             JsonObject settings = json(get(tls, httpsBase + "/api/settings/tls"));
             assertEquals("pkcs12", settings.get("source").getAsString());
             assertTrue(settings.get("subject").getAsString().contains("TlsUploadTest P12"));
+        }
+    }
+
+    @Test
+    void jksUploadIsConvertedToPkcs12AndServed() throws Exception {
+        try (TestSupport.RunningServer running = startServer()) {
+            PemPair pair = generateSelfSigned("TlsUploadTest JKS");
+            String password = "changeit-123";
+            KeyStore jks = KeyStore.getInstance("JKS");
+            jks.load(null, null);
+            jks.setKeyEntry("tomcat", pair.keyPair().getPrivate(), password.toCharArray(),
+                    new java.security.cert.Certificate[]{pair.certificate()});
+            ByteArrayOutputStream jksBytes = new ByteArrayOutputStream();
+            jks.store(jksBytes, password.toCharArray());
+
+            HttpClient plain = TestSupport.client();
+            String httpBase = running.baseUrl();
+            HttpResponse<String> upload = multipart(plain, httpBase + "/api/settings/tls",
+                    Map.of("password", password),
+                    Map.of("p12File", jksBytes.toByteArray()));
+            assertEquals(200, upload.statusCode(), upload.body());
+            assertTrue(json(upload).get("ok").getAsBoolean(), upload.body());
+
+            // The persisted artifact is PKCS#12 — that is what a restart reloads.
+            Path stored = dataDir.resolve("certs")
+                    .resolve(CertificateManager.UPLOADED_PKCS12_FILE);
+            assertTrue(Files.isRegularFile(stored));
+            KeyStore reloaded = KeyStore.getInstance("PKCS12");
+            try (InputStream in = Files.newInputStream(stored)) {
+                reloaded.load(in, password.toCharArray());
+            }
+            String yaml = Files.readString(dataDir.resolve("server.yaml"));
+            assertTrue(yaml.contains("pkcs12_file"), yaml);
+
+            HttpClient tls = TestSupport.trustAllClient();
+            String httpsBase = "https://127.0.0.1:" + running.port();
+            assertEquals(200, get(tls, httpsBase + "/api/health").statusCode());
+            JsonObject settings = json(get(tls, httpsBase + "/api/settings/tls"));
+            assertEquals("pkcs12", settings.get("source").getAsString());
+            assertTrue(settings.get("subject").getAsString().contains("TlsUploadTest JKS"));
         }
     }
 

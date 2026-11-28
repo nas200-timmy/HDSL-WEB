@@ -22,7 +22,7 @@ import { readAttachmentPreview } from "./chat/attachmentPreviewSetting";
 import { ChatSidebar, ForkSessionDialog, RenameSessionDialog } from "./chat/ChatSidebar";
 import { Composer } from "./chat/Composer";
 import { Markdown } from "./chat/Markdown";
-import { MessageItem } from "./chat/MessageItem";
+import { MessageItem, useStreamText } from "./chat/MessageItem";
 import { Timeline, stepsFromLive, type TimelineStep } from "./chat/Timeline";
 import { AvatarView } from "./chat/AvatarView";
 import { ContextMeter } from "./chat/ContextMeter";
@@ -36,6 +36,8 @@ function dayLabel(at: number): string {
   if (at >= start - 86400000) return "昨天";
   return date.toLocaleDateString();
 }
+
+const FALLBACK_ASSISTANT = { name: "助手", avatar: "💬" } as const;
 
 function requestId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -58,6 +60,9 @@ type LiveBlock =
 
 /** 流式气泡：会话还没刷新到新节点时先画在列表末尾。 */
 function LiveBubble({ assistant, text, reasoning, tool, sources, blocks }: { assistant: ChatAssistant | null; text: string; reasoning: string; tool?: { tool?: string; query: string; provider: string; status: string; hits: number }; sources?: ChatSearchHit[]; blocks?: LiveBlock[] }) {
+  // Same 12 fps Markdown throttle as MessageItem: the live bubble is the one
+  // that would otherwise re-parse a long answer on every delta.
+  const shownText = useStreamText(text, true);
   const steps: TimelineStep[] = blocks?.length
     ? stepsFromLive(blocks)
     : [
@@ -79,7 +84,7 @@ function LiveBubble({ assistant, text, reasoning, tool, sources, blocks }: { ass
         {steps.length > 0 && <Timeline steps={steps} live />}
         {text ? (
           <div className="chat-bubble">
-            <Markdown content={text} streaming sources={sources} />
+            <Markdown content={shownText} streaming sources={sources} />
             <span className="chat-cursor" />
           </div>
         ) : (
@@ -179,6 +184,9 @@ export function ChatPage() {
   useEffect(() => {
     setPreview(null);
   }, [sessionId]);
+
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
 
   const openAttachment = (attachment: ChatAttachment) => {
     if (previewEnabled) {
@@ -592,8 +600,14 @@ export function ChatPage() {
         try {
           const next = await api.chat.session(sessionId);
           if (sessionIdRef.current !== sessionId) return;
-          setSession(next);
-          if (!next.streaming && liveRef.current) setLive(null);
+          // While the turn runs, the live state is ahead of this snapshot.
+          // Replacing the whole transcript every three seconds made every
+          // completed message re-render (and its Markdown re-parse); only take
+          // the snapshot once the server says the turn is over.
+          if (!next.streaming) {
+            setSession(next);
+            if (liveRef.current) setLive(null);
+          }
         } catch {
           // The next tick will try again.
         }
@@ -892,7 +906,9 @@ export function ChatPage() {
   };
 
   const startEdit = (nodeId: string, text: string) => {
-    setDraftBeforeEdit(draft);
+    // A memoized MessageItem can hold an older closure; read the draft from the
+    // ref so cancelling an edit restores what is actually in the box now.
+    setDraftBeforeEdit(draftRef.current);
     setEditTarget({ nodeId, text });
     setDraft(text);
     setFocusSignal((value) => value + 1);
@@ -1336,7 +1352,7 @@ export function ChatPage() {
                     {showDay && <div className="chat-day"><span>{label}</span></div>}
                     <MessageItem
                       node={node}
-                      assistant={currentAssistant ?? { name: "助手", avatar: "💬" }}
+                      assistant={currentAssistant ?? FALLBACK_ASSISTANT}
                       streaming={isLive}
                       liveContent={isLive ? live?.text : undefined}
                       liveReasoning={isLive ? live?.reasoning : undefined}

@@ -2,6 +2,171 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；每条记录「改了什么」与「为什么」。
 
+## v0.6.96 — 未发布 · 受控 ffmpeg 运行时、自举链与裸环境修复
+
+> 转码接入受控 ffmpeg 运行时：内置钉扎目录、7.1/8.1 版本线、下载镜像与
+> 全编码源码构建；面板学会在极简镜像里自举（运行时闭包、CA、CPython、
+> 构建工具链、uv），体检页改为「运行环境」并把每一步摆上台面；品牌在裸
+> 环境的三个失败被逐一定位修复，Hermes 首次完整跑通；会话 cookie 按实例
+> 与端口隔离，两个面板不再互相踢下线。本分支自 v0.6.95 起积攒 84 个提交，
+> 发布前需补跑全量验证（见文末）。
+
+### 转码：受控 ffmpeg 运行时
+
+- 新增运行时管理器（FfmpegCatalog/Selector/Capabilities/RuntimeManager）：内置
+  钉扎目录、按宿主 glibc 过滤、Java 解包（zip/tar.xz，不再依赖系统 tar）、原子
+  安装、`current` 指针、回滚与 GC。旧 static 安装并入同一管理器；包管理器/源码
+  路径在托管运行时存在时拒绝覆盖。新增 `/api/transcode/runtime*`，安装/切换/删除
+  要求开发者提权且不接受 agent 票。
+- 版本线 7.1/8.1（目录 v2：kind/vendor/major/variant/minGlibc/mirrors/
+  signatureUrl/buildRecipe），选择器 `auto`/`7.1`/`8.1`，显式 major 不静默回退。
+- 厂商：内置 BtbN；新增 gyan.dev（Windows）与 Jellyfin 便携构建（Linux/Windows，
+  LZU 镜像）；全部从下载字节钉扎，能力按探测声明。修 ffmpeg 9.x `parseFilters`
+  两字符标志列导致的滤镜误报（libvmaf 曾对启用它的构建报缺失）。
+- 下载：`transcode.binary_mirror` / `source_mirror`（及 `HDSL_*`）接收放在官方
+  URL 前的镜像前缀，引擎依次尝试前缀、目录镜像、官方地址并记录来源；统一下载器
+  （重定向先校验、拒绝私有地址、遵守取消）；同一构建去重、不同构建并行（安装器
+  三线程池，运行时在锁外下载）；安装任务保留六小时，切页面可重连。
+- 设置页的已安装运行时改为账本表格（与种子历史同一套对齐方式）：类型（系统 PATH /
+  二进制 / 源码编译）、下载源（含 PATH）、源码源、版本号、二进制构建方、许可、
+  常见编解码命中数、编译时编译器；系统 ffmpeg 也占一行，编解码按实际探针计算。
+  `FfmpegToolchainManager` 的 toolchain 描述补上 C 编译器版本，构建记录随之落盘。
+- 设置页安装卡片：类型 → 来源 → 版本/许可证 → 编译器 → 确认；新增
+  `transcode.default_runtime`（auto/system/已安装 id）与 `PUT /runtime/default`；
+  源码构建 `compiler: auto|system|portable` 语义明确；只列本宿主可安装的来源。
+- 队列：只读快照携带 runtime 块，每个作业记录实际启动的二进制；worker 对 job 的
+  写入统一进锁（落在 spawn 窗口里的取消不再漏杀 ffmpeg）；构建输出实时流出而不是
+  等退出后回放。
+- **全编码源码构建**（`full-gpl-9.1` / `full-lgpl-9.1`）：面板自行下载并编译
+  x264/x265/libvpx/libaom/svt-av1/opus/lame/vorbis/ogg 加钉扎 cmake/nasm，链接
+  静态 ffmpeg。构建命令收敛在 FfmpegFullBuildKit，被替换的目录无法注入代码；
+  Zig configure 后修正 `HAVE_SYSCTL`；nasm 构建降级 `-Wdate-time`（zig cc 的可
+  复现性告警），并复用已自举的 nasm；全量构建默认使用托管工具链。Windows 只提供
+  依赖宿主的最简源码构建，UI 声明限制并提示 Defender 误报。
+
+### 自举：极简镜像里把环境补齐
+
+- 运行时闭包：BootstrapRuntimeManager/Catalog/Archive/Environment，从
+  snapshot.debian.org 钉扎的 .deb 提取 libstdc++/libgcc_s/libatomic/libcap-ng/
+  setpriv，下载并校验 CA bundle，原子安装到 `<data>/toolchains/{runtime,ca}`；
+  x64 与 arm64 均钉扎（arm64 已在真实 Debian 13 上验证）。
+- 身份修补：闭包已装时也要重跑 `/etc/passwd`、`/etc/group` 修补——容器重建丢
+  `/etc` 留 `/data`，否则 `setpriv --init-groups` 找不到条目；安装竞态改为返回
+  赢家而不是报失败。
+- CPython：PythonRuntimeManager（python-build-standalone 钉扎、sha256、原子
+  安装）；PythonResolver 单点决策（操作员值 → 能通过能力探测的系统解释器 →
+  托管），`HDSL_PYTHON_POLICY=auto|system-only|managed`；3.13 宿主不冒充 3.12
+  钉扎；子进程 PATH 已有 python 时不再注入任何变量。
+- 构建工具链：BuildToolchainManager（Linux 优先系统 cc/c++/make/pkg-config/
+  nasm，缺失时装钉扎的 Zig 0.14.1 + GNU make + pkgconf + nasm 及 cc/c++/ar/
+  ranlib/ld 包装器；Windows 用 w64devkit 2.11.0）；"跑过一次才算装好"；镜像
+  测速选择（每源采样 512KB/6 秒，校验归档魔数与 Content-Range，失败源窗口跳过，
+  每次尝试仍校验钉扎 sha256）；下载可取消；`toolchain-portable` 作为可选 bundle。
+- uv：按平台钉扎可执行文件 SHA-256，缓存复用前复验；共享副本
+  `<toolchains>/uv/<version>`，品牌内旧副本通过同样校验后收养。
+- 可运维性：所有钉扎移入 `/bootstrap/bootstrap.json`（schema 2），
+  `HDSL_BOOTSTRAP_CATALOG` 可覆盖（必须钉全，拒绝时回落内置并记日志）；
+  BootstrapTrace 为每个制品写一行（缺什么、来源、摘要、落点）；doctor 新增
+  Python 与 Bootstrap 行。
+- 页面：体检页改为「运行环境」，自举卡片逐 bundle 列出缺口/来源/落点，只有缺失
+  才可安装，进度条展示、切标签自动重连、支持取消；`POST /api/bootstrap/install`
+  走任务服务并纳入 `instanceMutation` 门禁。
+- 注入规则收口：闭包只在宿主自身路径缺库或没有 `setpriv` 时注入（判定不再把闭包
+  自己的 `lib` 算进宿主，"闭包不能给自己作证"）；应用自带解释器时不注入 Python；
+  ZCode 在工具链应用后再组合 PATH。
+
+### 品牌：裸环境三连修与 Hermes 打通
+
+- **hermes**：读 `pm/lock.json` 钉扎的 pnpm（0.23.4 为 12.15.0）装进品牌自己的
+  工具链，仅为 node-deps 前置；pnpm 12 改为原生分发，入口检查改用
+  `node_modules/.bin/pnpm`（pnpm 11 的 `pnpm.cjs` 已不存在）；发布包的
+  `engines.node` 不满足时自动回退到兼容的托管运行时，安装与启动两侧一致
+  （仅 auto/inherit，显式选择保持用户决定）。full 环境下安装、启动、反代均通过。
+- **minimax**：预编译二进制需要 GLIBCXX_3.4.29，宿主库目录改为排在注入闭包之前
+  （缺失库仍回落到闭包）；better-sqlite3 预编译失败时的源码回退经 Zig 跑
+  node-gyp，lld 拒绝 `-Wl,--exclude-libs,ALL`,包装器过滤该旗标。
+- **claude-web**：归档里的中文文件名在缺 locale 的镜像上抛
+  "unmappable characters",错误翻译为可操作提示（点名 `sun.jnu.encoding`、
+  提示安装 locales 与 `LANG=C.UTF-8`）。
+- 品牌版本目录、Node 选择器与 Node 版本列表在裸启动时退避重试（5s → 30s），
+  不再停在"无法获取版本列表"直到手动刷新。
+
+### 认证：会话 cookie 按实例与端口隔离
+
+- Cookie 按主机与路径为键、从不看端口，`host:3080` 与 `host:3081` 的两个面板
+  互相覆盖同一 `hdsl_session`（登录一个踢掉另一个）。每个安装获得
+  `<data>/instance-id` 中的稳定 id，cookie 命名为
+  `hdsl_session_<id12>_<port>`；裸 Cookie 解析器（WS 网关、终端、升级检查、
+  plain 聊天）统一走 `SessionCookies.name()`；`/api/health` 与关于页暴露实例 id。
+
+### 聊天
+
+- 空密钥不再发送 `Authorization: Bearer `（空值）：既掩盖真实原因，又弄坏无密钥
+  的本地端点；401/403 明确区分"账号没有密钥"与"密钥被拒",401 不自动重试。
+- 加密通道过期（驱逐 / TTL）不再把有效会话踢回登录页：`chat_key_required` 走
+  清通道重握手重试一次（并发 401 复用去重）；WS 绑定的通道被驱逐后重新绑定一次
+  并发 `chat_key_required`,不再静默丢帧。
+
+### 界面与兼容
+
+- 请求超时与 `URLSearchParams.size` 改用兼容底线（Safari 15.6 / Chrome 113）内的
+  API；`compat-check` 增加 JS 运行时 API 黑名单（语法合法但 API 缺失抓不到）。
+- 种子预览历史改为真正的表格：表头与每行共用同一组网格列宽，版本/引擎/清晰度/
+  范围/结构/时间不再随内容漂移；筛选直接做进表头（列名 + 当前值 + 下拉三角，不再有
+  独立的组内筛选条），与顶部全局筛选叠加，组头同步显示「命中 / 总数」；组内排序支持
+  主/次/三 优先级（版本/引擎/范围），清晰度固定为末级——先按条件分组，再看同条件下
+  不同清晰度的效果；主排序选时间时忽略整条排序链，保持纯粹的时间先后。修复旧缓存
+  条目的引擎/清晰度缺失（改从目录名回退）与历史 id 碰撞：相同 id 曾共用 React key，
+  筛选后行不更新、必须折叠重开。
+- WS 网关发送加每会话锁：并发发布不再触发 `BasicRemote` 的并发写异常、把健康
+  连接当死连接关闭。
+- GameDirectoryManager 初始化发布竞态修复：并发创建实例不再随机 500。
+
+### 证书
+
+- 新增「腾讯云 DNSPod（API 3.0）」：SecretId/SecretKey，TC3-HMAC-SHA256 签名，
+  不再需要用户去翻旧版 DNSPod Token 页面；旧 `dnspod` 条目保留。
+- DNS 凭证对话框按厂商显示「凭据类型 + 申请入口 + 最小权限」，并新增「测试凭证」：
+  保存前做一次只读校验（列域名/Zone），凭据类型错误或权限不足当场报错。
+- 上传密钥库现在也接受 JKS / JCEKS（阿里云「Tomcat」下载项）：按字节识别格式，
+  用库口令读出私钥与证书链后统一转成 PKCS#12 再落盘，重启加载与热切换沿用同一条路径。
+
+### 安全
+
+- ACME DNS 凭证的 AccessKey ID 与 Secret 一样只回显末四位，不再明文展示。
+- setpriv：四个组选项互斥（`--clear-groups` 与 `--groups` 不再同传）；PATH 上
+  的 busybox `setpriv` 视为不存在并回落到闭包的 util-linux 版本（否则全 applet
+  镜像下所有 agent 启动死于 `--reuid: applet not found`）；测试钉住 argv 形状。
+- 归档解包：软链与硬链接目标都过 `SafePaths`,跨出目标目录的成员拒绝。
+- 工具链封印：面板以 root 执行/信任的树（闭包、CPython、构建工具链、CA）安装时
+  清组写位、封父目录；下载文件在字节到达前以 0600 创建；`uv` 的执行权限留在
+  root,agent 使用 `UV_CACHE_DIR`。
+- 输出路径：`container`/`outputSuffix` 校验为单一文件名片段，防止写出媒体目录；
+  ffmpeg 探针校验退出码，避免采纳一个跑不动的二进制。
+- 下载器校验每次重定向、拒绝私有地址；Windows 上 `Path`/`PATH` 拼写统一，
+  子进程不再丢掉宿主 PATH。
+
+### 构建与部署
+
+- Docker：Node tarball 的校验改钉官方 sha256（原先 tarball 与 SHASUMS 同源，
+  镜像可同时替换两者）；bump 版本忘更新哈希会构建失败。
+- 文档：自举设计稿、显式 setpriv 组清单、Windows 源码构建限制、glibc 作为硬性
+  libc 底线、arm64 实际可得物。
+
+### 验证（发布前待办）
+
+以下命令在合入 `main`、产出发布 jar 前补跑并回填结果：
+
+- `./gradlew test --rerun-tasks`（含本分支新增的闭包、setpriv、归档、品牌回归）；
+- `cd web && npm run typecheck && npm run build && npm run compat`;
+- `cd client/hdsl-tui && go test -count=1 ./...`;
+- `./gradlew shadowJar -PreleaseVersion=0.6.96` 与 `scripts/api-smoke.py`;
+- `scripts/security-smoke.sh`（明文）与 `HDSL_SMOKE_HTTPS=true`。
+
+开发期已实测：三容器（debian-slim / debian 标准 / 全配齐）冒烟；9 个品牌在三种
+环境的安装矩阵；hermes 在 full 环境安装 + 启动 + 反代 200；ffmpeg 全编码源码
+构建的 nasm 阶段已通过（后续步骤在 GitHub 下载限速窗口内未能跑完）。
+
 ## v0.6.95 — 2026-11-24 · 部署预检、反代真实客户端与种子预览极限档
 
 > 新部署在首页就能看到缺什么（Node / pnpm / HTTPS / 开发者密码），装包前先预检

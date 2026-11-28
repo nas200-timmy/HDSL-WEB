@@ -24,6 +24,7 @@ import com.google.gson.annotations.SerializedName;
 import org.jackhuang.hmcl.util.ProcessTree;
 import org.jackhuang.hmcl.util.gson.JsonUtils;
 import org.jackhuang.hmcl.util.platform.OperatingSystem;
+import org.jackhuang.hmcl.dsh.BootstrapEnvironment;
 import org.jackhuang.hmcl.util.platform.Privileges;
 import org.jackhuang.hmcl.util.logging.Logger;
 import org.jackhuang.hmcl.web.event.EventBus;
@@ -31,6 +32,7 @@ import org.jackhuang.hmcl.web.http.Json;
 import org.jackhuang.hmcl.web.transcode.TranscodeModule;
 import org.jackhuang.hmcl.web.transcode.command.CommandBuilder;
 import org.jackhuang.hmcl.web.transcode.preset.TranscodePreset;
+import org.jackhuang.hmcl.web.transcode.runtime.FfmpegLocator;
 import org.jackhuang.hmcl.web.transcode.runtime.FfmpegProbe;
 import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
@@ -745,8 +747,8 @@ public final class TranscodeQueue {
     }
 
     public JsonObject snapshot() {
+        JsonObject body = new JsonObject();
         synchronized (lock) {
-            JsonObject body = new JsonObject();
             body.addProperty("runState", runState.name().toLowerCase(Locale.ROOT));
             body.addProperty("maxConcurrent", module.config().transcode.maxConcurrent);
             body.addProperty("maxQueue", module.config().transcode.maxQueue);
@@ -755,8 +757,29 @@ public final class TranscodeQueue {
                 array.add(jobView(job));
             }
             body.add("jobs", array);
-            return body;
         }
+        // Done outside the queue lock: the first call probes ffmpeg, and holding the
+        // lock for that would stall every queue action behind `-version`/`-encoders`.
+        body.add("runtime", runtimeJson());
+        return body;
+    }
+
+    /// What a job started right now would run. Exposed in the queue snapshot so a
+    /// read-only agent ticket can answer "which ffmpeg is this queue using?" without
+    /// the operator-only `/runtime` endpoints.
+    private JsonObject runtimeJson() {
+        FfmpegProbe.FfmpegInfo info = module.runtime().info();
+        FfmpegLocator.Resolution resolution = module.runtime().resolution();
+        JsonObject runtime = new JsonObject();
+        runtime.addProperty("default", module.config().transcode.defaultRuntime == null
+                ? "auto" : module.config().transcode.defaultRuntime);
+        runtime.addProperty("kind", resolution.kind());
+        runtime.addProperty("id", resolution.id() == null ? "" : resolution.id());
+        runtime.addProperty("path", resolution.ffmpeg() == null ? "" : resolution.ffmpeg().toString());
+        runtime.addProperty("version", info.available() ? info.version() : "");
+        runtime.addProperty("available", info.available());
+        runtime.addProperty("error", info.error() == null ? "" : info.error());
+        return runtime;
     }
 
     /// The job as the UI sees it: the stored fields plus a `caps` block saying which
@@ -880,13 +903,34 @@ public final class TranscodeQueue {
         }
     }
 
+    /// Stamps the job with the binary the worker is about to invoke, before the
+    /// availability check: a job that failed because ffmpeg disappeared should still
+    /// say which runtime it was pointed at. Persisted with the job and never rewritten
+    /// by later default-runtime switches.
+    private void recordFfmpeg(TranscodeJob job, FfmpegProbe.FfmpegInfo info) {
+        FfmpegLocator.Resolution resolution = module.runtime().resolution();
+        TranscodeJob.FfmpegUsed used = new TranscodeJob.FfmpegUsed();
+        used.kind = resolution.kind();
+        used.id = resolution.id() == null ? "" : resolution.id();
+        Path binary = info.ffmpeg() != null ? info.ffmpeg() : resolution.ffmpeg();
+        used.path = binary == null ? "" : binary.toString();
+        used.version = info.version();
+        used.error = info.error() == null ? "" : info.error();
+        synchronized (lock) {
+            job.ffmpeg = used;
+        }
+    }
+
     private void runJob(TranscodeJob job) {
         Path part = null;
         try {
-            if (job.state != TranscodeJob.State.RUNNING) {
-                return;
+            synchronized (lock) {
+                if (job.state != TranscodeJob.State.RUNNING) {
+                    return;
+                }
             }
             FfmpegProbe.FfmpegInfo info = module.runtime().info();
+            recordFfmpeg(job, info);
             if (!info.available()) {
                 fail(job, info.error() == null ? "ffmpeg is unavailable" : info.error(), null);
                 return;
@@ -899,7 +943,10 @@ public final class TranscodeQueue {
             }
             part = partPath(output, job.id);
             Files.deleteIfExists(part);
-            job.durationMs = job.tool.isBlank() ? durationMs(input) : -1;
+            long duration = job.tool.isBlank() ? durationMs(input) : -1;
+            synchronized (lock) {
+                job.durationMs = duration;
+            }
             Path chapters = job.preset.chaptersFile == null || job.preset.chaptersFile.isBlank()
                     ? null : module.media().resolve(mediaRoot, job.preset.chaptersFile);
             Path subtitle = job.preset.subtitleFile == null || job.preset.subtitleFile.isBlank()
@@ -912,25 +959,50 @@ public final class TranscodeQueue {
             Files.createDirectories(log.getParent());
             Files.writeString(log, "", StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-            job.steps = new ArrayList<>();
+            synchronized (lock) {
+                job.steps = new ArrayList<>();
+            }
             for (int passIndex = 0; passIndex < passes.size(); passIndex++) {
                 List<String> pass = passes.get(passIndex);
                 List<String> command = new ArrayList<>(pass.size() + 1);
                 command.add(info.ffmpeg().toString());
                 command.addAll(pass);
-                job.command = List.copyOf(command);
                 String passLabel = passes.size() > 1 ? "pass " + (passIndex + 1) + "/" + passes.size() + ": " : "";
                 TranscodeJob.Step step = new TranscodeJob.Step();
                 step.name = stepName(job, passes.size(), passIndex);
                 step.state = "running";
                 step.args = List.copyOf(command);
-                job.steps.add(step);
+                // saveLocked/jobView 在锁内序列化 steps/command：worker 的写必须同锁，
+                // 否则 Gson 迭代中撞 ConcurrentModificationException。
+                synchronized (lock) {
+                    job.command = List.copyOf(command);
+                    job.steps.add(step);
+                }
                 Files.writeString(log, "# " + passLabel + CommandBuilder.display(command) + "\n",
                         StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-                ProcessBuilder builder = new ProcessBuilder(Privileges.asAgent(command));
+                ProcessBuilder builder = BootstrapEnvironment.agentProcess(command);
                 builder.redirectError(ProcessBuilder.Redirect.appendTo(log.toFile()));
                 Process process = builder.start();
-                job.process = process;
+                // cancel/stopAll 在锁内读 job.process 并 terminate：赋值必须同锁，且
+                // 赋值后复查 state——否则落在 spawn 窗口里的取消只改状态不杀进程，
+                // ffmpeg 会跑完整个编码（2026-11 审计）。
+                Process racedCancel = null;
+                synchronized (lock) {
+                    if (job.state == TranscodeJob.State.CANCELLED) {
+                        racedCancel = process;
+                    } else {
+                        job.process = process;
+                    }
+                }
+                if (racedCancel != null) {
+                    ProcessTree.terminate(racedCancel, 2);
+                    synchronized (lock) {
+                        step.state = "cancelled";
+                    }
+                    Files.deleteIfExists(part);
+                    cleanupPassLog(part);
+                    return;
+                }
                 publishJob(job);
 
                 try (BufferedReader reader = new BufferedReader(
@@ -941,19 +1013,29 @@ public final class TranscodeQueue {
                     }
                 }
                 int code = process.waitFor();
-                job.process = null;
-                if (job.state == TranscodeJob.State.CANCELLED) {
-                    step.state = "cancelled";
+                boolean cancelled;
+                synchronized (lock) {
+                    job.process = null;
+                    cancelled = job.state == TranscodeJob.State.CANCELLED;
+                    if (cancelled) {
+                        step.state = "cancelled";
+                    }
+                }
+                if (cancelled) {
                     Files.deleteIfExists(part);
                     cleanupPassLog(part);
                     return;
                 }
                 if (code != 0) {
-                    step.state = "failed";
+                    synchronized (lock) {
+                        step.state = "failed";
+                    }
                     handleFailure(job, "ffmpeg exited with code " + code + tail(log), part);
                     return;
                 }
-                step.state = "done";
+                synchronized (lock) {
+                    step.state = "done";
+                }
             }
             cleanupPassLog(part);
             String invalid = job.tool.isBlank()
@@ -964,21 +1046,23 @@ public final class TranscodeQueue {
                 return;
             }
             move(part, output);
-            job.fraction = 1;
-            job.message = "done";
-            job.state = TranscodeJob.State.DONE;
-            job.endedAt = System.currentTimeMillis();
-            job.sizeBytes = Files.size(output);
+            long sizeBytes = Files.size(output);
+            synchronized (lock) {
+                job.fraction = 1;
+                job.message = "done";
+                job.state = TranscodeJob.State.DONE;
+                job.endedAt = System.currentTimeMillis();
+                job.sizeBytes = sizeBytes;
+                releaseReservation(job);
+            }
             part = null;
-            releaseReservation(job);
             publishJob(job);
         } catch (Exception e) {
-            if (job.state != TranscodeJob.State.CANCELLED) {
-                fail(job, e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage(), part);
-            }
+            // fail() 在锁内复查 CANCELLED：已取消的任务不会被改写成 FAILED。
+            fail(job, e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage(), part);
         } finally {
-            job.process = null;
             synchronized (lock) {
+                job.process = null;
                 saveLocked();
             }
             publishQueue();
@@ -1335,14 +1419,16 @@ public final class TranscodeQueue {
     }
 
     private void fail(TranscodeJob job, String message, @Nullable Path part) {
-        if (job.state == TranscodeJob.State.CANCELLED) {
-            return;
+        synchronized (lock) {
+            if (job.state == TranscodeJob.State.CANCELLED) {
+                return;
+            }
+            job.state = TranscodeJob.State.FAILED;
+            job.error = message;
+            job.message = "failed";
+            job.endedAt = System.currentTimeMillis();
+            releaseReservation(job);
         }
-        job.state = TranscodeJob.State.FAILED;
-        job.error = message;
-        job.message = "failed";
-        job.endedAt = System.currentTimeMillis();
-        releaseReservation(job);
         if (part != null) {
             try {
                 Files.deleteIfExists(part);
@@ -1544,6 +1630,11 @@ public final class TranscodeQueue {
             }
         } catch (IOException e) {
             Logger.LOG.warning("Could not write the transcode queue " + queueFile, e);
+        } catch (RuntimeException e) {
+            // 兜底：序列化撞上并发修改时不让 API 线程 500、也不让 worker 暴毙
+            // （worker 死亡会跳过 dispatch，队列停摆到下次 API 调用）。
+            // 根因已由 worker 的锁纪律修复，这里只防御未知的漏网写。
+            Logger.LOG.warning("Could not serialize the transcode queue " + queueFile, e);
         }
     }
 

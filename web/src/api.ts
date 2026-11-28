@@ -12,6 +12,7 @@ import type {
   DeveloperGuardScope,
   DeveloperStatus,
   DoctorReport,
+  BootstrapReport,
   EmergencyStopPreview,
   ExportChoices,
   ExportRecord,
@@ -81,9 +82,10 @@ import type {
 import { encryptPassword } from "./passwordCrypto";
 import {
   ensureChatChannel,
-  chatChannelId,
+  resetChatChannel,
   encryptChatJson,
   decryptChatJson,
+  type ChatChannel,
 } from "./chatCrypto";
 
 export class ApiError extends Error {
@@ -110,19 +112,20 @@ export function setUnauthorizedHandler(fn: () => void): void {
   unauthorizedHandler = fn;
 }
 
-async function request<T>(path: string, init?: RequestInit, opts?: { skipUnauthorizedRedirect?: boolean; timeoutMs?: number }): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, opts?: { skipUnauthorizedRedirect?: boolean; timeoutMs?: number; chatRetried?: boolean }): Promise<T> {
   const normalizedPath = path.replace(/^\//, "");
   const chat = normalizedPath.startsWith("api/chat/");
   let requestInit = init;
   let encryptedChat = false;
+  // 记住发送时用的通道：并发重试可能在响应回来前换掉模块级通道，
+  // 解密必须用发送时那把钥匙。
+  let chatKey: ChatChannel | null = null;
 
   if (chat && !(init?.body instanceof FormData)) {
     try {
-      await ensureChatChannel();
-      const channelId = chatChannelId();
-      if (!channelId) throw new Error("chat key is not ready");
+      chatKey = await ensureChatChannel();
       const headers = new Headers(init?.headers);
-      headers.set("X-HDSL-Chat", channelId);
+      headers.set("X-HDSL-Chat", chatKey.channelId);
       encryptedChat = true;
       let body = init?.body;
       if (typeof body === "string") {
@@ -135,17 +138,27 @@ async function request<T>(path: string, init?: RequestInit, opts?: { skipUnautho
   }
 
   let res: Response;
+  // AbortSignal.timeout 要 Safari 16+，而 browserslist 底线是 15.6：旧 Safari 上
+  // 它是 undefined，同步 TypeError 会被下面 catch 成「无法连接服务器」，所有 API
+  // 永远失败。AbortController + setTimeout 是底线上可用的等价物（2026-11 审计）。
+  const timeout = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    timeout.abort();
+  }, opts?.timeoutMs ?? 30000);
   try {
     // 相对路径：由后端注入的 <base href> 解析——根挂载解析到 /api/…，
     // 子路径挂载解析到 <base>/api/…。两种挂载共用一个构建产物。
     res = await fetch(path.replace(/^\//, ""), {
       credentials: "same-origin",
       cache: "no-store",
-      signal: AbortSignal.timeout(opts?.timeoutMs ?? 30000),
+      signal: timeout.signal,
       ...requestInit,
     });
-  } catch (e) {
-    if (e instanceof DOMException && e.name === "TimeoutError") {
+  } catch {
+    clearTimeout(timer);
+    if (timedOut) {
       throw new ApiError(0, "请求超时，请检查服务器状态");
     }
     throw new ApiError(0, "无法连接服务器");
@@ -158,7 +171,7 @@ async function request<T>(path: string, init?: RequestInit, opts?: { skipUnautho
       if (text) {
         if (encryptedChat) {
           try {
-            body = JSON.parse(decryptChatJson(text));
+            body = JSON.parse(decryptChatJson(text, chatKey));
           } catch {
             body = JSON.parse(text);
           }
@@ -170,17 +183,27 @@ async function request<T>(path: string, init?: RequestInit, opts?: { skipUnautho
       body = null;
     }
   }
+  // 计时覆盖到正文读完为止，与 AbortSignal.timeout 的原语义一致。
+  clearTimeout(timer);
 
   if (!res.ok) {
-    if (res.status === 401 && unauthorizedHandler && !opts?.skipUnauthorizedRedirect) {
+    const bodyError =
+      body && typeof body === "object" && typeof (body as { error?: unknown }).error === "string"
+        ? (body as { error: string }).error
+        : null;
+    // 401 chat_key_required 是加密通道过期（服务端内存态：重启即丢、TTL 12h、
+    // 超压驱逐），不是会话失效——重握手重试一次，别把有效会话踢回登录页
+    // （2026-11 审计）。chatRetried 保证只重试一次，防循环。
+    const chatKeyExpired = res.status === 401 && bodyError === "chat_key_required";
+    if (chatKeyExpired && encryptedChat && !opts?.chatRetried) {
+      resetChatChannel();
+      return request<T>(path, init, { ...opts, chatRetried: true });
+    }
+    if (res.status === 401 && unauthorizedHandler && !opts?.skipUnauthorizedRedirect && !chatKeyExpired) {
       // 会话失效：强制回到登录页（登录接口自身的 401 由调用方处理，这里不重复触发）
       unauthorizedHandler();
     }
-    const msg =
-      body && typeof body === "object" && typeof (body as { error?: unknown }).error === "string"
-        ? ((body as { error: string }).error)
-        : `请求失败（HTTP ${res.status}）`;
-    throw new ApiError(res.status, msg);
+    throw new ApiError(res.status, bodyError ?? `请求失败（HTTP ${res.status}）`);
   }
   return body as T;
 }
@@ -274,7 +297,9 @@ export const api = {
     const query = new URLSearchParams();
     if (resume) query.set("resume", resume);
     if (kernel) query.set("kernel", kernel);
-    const suffix = query.size > 0 ? `?${query.toString()}` : "";
+    // URLSearchParams.size 要 Chrome 113+/Safari 17+，底线（109/15.6）上是
+    // undefined，`undefined > 0` 恒 false 会静默丢掉 resume/kernel 参数。
+    const suffix = query.toString().length > 0 ? `?${query.toString()}` : "";
     return request<TerminalOpen>(
       `/api/brands/${brand}/instances/${encodeURIComponent(id)}/terminal${suffix}`,
       jsonInit("POST", {}),
@@ -527,6 +552,12 @@ export const api = {
       jsonInit("PUT", { ...body, panelPassword: await encryptPassword(body.panelPassword) }),
     ),
 
+  testAcmeCredentials: async (body: { id?: string; provider: string; dns: Record<string, string> }) =>
+    request<{ ok: boolean; provider: string; message: string }>(
+      "/api/settings/acme/credentials/test",
+      jsonInit("POST", body),
+    ),
+
   clearAcmeCredentials: async (panelPassword: string, id?: string) =>
     request<{ ok: boolean; credentialConfigured: boolean; eabConfigured: boolean }>(
       "/api/settings/acme/credentials",
@@ -668,6 +699,9 @@ export const api = {
   // ---------- Phase 4：体检 ----------
 
   doctor: () => request<DoctorReport>("/api/doctor"),
+  bootstrap: () => request<BootstrapReport>("/api/bootstrap"),
+  bootstrapInstall: (bundle: string) =>
+    request<{ taskId: string }>("/api/bootstrap/install", jsonInit("POST", { bundle })),
 
   // ---------- 实验性：ZCode 品类（见 docs/zcode-experimental.md） ----------
 
@@ -1273,10 +1307,39 @@ export const api = {
     qualityCancel: (id: string) =>
       request<TranscodeQualityJob>(`/api/transcode/tools/quality/${encodeURIComponent(id)}/cancel`,
         jsonInit("POST", {})),
-    updateSettings: (body: { failurePolicy: string; failureTimeoutMinutes?: number }) =>
+    updateSettings: (body: {
+      failurePolicy: string;
+      failureTimeoutMinutes?: number;
+      binaryMirror?: string;
+      sourceMirror?: string;
+      toolchainMirror?: string;
+    }) =>
       request<TranscodeFeature>("/api/transcode/settings", jsonInit("PUT", body)),
-    runtimeInstall: (body: { kind: "static" | "package" | "compile"; url?: string; sha256?: string; version?: string }) =>
-      request<TranscodeInstallJob>("/api/transcode/runtime/install", jsonInit("POST", body)),
+    runtime: (major?: string) => request<TranscodeRuntime>(
+      `/api/transcode/runtime${major ? `?major=${encodeURIComponent(major)}` : ""}`),
+    runtimeCatalog: () => request<{ entries: TranscodeCatalogEntry[] }>("/api/transcode/runtime/catalog"),
+    runtimeSource: () => request<TranscodeSourceStatus>("/api/transcode/runtime/source"),
+    runtimeFullBuilds: () => request<TranscodeFullBuilds>("/api/transcode/runtime/full-builds"),
+    runtimeInstallArtifact: (body: {
+      mode: "auto" | "artifact" | "custom" | "package" | "source" | "full-source";
+      id?: string;
+      major?: string;
+      features?: string[];
+      compiler?: "auto" | "system" | "portable";
+      url?: string;
+      sha256?: string;
+      version?: string;
+    }) => request<TranscodeInstallJob>("/api/transcode/runtime/install", jsonInit("POST", body)),
+    runtimeSelect: (version: string) =>
+      request<TranscodeRuntime>("/api/transcode/runtime/select", jsonInit("POST", { version })),
+    runtimeDefault: (value: string) =>
+      request<TranscodeRuntime>("/api/transcode/runtime/default", jsonInit("PUT", { value })),
+    runtimeRollback: () =>
+      request<TranscodeRuntime>("/api/transcode/runtime/rollback", jsonInit("POST", {})),
+    runtimeDelete: (id: string) =>
+      request<{ ok: boolean }>(`/api/transcode/runtime/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    runtimeInstalls: () =>
+      request<{ jobs: TranscodeInstallJob[] }>("/api/transcode/runtime/installs"),
     runtimeJob: (id: string) =>
       request<TranscodeInstallJob>(`/api/transcode/runtime/install/${encodeURIComponent(id)}`),
     runtimeCancel: (id: string) =>
@@ -1441,6 +1504,12 @@ export interface TranscodeFeature {
   maxQueue: number;
   failurePolicy: "ask" | "timeout-auto" | "full-auto";
   failureTimeoutMinutes: number;
+  /// 二进制下载的镜像前缀（官方绝对 URL 直接接在后面）；空串=只用官方地址
+  binaryMirror: string;
+  /// 源码归档的镜像前缀；空串=只用官方地址
+  sourceMirror: string;
+  /// 构建工具链（Zig / w64devkit）的镜像前缀；空串=只用官方地址与内置镜像
+  toolchainMirror: string;
   autoResume: boolean;
   consent?: TranscodeConsentInfo;
 }
@@ -1613,12 +1682,33 @@ export interface TranscodeJob {
   startedAt: number;
   endedAt: number;
   command: string[];
+  /** The ffmpeg this job actually started with; null until it first runs. */
+  ffmpeg?: TranscodeFfmpegUsed | null;
   /** Every encoder hop this job went through, newest last. */
   switchRecords?: TranscodeSwitchRecord[];
   /** One entry per ffmpeg invocation (a two-pass preset has two). */
   steps?: TranscodeJobStep[];
   /** Computed server-side. Never derive button availability from `state` in the UI. */
   caps: TranscodeJobCaps;
+}
+
+export interface TranscodeFfmpegUsed {
+  kind: "path" | "managed" | "system" | "missing" | "none";
+  id: string;
+  path: string;
+  version: string;
+  error: string;
+}
+
+/** What a job started right now would run; embedded in the queue snapshot. */
+export interface TranscodeQueueRuntime {
+  default: string;
+  kind: TranscodeFfmpegUsed["kind"];
+  id: string;
+  path: string;
+  version: string;
+  available: boolean;
+  error: string;
 }
 
 /** What the server allows right now; the UI only renders what is true here. */
@@ -1668,6 +1758,8 @@ export interface TranscodeQueueSnapshot {
   runState: "idle" | "running" | "paused";
   maxConcurrent: number;
   maxQueue: number;
+  /** The binary a job started now would use. Read-only for agent tickets too. */
+  runtime: TranscodeQueueRuntime;
   jobs: TranscodeJob[];
 }
 
@@ -1697,14 +1789,164 @@ export interface TranscodeQualityJob {
 
 export interface TranscodeInstallJob {
   id: string;
-  kind: "static" | "package" | "compile";
+  /** Catalogue/runtime id this job installs; lets the page reattach and de-duplicate. */
+  target?: string;
+  kind: "static" | "package" | "compile" | "artifact" | "auto" | "custom" | "source" | "full-source";
   state: "running" | "done" | "failed" | "cancelled";
   progress: number;
   message: string;
   log: string;
+  logPath?: string;
   error?: string | null;
   createdAt: number;
   endedAt: number;
+}
+
+export interface TranscodeRuntimeVersion {
+  id: string;
+  version: string;
+  catalogId: string;
+  major: string;
+  source: string;
+  license: string;
+  sha256: string;
+  installedAt: string;
+  archive: string;
+  probeVersion: string;
+  notes: string;
+  builtFrom?: string;
+  buildRecipe?: string;
+  toolchain?: string;
+  current: boolean;
+  featuresDeclared: string[];
+  featuresProbed: string[];
+}
+
+export interface TranscodeCatalogEntry {
+  id: string;
+  os: string;
+  arch: string;
+  libc: string;
+  ffmpegVersion: string;
+  license: string;
+  url: string;
+  sha256: string;
+  size: number;
+  archive: string;
+  notes: string;
+  kind: "binary" | "source";
+  vendor: string;
+  major: string;
+  variant: string;
+  minGlibc: string;
+  mirrors: string[];
+  signatureUrl: string;
+  buildRecipe: string;
+  features: string[];
+}
+
+export interface TranscodeToolchainTool {
+  name: string;
+  path: string;
+  version: string;
+  present: boolean;
+}
+
+export interface TranscodeToolchainDependency {
+  feature: string;
+  module: string;
+  package: string;
+  present: boolean;
+  version: string;
+}
+
+export interface TranscodeToolchain {
+  os: string;
+  arch: string;
+  usable: boolean;
+  portable: boolean;
+  binDir: string;
+  detail: string;
+  x86asm: boolean;
+  tools: TranscodeToolchainTool[];
+  dependencies: TranscodeToolchainDependency[];
+  missing: string[];
+  features: string[];
+}
+
+export interface TranscodeFullBuildDependency {
+  id: string;
+  kind: "tool" | "codec";
+  version: string;
+}
+
+export interface TranscodeFullBuild {
+  id: string;
+  profile: "gpl" | "lgpl";
+  ffmpegVersion: string;
+  license: string;
+  downloadBytes: number;
+  buildMinutes: number;
+  diskBytes: number;
+  features: string[];
+  dependencies: TranscodeFullBuildDependency[];
+}
+
+export interface TranscodeFullBuilds {
+  entries: TranscodeFullBuild[];
+  /** True when the system compiler or the portable Zig/w64devkit bundle can build. */
+  available: boolean;
+  systemUsable: boolean;
+  portableAvailable: boolean;
+  reason: string;
+}
+
+export interface TranscodeSourceStatus {
+  host: { os: string; arch: string; libc: string; libcVersion: string };
+  candidates: TranscodeCatalogEntry[];
+  toolchain: TranscodeToolchain;
+  buildable: boolean;
+  portableFallback: boolean;
+}
+
+export interface TranscodeResolvedRuntime {
+  kind: "path" | "managed" | "system" | "missing" | "none";
+  id?: string;
+  ffmpeg: string;
+  ffprobe: string;
+}
+
+export interface TranscodeSystemRuntime {
+  available: boolean;
+  version: string;
+  ffmpeg: string;
+  ffprobe: string;
+  error: string;
+  /** 常见编码器探测结果；旧后端不返回时为空。 */
+  featuresProbed?: string[];
+}
+
+export interface TranscodeCompilerChoice {
+  id: "system" | "portable";
+  label: string;
+  available: boolean;
+  detail: string;
+}
+
+export interface TranscodeRuntime {
+  host: { os: string; arch: string; libc: string; libcVersion: string };
+  majors: string[];
+  current: TranscodeRuntimeVersion | null;
+  installed: TranscodeRuntimeVersion[];
+  catalog: TranscodeCatalogEntry[];
+  /** 判定「常见编解码是否齐全」的基准集合。 */
+  commonFeatures?: string[];
+  default: string;
+  resolved: TranscodeResolvedRuntime;
+  system: TranscodeSystemRuntime;
+  compilers: TranscodeCompilerChoice[];
+  recommended: { entry: TranscodeCatalogEntry; reason: string } | null;
+  recommendationError?: string;
 }
 
 /// GET /api/mc/feature：功能开关与内存锁。

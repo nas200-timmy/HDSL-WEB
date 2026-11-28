@@ -287,6 +287,7 @@ public final class DshLauncher {
                             "--profile", instance.profile(), "--help")));
             builder.redirectErrorStream(true);
             builder.environment().put("DSH_HOME", instance.homeDirectory().toString());
+            BootstrapEnvironment.apply(builder);
             if (instance.workspacePath() != null) {
                 builder.directory(instance.workspacePath().toFile());
             }

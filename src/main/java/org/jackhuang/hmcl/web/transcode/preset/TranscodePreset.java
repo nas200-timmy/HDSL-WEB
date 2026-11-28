@@ -18,6 +18,7 @@
 package org.jackhuang.hmcl.web.transcode.preset;
 
 import org.jetbrains.annotations.NotNullByDefault;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -164,6 +165,15 @@ public final class TranscodePreset {
         require(container, "container");
         require(videoEncoder, "videoEncoder");
         require(qualityMode, "qualityMode");
+        // Both of these are concatenated into an output *file name* after the
+        // output directory has already been checked, so a separator or a `..`
+        // in either one moves the write somewhere nobody validated — and the
+        // queue creates those directories as root.
+        if (!container.matches("[A-Za-z0-9]{1,12}")) {
+            throw new IllegalArgumentException(
+                    "container must be a bare extension such as mkv or mp4, got `" + container + "`");
+        }
+        requireSingleSegment(outputSuffix, "outputSuffix");
         if (!List.of("crf", "cqp", "bitrate", "vbr", "cbr", "none").contains(qualityMode)) {
             throw new IllegalArgumentException("qualityMode must be crf, cqp, bitrate, vbr, cbr or none");
         }
@@ -260,6 +270,24 @@ public final class TranscodePreset {
             return List.of("crf", "bitrate", "vbr", "cbr", "none");
         }
         return List.of("crf", "cqp", "bitrate", "vbr", "cbr", "none");
+    }
+
+    /// Rejects a value that would name more than one path segment.
+    ///
+    /// Blank is allowed: the caller decides whether the field is required, and
+    /// an unused suffix is simply empty.
+    ///
+    /// @param value the field's value, or `null`
+    /// @param name  the field name, for the message the user sees
+    private static void requireSingleSegment(@Nullable String value, String name) {
+        if (value == null || value.isBlank()) {
+            return;
+        }
+        if (value.contains("/") || value.contains("\\") || value.contains("..")
+                || value.indexOf('\0') >= 0) {
+            throw new IllegalArgumentException(name + " must be a single file-name fragment"
+                    + " (no path separators and no `..`), got `" + value + "`");
+        }
     }
 
     private static void require(String value, String name) {

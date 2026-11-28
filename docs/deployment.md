@@ -213,19 +213,21 @@ dsh.example.com {
 | 终端与开发者模式报 403 `insecure_transport` | 反代终结了 TLS 但没发 `X-Forwarded-Proto`，或面板没开 `trust_forwarded_proto` |
 | 实例网页突然要开发者密码 | 面板开了开发者守卫（`developer_guard.scope`），这是预期；要么在开发者页提权，要么把作用域调回 `off` |
 | 实例网页 / 终端全部 503 `emergency_stop` | 有人按了紧急停机；冷却 1 小时或重启面板进程/容器，之后在开发者页解除 |
-| 登录 A 面板之后 B 面板掉线 | 同一个域名下挂了两个面板且用了旧版 Cookie（`Path=/` 互相覆盖）；新版按挂载点收敛，重新登录一次即可 |
+| 同域名不同端口登录互相挤掉 | Cookie 不区分端口，旧版都叫 `hdsl_session`；新版按实例 id + 端口命名（`hdsl_session_<id12>_<port>`），两个面板的会话互不覆盖。升级后重新登录一次 |
+| 同域名同端口不同子路径登录互相挤掉 | 旧版 `Path=/` 互相覆盖；新版按挂载点收敛，Cookie 的 `Path` 是挂载点本身 |
 | `Set-Cookie` 里是 `Path=/hdsl` | 正常：会话 Cookie 跟着挂载点走，两个面板互不覆盖 |
+| `Set-Cookie` 的名字不是 `hdsl_session` | 正常：名字带实例 id 和端口（如 `hdsl_session_a1b2c3d4e5f6_3080`），这是不同面板/不同端口互不干扰的隔离键 |
 
 ### 验收命令
 
 ```bash
-# 1) 面板活着，且经过反代可达（子路径时要带前缀）
+# 1) 面板活着，且经过反代可达（子路径时要带前缀）；返回体里的 instance 是面板实例 id
 curl -sS https://dsh.example.com/hdsl/api/health
 
 # 2) 80 是否只做跳转（期望 308 / 301，Location 是 https）
 curl -sSI http://dsh.example.com/hdsl/api/health | head -3
 
-# 3) 登录后的 Cookie 作用域（期望 Path=/hdsl）
+# 3) 登录后的 Cookie（期望名字形如 hdsl_session_<id12>_<port>，Path=/hdsl）
 curl -sS -D- -o /dev/null https://dsh.example.com/hdsl/api/auth/login   -H 'Content-Type: application/json'   -d '{"username":"admin","password":"<口令>"}' | grep -i '^set-cookie'
 
 # 4) WebSocket 能不能升级（没有会话 cookie 时会被拒，但能看出路由到了面板而不是别的站点）
@@ -354,9 +356,13 @@ HDSL_SMOKE_HTTPS=true ./scripts/security-smoke.sh <jar>    # 期望 PASS
 面板内置 ACME，默认关闭；启用后自己签发和续期，不需要 certbot，也不需要开放 80 端口。
 
 - 入口：设置 →「HTTPS 证书」→ ACME，或直接写 `server.yaml` 的 `https.acme`。
-- 已实现的 DNS provider：Cloudflare、阿里云 DNS、DNSPod / 腾讯云、GoDaddy、
+- 已实现的 DNS provider：Cloudflare、阿里云 DNS、DNSPod（旧版 `id,token`）、
+  腾讯云 DNSPod API 3.0（SecretId/SecretKey + TC3-HMAC-SHA256）、GoDaddy、
   DigitalOcean、Vultr。华为云、Route 53、Namecheap、Gandi、Porkbun、RFC 2136、
   acme-dns 出现在列表里但尚未实现，选了会 400。
+- 每家 provider 的凭据类型不同（Token / AccessKey / SecretId+SecretKey），
+  添加凭证时页面会显示「去哪申请 + 最小权限」的说明；保存前可用「测试凭证」
+  做一次只读校验，提前暴露凭据类型错误或权限不足。
 - CA：Let's Encrypt（含 staging）、ZeroSSL、Google Trust Services、Buypass、
   HARICA、SSL.com、自定义 ACME 目录；通配符靠 DNS-01，必须用支持通配符的 CA。
 - 只支持 DNS-01：不需要公网 80/443 入站，但需要能出站访问 CA 与 DNS provider API，
@@ -532,8 +538,8 @@ docker run --rm -u 0:0 -v hdsl-data-restore:/data --entrypoint chown hdsl-web:la
 
 ## 4. 多架构构建（buildx）
 
-Dockerfile 对 `amd64` 与 `arm64` 都是自适应的：Node 版本按 `uname -m` 选官方 tarball，
-校验 `SHASUMS256.txt`；三段里前两段钉在构建机架构（`node:22-bookworm-slim`、`eclipse-temurin:21-jdk`），
+Dockerfile 对 `amd64` 与 `arm64` 都是自适应的：Node 按 `uname -m` 选 tarball（下载源可换镜像），
+校验钉在 ARG 里的官方 sha256（`NODE*_SHA256_*`，不随下载源走）；三段里前两段钉在构建机架构（`node:22-bookworm-slim`、`eclipse-temurin:21-jdk`），
 第三段的底座由 `HDSL_BASE` 决定（默认 `debian:trixie-slim`，也可换 Fedora / openSUSE，见 §4.1）。CI（`.github/workflows/docker.yml`）发布的就是
 `linux/amd64` + `linux/arm64` 双架构 manifest；构建阶段钉在 `$BUILDPLATFORM`，
 只有 runtime 阶段在目标架构下执行。下面的命令用于本地复现：
@@ -933,6 +939,11 @@ origin** 下，而浏览器只按 origin（协议 + 域名 + 端口）隔离 `lo
 ---
 
 ## 10. 裸部署（systemd）
+
+> **libc 基线：glibc。** 面板与 agent（Node 原生模块、dsh、opencode 等）都按 glibc 目标构建；
+> Alpine/musl 上这些 agent 的预编译二进制与原生模块不可用（实测跑不起来），所以面板不承诺
+> musl。能跑面板的环境至少是 glibc；ffmpeg 的便携工具链也按宿主 glibc 构建，二进制目录只选
+> `linux-*-glibc-*` 条目。没有 glibc 的环境不是支持目标，不要用 Zig 的 musl 目标去“绕”。
 
 不用容器、直接 `java -jar` 的 Linux 部署通常交给 systemd。最小单元：
 

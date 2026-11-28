@@ -104,6 +104,7 @@ a:hover { color: #5C6BC0; }
 .toolbar {
   margin: 0 0 8px;
 }
+.tool,
 .toolbar a {
   display: inline-block;
   margin-right: 12px;
@@ -114,6 +115,7 @@ a:hover { color: #5C6BC0; }
   text-decoration: none;
   font-size: .9rem;
 }
+.tool:hover,
 .toolbar a:hover { background: #D0D5FD; color: #1B1B21; }
 .toolbar form { display: inline; }
 .modelform { display: inline-block; margin: 0 0 10px; }
@@ -123,28 +125,46 @@ a:hover { color: #5C6BC0; }
   font-size: .9rem;
 }
 
-/* data tables as cards */
-table:not(.shell):not(.shell-card):not(.chat-line) {
-  border-collapse: separate;
+/* data tables as cards. Explicit classes, not :not() chains: IE11 only
+ * implements the single-argument Selectors 3 form, and a chained selector is
+ * dropped whole — which used to leave the session table unstyled there. */
+table.data {
+  border-collapse: collapse;
   border-spacing: 0;
   width: 100%;
-  background: #FBF8FF;
-  border: 1px solid #C6C5D3;
-  border-radius: 4px;
-  overflow: hidden;
+  background: #FFFFFF;
+  border: 1px solid #DFE3EE;
+  border-radius: 6px;
 }
-th, td {
-  padding: .4rem .6rem;
+table.data th, table.data td {
+  padding: 8px 10px;
   text-align: left;
   vertical-align: top;
-  border-bottom: 1px solid #E3E1E9;
+  border-bottom: 1px solid #ECEFF6;
 }
-th {
-  background: #EFEDF5;
+table.data th {
+  background: #F1F3FB;
   color: #1B1B21;
   font-weight: 600;
+  font-size: 12px;
 }
-tr:last-child td { border-bottom: 0; }
+table.data tr:last-child td { border-bottom: 0; }
+table.data tr:hover td { background: #F8F9FF; }
+
+/* small status pills */
+.tag {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 9px;
+  background: #EDEFF7;
+  color: #4A4F63;
+  font-size: 11px;
+  font-weight: 600;
+}
+.tag.live {
+  background: #FFF1DC;
+  color: #9A5600;
+}
 
 /* message and code cards */
 pre.msg, pre.chat-code-body {
@@ -217,6 +237,19 @@ button:disabled, input[type="submit"]:disabled {
 }
 
 .muted { color: #454651; }
+.notice {
+  background: #EEF4FF;
+  border: 1px solid #C7D7F5;
+  color: #25427A;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+input[type="file"] {
+  max-width: 100%;
+  font-size: 12px;
+}
 .error { color: #BA1A1A; font-weight: 600; }
 .row { display: block; margin: .5rem 0; }
 hr.turn-sep {
@@ -251,7 +284,7 @@ hr.turn-sep {
  * Text browsers ignore this block and still read name -> body -> attachment. */
 
 table.shell {
-  max-width: 1440px;
+  max-width: 1120px;
   margin: 0 auto;
 }
 
@@ -319,6 +352,210 @@ td.shell-main {
   padding: 14px 8px 2px;
   color: #77767E;
   font-size: 10px;
+  line-height: 1.6;
+}
+
+.nav-section {
+  padding: 10px 8px 3px;
+  color: #7B7F91;
+  font-size: 10px;
+  letter-spacing: 1px;
+}
+
+.nav-item a {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 5px;
+  color: #3F51B5;
+  text-decoration: none;
+}
+
+.nav-item a:hover {
+  background: #E7EAFB;
+  color: #1B1B21;
+}
+
+.nav-item.active a {
+  background: #DFE4FB;
+  color: #1B1B21;
+  font-weight: 600;
+}
+
+.nav-submit {
+  width: 100%;
+  height: 32px;
+  line-height: 32px;
+  padding: 0 10px;
+  font-size: 13px;
+  box-shadow: none;
+}
+
+/* page header with a quiet action on the right */
+.page-head {
+  overflow: hidden;
+  margin: 0 0 10px;
+}
+
+.page-head h1 {
+  float: left;
+  margin: 0 12px 0 0;
+}
+
+.page-head .tool {
+  float: right;
+}
+
+/* login card */
+.brand-hero {
+  padding: 2px 0 14px;
+  border-bottom: 1px solid #E3E1E9;
+  margin-bottom: 10px;
+}
+
+.legacy-logo.lg {
+  width: 42px;
+  height: 42px;
+  line-height: 42px;
+  font-size: 24px;
+  border-radius: 10px;
+  float: left;
+  margin-right: 10px;
+}
+
+.brand-hero strong {
+  font-size: 17px;
+}
+
+.brand-hero .muted {
+  font-size: 11px;
+}
+
+.field {
+  margin: 0 0 10px;
+}
+
+.field label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #454651;
+}
+
+.field input[type="submit"] {
+  margin-top: 2px;
+}
+
+/* forms inside toolbars and the chat header */
+.inline-form {
+  display: inline;
+  margin: 0;
+}
+
+.inline-form input[type="text"] {
+  width: auto;
+  min-width: 10rem;
+  height: 30px;
+  line-height: 30px;
+  padding: 0 8px;
+  font-weight: 400;
+}
+
+.inline-form input[type="submit"] {
+  height: 30px;
+  line-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+  box-shadow: none;
+}
+
+.chat-manage {
+  padding: 0 0 8px;
+  border-bottom: 1px solid #E3E1E9;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.chat-manage form {
+  margin-right: 12px;
+}
+
+.chat-manage .check {
+  font-size: 12px;
+  color: #454651;
+}
+
+input.danger {
+  background: #B3261E;
+}
+
+input.danger:hover {
+  background: #8F1D17;
+}
+
+.empty-state {
+  padding: 34px 16px;
+  border: 1px dashed #C9CEDE;
+  border-radius: 8px;
+  background: #FBFBFF;
+  color: #5A5F72;
+  text-align: center;
+  line-height: 1.8;
+  margin: 8px 0 14px;
+}
+
+.form-card {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px solid #E3E6F0;
+  border-radius: 8px;
+  background: #FAFBFF;
+}
+
+.form-card h2 {
+  margin-top: 0;
+}
+
+.chat-actions-row {
+  padding: 10px 0 2px;
+  text-align: right;
+}
+
+.chat-actions-row form {
+  display: inline;
+  margin: 0;
+}
+
+.chat-actions-row input[type="submit"] {
+  height: 30px;
+  line-height: 30px;
+  font-size: 12px;
+  padding: 0 12px;
+  box-shadow: none;
+}
+
+.composer-files {
+  padding: 8px 0 2px;
+  font-size: 12px;
+  color: #454651;
+}
+
+.composer-files label {
+  font-weight: 600;
+}
+
+.composer-files .hint {
+  margin-left: 8px;
+  color: #7B7F91;
+}
+
+.composer-search {
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.live-text {
+  color: #9A5600;
 }
 
 /* Session header: title and current assistant/model, followed by two quiet
@@ -469,7 +706,12 @@ table.chat-line.user {
   color: #BA1A1A;
 }
 
+.chat-thread {
+  max-width: 900px;
+}
+
 .chat-bubble {
+  max-width: 760px;
   background: #FFFFFF;
   border: 1px solid #E3E1E9;
   border-radius: 4px 14px 14px 14px;
@@ -634,15 +876,33 @@ hr.turn-sep {
   }
 
   .nav-caption,
+  .nav-section,
   .nav-foot,
   .navlist br {
     display: none;
   }
 
-  .navlist a,
+  .nav-item {
+    display: inline-block;
+    margin: 2px 4px 2px 0;
+  }
+
+  .nav-item a {
+    padding: 5px 8px;
+  }
+
   .navlist form {
     display: inline-block;
     margin: 2px 4px 2px 0;
+  }
+
+  .chat-manage .inline-form {
+    display: block;
+    margin: 4px 0;
+  }
+
+  .chat-bubble {
+    max-width: 100%;
   }
 
   .navlist input[type="submit"] {

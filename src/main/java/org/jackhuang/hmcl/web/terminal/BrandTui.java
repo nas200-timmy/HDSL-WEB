@@ -139,8 +139,16 @@ public interface BrandTui {
     /// Puts a runtime's `bin` directory ahead of the child's PATH so the agent
     /// and every tool it spawns use the same Node.js.
     static void applyNode(Map<String, String> environment, DshNodeRuntime runtime) {
-        environment.put("PATH", runtime.binDirectory() + File.pathSeparator
-                + environment.getOrDefault("PATH", ""));
+        // Windows spells the variable `Path`; writing `PATH` beside it leaves
+        // two entries and no rule for which the child gets.
+        String key = org.jackhuang.hmcl.dsh.BootstrapEnvironment.pathKey(environment);
+        String existing = org.jackhuang.hmcl.dsh.BootstrapEnvironment.pathValue(environment);
+        if (existing == null || existing.isBlank()) {
+            existing = org.jackhuang.hmcl.dsh.BootstrapEnvironment.pathValue(System.getenv());
+        }
+        environment.put(key, existing == null || existing.isBlank()
+                ? runtime.binDirectory().toString()
+                : runtime.binDirectory() + File.pathSeparator + existing);
     }
 
     /// The environment every brand TUI starts with: the panel's, with the
@@ -155,6 +163,9 @@ public interface BrandTui {
         environment.put("USERPROFILE", home.toString());
         environment.put("TERM", "xterm-256color");
         environment.put("COLORTERM", "truecolor");
+        // A terminal agent needs `SHELL`, the closure's `PATH` and — on a
+        // minimal image — `LD_LIBRARY_PATH` for the Node.js it runs on.
+        org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(environment);
         return Map.copyOf(environment);
     }
 }

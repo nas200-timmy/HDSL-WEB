@@ -213,6 +213,15 @@ public final class WsGateway {
                 // chat content in cleartext; it can retry after binding.
                 return;
             }
+            if (!service.isCurrent(channel)) {
+                // The channel this socket bound is gone (restart, TTL, or the
+                // 1024-channel eviction). Encrypting with it still succeeds,
+                // but the browser has already moved to a new key and would
+                // drop every frame; tell it to bind again instead.
+                session.getUserProperties().remove("chat.channel");
+                send(session, error("chat_key_required"));
+                return;
+            }
             try {
                 JsonObject envelope = service.encrypt(channel, false,
                         Json.GSON.toJson(payload).getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -296,7 +305,13 @@ public final class WsGateway {
             return;
         }
         try {
-            session.getBasicRemote().sendText(Json.GSON.toJson(payload));
+            // EventBus 在发布线程上同步回调：聊天 turn、转码 worker、任务线程会
+            // 同时打到同一个会话。BasicRemote 禁止并发 send——IllegalStateException
+            // 原先落进下面的 catch，把健康会话当死浏览器关掉（2026-11 审计）。
+            // 与 TerminalWebSocket.data 同一把锁纪律；写失败仍按死消费者处理。
+            synchronized (session) {
+                session.getBasicRemote().sendText(Json.GSON.toJson(payload));
+            }
         } catch (IOException | RuntimeException e) {
             // A browser that left mid-frame; the close handler cleans up.
             try {
@@ -363,8 +378,8 @@ public final class WsGateway {
                 for (String value : header.getValue()) {
                     for (String pair : value.split(";")) {
                         String trimmed = pair.trim();
-                        if (trimmed.startsWith(org.jackhuang.hmcl.web.auth.AuthFilter.SESSION_COOKIE + "=")) {
-                            return trimmed.substring(org.jackhuang.hmcl.web.auth.AuthFilter.SESSION_COOKIE.length() + 1);
+                        if (trimmed.startsWith(org.jackhuang.hmcl.web.auth.SessionCookies.name() + "=")) {
+                            return trimmed.substring(org.jackhuang.hmcl.web.auth.SessionCookies.name().length() + 1);
                         }
                     }
                 }

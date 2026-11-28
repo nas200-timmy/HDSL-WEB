@@ -49,6 +49,11 @@ README 只保留「用户需要知道的」。这里记录为什么这样做—�
   - corepack 下载 pnpm 本体时用它自己的 `COREPACK_NPM_REGISTRY`。
 - 镜像入口脚本每次启动都会生成这份 `config.yaml`；绕开入口脚本直接 `--entrypoint java`
   时，镜像里预置了只含 `storeDir` 的同名文件作兜底。
+- 构建工具链（Windows 的 w64devkit、Linux 的 Zig）在 catalog 里带 `mirrors`。安装前对官方源和
+  每个镜像采样 512 KB（6 秒上限），校验首字节（xz/deb/zip/PE）与 `Content-Range` 总大小，选
+  最快可用者；镜像在最快速度的 85% 以内时优先镜像，避免把上游打满。哈希仍是唯一信任锚：镜像
+  只能失败，不能换字节。下载中 90 秒没有新字节也会放弃当前源、换下一个；失败的源在后续安装里
+  按退避窗口跳过。
 
 ## 4. 实例生命周期
 
@@ -201,7 +206,7 @@ Windows 上常见一种情况：杀毒软件、企业网关或 GitHub 加速器�
 容器里因此分两段（`util/platform/Privileges.java`）：
 
 - 面板是 PID 1、uid 0；入口脚本把 `auth/`、`certs/`、`logs/`、`server.yaml` 归 root 0700/0600；
-- 每个 agent 进程派生时前置 `setpriv --reuid=1000 --regid=1000 --init-groups --`，跑成镜像里的 `hdsl`；
+- 每个 agent 进程派生时前置 `setpriv --reuid=1000 --regid=1000 --groups=<gid,…> --`（无附加组时用 `--clear-groups`），跑成镜像里的 `hdsl`。显式数字 gid 列表取代了 `--init-groups`：最小镜像可能没有 `/etc/passwd`/`/etc/group`，而 `--init-groups` 要读它们；列表保留镜像授予的 `render`/`video` 等附加组，且永不继承 root 的组 0；
 - 实例子目录 `1000:1000 2775`（setgid）+ 入口 `umask 002`，所以**面板（root）写进去的文件是
   `root:hdsl 0664`，agent 照样能改**——否则 root 会把 agent 自己的目录写死；
 - 但"setgid 卷 + `umask 002`"是**部署的意外，不是面板能依赖的性质**：普通 bind mount、别的入口

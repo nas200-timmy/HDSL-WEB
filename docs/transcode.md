@@ -65,6 +65,10 @@
   “改 MKV / 丢弃不兼容项 / 取消”三选；编码器参数已做组合校验，但 profile/tune/pix_fmt 的
   逐项枚举仍未全部覆盖；编码器故障探测仍是失败后决策，不是启动探测/任务前检查/stderr 三层自动；
   Agent 写操作确认卡与工具目录、应急上传三重校验仍未做。
+- 全编码源码构建（Linux）：已落地，见文末「附：全编码源码构建」。默认仍用二进制目录；
+  源码卡片的「构建方案」可选 `全编码 GPL` / `全编码 LGPL`，由面板下载并编译依赖栈，产物为静态
+  ffmpeg（libav 与编码库静态，glibc 动态）。Windows/macOS 仍只走二进制；硬件编码库（VAAPI/QSV）
+  暂未纳入托管依赖。
 
 ## Context
 
@@ -177,7 +181,7 @@ HDSL-web 目前是「一个 JVM、一个端口」的控制面：实例、品牌�
 - compose 增加 `- "${HDSL_VIDEO_DIR:-hdsl-video}:/home/hdsl/video"` 与 `hdsl-video` 卷；`docker-install.sh` 增加 `--video <宿主路径|volume:名称|none>`，默认命名卷，摘要明确提示 NAS 用户应指到真实视频目录。
 - Linux 裸部署：`HDSL_MEDIA_ROOT` 环境变量优先；首次启用转码时向导选一次，默认 `<data>/video`；写进 `server.yaml` 的 `transcode.media_root`；UI 显示生效路径、来源、可写性；改根需开发者提权。
 - 所有任务输入/输出、上传/下载、浏览 API 限制在媒体根内；`toRealPath()` + `startsWith`，挡软链逃逸；只读媒体根允许读入但必须另选可写输出目录。
-- 转码子进程复用 `Privileges.asAgent()`（`setpriv --reuid=1000 --regid=1000 --init-groups`），输出文件归 uid 1000。
+- 转码子进程复用 `Privileges.asAgent()`（`setpriv --reuid=1000 --regid=1000 --groups=<gid,…>`，无附加组时 `--clear-groups`），输出文件归 uid 1000。
 
 ffmpeg 获取阶梯：
 
@@ -188,13 +192,47 @@ ffmpeg 获取阶梯：
 5. Windows / macOS：只下载静态二进制到 `<data>/tools/ffmpeg/<version>`，SHA256 校验、zip 解压、`ffmpeg`/`ffprobe` 绝对路径写入配置；不自动升级。
 6. 下载源：官方/BtbN、gyan.dev、macOS 对应源、可配置镜像；**自定义 URL 放最后**，需开发者提权 + 必须填 SHA256，拦内网/本机地址；保留上一版可回滚。
 
+### 7.1 安装卡片与默认运行时（2026-11-25 实现）
+
+设置页把“生产一个运行时”和“面板用哪个运行时”拆成两块：
+
+- **安装卡片**：先选类型 `系统 / 下载二进制 / 源码构建`。
+  - `系统`：只检测 `PATH` 里的 ffmpeg/ffprobe，显示版本与路径；不下载。找不到时给出包管理器提示或 `transcode.ffmpeg_path`。
+  - `二进制`：`vendor`（BtbN / gyan.dev / Jellyfin）→ 当前平台（os/arch/libc，只读）→ 大版本 → 具体 build；详情显示许可、特性、minGlibc、大小、SHA-256、镜像数。Jellyfin 的 LZU 镜像就是 catalog 里的 `mirrors`，属于该 vendor，不是独立来源。
+  - `源码构建`：先选「构建方案」：
+    - `官方源码 · 宿主依赖（最小构建）`：来源（当前为官方 ffmpeg.org）→ 版本 → 编译器（`auto` / `system` / `portable`）→ 构建。`system` 不可用时直接报错，不会偷偷下载；`portable` 未安装时下载固定版本的 Zig/w64devkit。实际编译器写入 runtime.json 的 `toolchain`。
+    - `全编码 GPL / 全编码 LGPL（静态）`：面板下载并编译 x264/x265/libvpx/libaom/svt-av1/opus/lame/vorbis，以及 cmake（预编译工具）与 nasm（源码），再用这些静态库编译 FFmpeg；产物 `license` 为 `GPL-2.0-or-later` 或 `LGPL-2.1-or-later`，`buildRecipe=full-static-v1`。当前只支持 Linux。
+  - **Windows 提示（部署特有）**：Windows 的源码构建**只提供“官方源码 · 宿主依赖”的最小构建**，产物通常是 LGPL（没有 libx264/libx265 等 GPL 编码器）；面板不在 Windows 上编译 x264/x265 等完整依赖栈，全编码选项只对 Linux 出现。需要全编码请用「下载二进制」选 gyan.dev / BtbN 的 GPL 构建。卡片上同时提示：ffmpeg 的 `configure` 会在临时目录编译并执行 `test.exe` 探测程序，Defender 等常按行为启发式误报为 `Trojan:Win64/ShellcodeRunner`，可能中途拦截；确实要编译时需给数据目录加杀毒排除或逐次允许。Windows 构建会显式加 `--target-os=mingw32`，因为 w64devkit 的 busybox `uname -s` 返回 `Windows_NT`，ffmpeg 会拒绝识别。
+  - 只有最后的“安装/构建”按钮会下载或编译；切换下拉不触网。
+- **默认运行时**（卡片下方，类似证书默认项）：`transcode.default_runtime: auto | system | <runtime-id>`，也接受 `HDSL_TRANSCODE_DEFAULT_RUNTIME`。
+  - `auto`：托管 `current` 优先，否则 `PATH`；
+  - `system`：只走 `PATH`，即使有托管运行时；
+  - `<id>`：只用该已安装运行时；不存在时报错，**不静默回退**；
+  - `transcode.ffmpeg_path` 仍是运维硬覆盖，优先于这里的默认；
+  - 改动需要开发者提权并记审计（`PUT /api/transcode/runtime/default`）。
+- `GET /api/transcode/runtime` 增加 `default`、`resolved`（kind/id/路径）、`system`（检测结果）与 `compilers`（系统/便携可用性与详情）；旧字段保留。
+- `GET /api/transcode/runtime/full-builds` 返回全编码 recipe（id/profile/版本/特性/依赖/预计大小与时间）以及当前宿主是否可构建；安装走 `POST /api/transcode/runtime/install {mode:"full-source", id:"full-gpl-9.1", compiler:"system"}`，仍需开发者提权与审计。
+- 设置页只保留这一套安装入口；旧的“在线安装”折叠块（静态包 / 自定义 URL / 重复的安装状态）已移除。`mode=custom` 仍留在后端接口，页面不再暴露第二套路径。
+- **最小构建**的源码版本下拉写的是**源码包**的许可（LGPL-2.1+），不是产物许可：构建启用 libx264/libx265 后产物按 GPL-3.0 记录，否则是最小编码集（LGPL）。页面从 `/api/transcode/runtime/source` 读缺失的 Debian/Ubuntu 开发包并给出安装命令；要全编码可以直接选「全编码 GPL」，不必在宿主装开发包。
+- **全编码构建**的预检只需要 `cc/c++/make/pkg-config`，或者此平台可安装的便携工具链（默认 `auto`：系统优先，不可用时下载 Zig / w64devkit）；它**不需要** `libx264-dev` 等开发包。cmake 与 nasm 由面板自己缓存到 `<data>/transcode/tools/ffmpeg/.build-tools/`，不写入最终运行时目录。下载大小、预计时间与磁盘占用来自 recipe 的声明值。
+- **便携工具链不是 Debian build-essential**：Linux 的便携工具链是 `bootstrap.json` 固定版本的 **Zig**（自带 clang/LLVM、链接器与归档器），再加单独钉住的 GNU make、pkgconf、nasm，并生成 `cc/c++/gcc/g++/ar/ranlib/ld` 包装；Windows 是 w64devkit。面板不会 `apt install build-essential`。只拿一个 `zig` 二进制不够：ffmpeg 的构建还需要 make，全编码构建还需要 pkgconf/nasm，这些都在同一套便携 bundle 里。
+- **编译器触发条件**：`auto` 系统优先，只有系统工具链不可用时才下载便携工具链；`system` 从不下载；`portable` 在 Linux 下载 Zig、Windows 下载 w64devkit。Windows 上 ffmpeg 的 configure 还需要 POSIX `sh`，所以系统编译器存在但 `sh` 缺失时，`auto` 仍会下载 w64devkit。下拉直接写 `Zig（便携）` / `w64devkit（便携）`，并在详情里说明“未安装；选择它时下载”。
+- **Zig 构建的 sysctl 兼容**：Zig 的 libc 导出 `sysctl` 符号，但 Linux 头文件没有 `sys/sysctl.h`；FFmpeg 的 `check_func sysctl` 会因此误判 `HAVE_SYSCTL=1`，随后 `libavutil/cpu.c` 在包含该头时失败。面板在 `configure` 之后把 `config.h` 的 `HAVE_SYSCTL` 置 0（Linux 的 CPU 数走 `sched_getaffinity`/`sysconf`，不影响结果）；最小构建与全量构建都走这一步。
+- **可选安装**：自举页的「构建工具链」只报告当前会用的那套；另有一行「便携工具链（Zig / w64devkit，可选）」，即使宿主已有 gcc 也可以安装，用于可复现构建或显式切换到便携编译器。安装后 `auto` 仍优先系统工具链，不会因此静默换编译器。
+- **工具链下载源**：`transcode.toolchain_mirror` / `HDSL_TOOLCHAIN_MIRROR`，前缀拼在官方绝对 URL 前面，与 ffmpeg 的 `binary_mirror` / `source_mirror` 分开；空值使用 `bootstrap/bootstrap.json` 的官方源 + 内置镜像，安装前仍会测速选最快。自举页的「构建工具链（Zig / w64devkit，可选）」使用同一个前缀，任务可取消。
+- **取消**：ffmpeg 安装任务（二进制/源码/全编码/包管理器）在任务列表里都有「取消」，取消会终止下载或构建；自举页的构建工具链任务也支持取消；实例安装沿用 `TaskService` 的取消。
+- 安装任务在服务端登记（`FfmpegInstaller` 内存表，保留 6 小时）：`GET /api/transcode/runtime/installs` 返回运行中与最近完成的任务，页面挂载时重新拉取并继续轮询，切换页面或刷新不会丢进度。任务带 `target`（目录条目的 id）；同一目标正在跑时再次点击会返回同一个任务，而不是重复下载。二进制下载走 3 线程池可并行；源码/全编码构建仍串行（共享工具链缓存）。
+- 任务完成时先写 `runtime.json` 并激活，再把状态置为 `done`；页面看到 `done` 后立即刷新 runtime，因此“完成”与“已安装”之间没有空窗。任务日志可展开，运行中可取消。
+- 已安装的二进制/源码版本在下拉和按钮上标记，重复安装按钮禁用。
+- **队列快照带运行时**：`GET /api/transcode/queue` 的 `runtime` 块（`default/kind/id/path/version/available/error`）表示“现在开跑会用哪个 ffmpeg”，只读 agent 票也能看到；每个任务在**第一次启动时**把实际使用的二进制写进 `job.ffmpeg`（`kind/id/path/version/error`），任务结束后仍保留。之后切换默认运行时不会改写已完成任务的记录。队列详情接口 `GET /queue/jobs/{id}` 同样带 `ffmpeg`。
+
 ### 8. 硬件直通
 
 - `docker-install.sh` 增加 `--hw auto|vaapi|nvidia|none`（默认 auto）：
   - `/dev/dri` 存在 → `--device /dev/dri`，传入宿主 `renderD128` 的 GID。
   - `nvidia-smi` 存在且 nvidia-container-toolkit 可用 → `--gpus all`；没有 toolkit 只给教程，不硬加参数。
   - compose 基础文件不直接写 `devices`（没设备会启动失败），由安装脚本生成 override 或只留注释示例。
-- 入口脚本按 GID 建组并把 `hdsl` 加入：`groupadd -g "$gid" hdsl-render; usermod -aG hdsl-render hdsl`。原因：`setpriv --init-groups` 会按 `/etc/group` 重置附加组，单纯 `--group-add` 会丢。
+- 入口脚本按 GID 建组并把 `hdsl` 加入：`groupadd -g "$gid" hdsl-render; usermod -aG hdsl-render hdsl`。原因：面板派生 agent 时用显式 `--groups=<gid,…>` 保留 `hdsl` 在 `/etc/group` 中的附加组，单纯 `--group-add` 在 `--groups` 整体替换附加组时会丢。
 - 前端明确声明：
   - VAAPI 推荐；
   - QSV 可见、可用，标「实验性」并给出已知问题；
@@ -227,6 +265,7 @@ ffmpeg 获取阶梯：
 - `AgentScopes` 默认拒绝：未显式映射的路由返回 null，`AuthFilter` 直接拒绝；`/i/*`、`/ws/*` 对 Agent 关闭的规则不变。
 - 暴露工具目录 `GET /api/transcode/agent/tools`（JSON Schema、write 标记、所需 scope）；执行仍走明确 REST 端点，不做通用 dispatcher。
 - Agent 不能启用/禁用功能、不能修改失败策略、不能改媒体根/ffmpeg 路径；这些只允许登录会话（必要时开发者提权）。
+- 只读的 `transcode` 票在 `GET /api/transcode/queue` 里能看到 `runtime` 块与每个任务的 `ffmpeg`，回答“这个任务用的是哪个 ffmpeg / 什么版本”；安装、切换、设为默认仍是操作员动作。
 - 全局并发/队列上限对 Agent 同样生效；关键操作写 `AuditLog`，记录 `agent:<label>`、scope、grant id。
 - 可选：`transcode-raw` 和删除类操作走 `TaskService.WAITING_APPROVAL`，由操作员在面板批准。
 
@@ -403,7 +442,681 @@ python3 scripts/api-smoke.py
 - Agent 不能启用/禁用功能、不能改失败策略、不能改媒体根/ffmpeg 路径；只能执行被 scope 允许的操作。
 - 不引入 .NET runtime；不复制参考仓库代码；实现以 ffmpeg 行为和面板契约为准。
 - 功能总开关在面板设置 → 功能；转码设置页只在启用后存在。
-- 文档先写、代码后动：实现等维护者明确指令后再开始。## 附录 A：设计评审待补清单
+- 文档先写、代码后动：实现等维护者明确指令后再开始。
+
+## 附：ffmpeg 运行时管理器（设计稿，2026-11-24）
+
+> 状态：设计稿，未实现。本文把 §7「媒体根与 ffmpeg」里的获取阶梯收成一个可实现的运行时管理器；
+> 实现时以代码与本文的契约表为准，两者不一致时先改文档再改代码。
+>
+> 目标不是把 ffmpeg 塞进 jar（体积与许可证都不允许），而是让面板像管 Node/JDK 一样管它：
+> **按宿主能力选对一个制品、原子地装上、能探测、能回滚、能说清缺什么。**
+>
+> **实现状态（2026-11-24）**：M0/M1/M2 的主体已落地——M0 目录与原子安装/回滚/GC；M1 的 7.1/8.1/auto、glibc 版本与 minGlibc 过滤、目录 v2；M2 的官方源码构建、Linux 系统工具链与 Windows 便携 MinGW 解析。M1 的多 GPU/硬件能力矩阵仍待补；Windows MinGW 真机与完整 GPL 构建尚未验证。
+
+### 1. 为什么 ffmpeg 是唯一“装上了也可能白装”的依赖
+
+| 依赖 | “正确产物”由什么决定 | 编排难度 |
+|---|---|---|
+| JDK | OS / arch | 低 |
+| Node | OS / arch / libc | 中 |
+| **ffmpeg** | OS / arch / libc + GPU/驱动 + 许可证 + 编码器/滤镜集合 + 预设需求 | **高** |
+
+JDK 和 Node 是确定性的：同一平台只有少数正确产物。ffmpeg 不是：
+
+- **能力取决于宿主硬件**：同一份二进制在 Intel 核显、NVIDIA、AMD、Apple VideoToolbox 上能用的编码器完全不同；
+- **没有单一官方发行**：BtbN / gyan.dev / evermeet.cx / 发行版仓库 / 自编译，功能集、许可证、更新节奏都不同；
+- **构建变体多**：GPL / LGPL、static / shared、x264/x265/vpx/aom/svt-av1/libvmaf、VAAPI/QSV/NVENC/AMF/VideoToolbox；
+- **源码编译成本高**：`configure` 依赖一堆 `-dev` 包、`pkg-config`、`nasm`，还要处理动态库/rpath；
+- **长任务**：下载 + 解包 + 编译可能几分钟到几十分钟，必须可取消、可回滚、不能留下半套。
+
+所以“ffmpeg 已安装”不等于“转码可用”。管理器必须同时回答三个问题：**装的是哪个构建、这个构建有什么、这台机器能不能用。**
+
+### 2. 现状与缺口
+
+现有实现（`web/transcode/runtime/`）：
+
+| 组件 | 已做 |
+|---|---|
+| `FfmpegInstaller` | `static` / `package` / `compile` 三条路径；SHA-256（含发布方 sidecar）；URL https + 部分私网拦截；进度、日志、取消；装到 `<data>/transcode/tools/ffmpeg` |
+| `FfmpegLocator` | `transcode.ffmpeg_path` → `<data>/.../current/bin` → `PATH`；要求 `ffprobe` 成对 |
+| `FfmpegProbe` | 解析 `-version` / `-encoders` / `-hwaccels` / `-filters`，带超时与缓存 |
+| `HardwareProbe` | 单帧试编码（VAAPI/QSV），失败给 ffmpeg 输出 |
+| `TranscodeSettingsPage` | 三条安装路径的 UI、预设来源、进度/日志、重新探测 |
+| `scripts/transcode-smoke.py` | 真实 ffmpeg 冒烟 |
+
+缺口按影响排序：
+
+1. **没有制品目录**：UI 里的四个来源写死，且使用 `releases/latest` / `getrelease` 这类会移动的地址；不可复现，也无法按 arch/libc/GPU 自动选。
+2. **没有能力元数据**：只探测 encoder 名字，不记录许可证、是否带 NVENC/VMAF、硬件 API 是否真的可用；预设失败只能在任务里发现。
+3. **源码编译路径按代码看很可能产出不可运行的二进制**：默认 `./configure` 是 shared，`make install` 把 `libav*.so` 放进 `prefix/lib`，而 `copyToCurrent()` 只复制 `ffmpeg` / `ffprobe` 到 `current/bin`；`FfmpegLocator` 又只认 `current/bin`。除非构建加了 rpath，否则会报 `error while loading shared libraries`。
+4. **源码编译的依赖与功能都不完整**：只开 `libx264` / `libx265` / `vaapi` / `libvpl`，没有 NVENC、libvmaf、libvpx/aom/svt-av1；不检查 `pkg-config` / `nasm` / `-dev` 包；干净 Debian 上会停在 `configure`。
+5. **解包依赖系统 `tar`**：`.tar.xz` 走 `ProcessBuilder("tar", ...)`，与“只有 JDK”的目标冲突；Node 侧已经用 Java + `kala-compress`/`xz` 解包，ffmpeg 应复用同一套。
+6. **安装不是原子的，也没有台账**：`installTo` + `copyToCurrent` 是两次复制，中途失败留下半套；没有 `runtime.json`，没有旧版本回滚，没有 GC；`current` 是复制目录而不是原子指针。
+7. **硬件探测覆盖不全**：`HardwareProbe` 硬编码 `/dev/dri/renderD128`，没有多卡枚举，没有 NVENC 单帧测试，没有 Windows AMF / macOS VideoToolbox。
+8. **供应链仍是同源信任**：`expectedSha` 从 `url + ".sha256"` / 同目录清单取哈希，镜像投毒可以同时换包与清单；Node 那边已经把官方 SHA-256 钉进 Dockerfile，ffmpeg 也需要内置目录。
+
+### 3. 目标与非目标
+
+**目标**
+
+- 提供 `auto` 安装：按宿主 OS/arch/libc/GPU 与预设需求，从内置目录里选一个已钉版本的 ffmpeg，下载、校验、原子安装、探测、激活。
+- 保留 `artifact`（指定目录条目）、`source`（源码编译）、`package`（发行版包管理器）、`custom`（高级自定义 URL）四种显式模式。
+- 安装结果有版本目录、`runtime.json`、许可证与能力清单；可回滚、可删除、可 GC。
+- 安装/编译/探测全部走 `TaskService`，有进度、日志、取消、审计；失败给出可行动原因。
+- 源码构建产出**可复制即运行**的二进制（静态 libav 或带 rpath），不再出现“编译成功、复制后缺库”。
+
+**非目标**
+
+- 不把 ffmpeg 二进制打进 jar 或镜像（体积、许可证、更新节奏都不合适）；镜像里的 `ffmpeg` 包保持现状。
+- 不自动安装 GPU 驱动、不替代 `nvidia-container-toolkit`、不承诺每个硬件组合都能用。
+- 不自动升级：目录更新由面板发版带入，安装由操作员触发。
+- 不覆盖 `transcode.ffmpeg_path` 的优先级：显式路径永远最高，管理器只负责“面板自己的那一份”。
+- 第一阶段不做 Windows/macOS 源码构建（Windows 需要 MSVC，macOS 需要 Xcode CLT）；这两个平台先走静态制品。
+- 不解决 ffmpeg 版本与所有上游预设的兼容矩阵；只保证“目录条目的声明能力”和“探测结果”一致。
+
+### 4. 组件与数据流
+
+```text
+FfmpegCatalog        内置制品清单（jar 资源）+ 可选操作员覆盖
+FfmpegCapabilities   宿主探测：os/arch/libc/GPU/设备/驱动
+FfmpegSelector       按宿主 + 需求 + 许可证打分，选条目或建议源码构建
+FfmpegRuntimeManager 下载/校验/解包/探测/原子激活/回滚/GC/台账
+FfmpegBuildKit       可选源码构建：预检、configure/make、静态产物、日志
+FfmpegInstaller      现有入口，保留为兼容 facade，内部委托给 RuntimeManager
+FfmpegLocator        读取 current 指针或旧目录，保持现有查找顺序
+```
+
+数据流：
+
+```text
+enable transcode
+  → FfmpegCapabilities.detect()（缓存）
+  → FfmpegLocator.locate() 找现有 ffmpeg
+  → 若不可用/缺能力：FfmpegSelector.recommend()
+  → FfmpegRuntimeManager.install(entry | source | package)
+  → probe + feature check
+  → activate（原子切换 current）
+  → TranscodeRuntime.refresh()
+  → 预设/工具按 capabilities 置灰或放行
+```
+
+### 5. 制品目录 `FfmpegCatalog`
+
+内置资源建议放在 `src/main/resources/transcode/ffmpeg-catalog.json`；操作员可用
+`transcode.ffmpeg_catalog` 或 `HDSL_FFMPEG_CATALOG` 指向一个本地 JSON 覆盖/追加（不支持任意远程 URL，
+避免把目录变成第二个 SSRF 面）。目录条目示例：
+
+```json
+{
+  "schema": 1,
+  "updatedAt": "2026-11-24",
+  "entries": [
+    {
+      "id": "linux-x64-glibc-gpl-btbn-7.1",
+      "os": "linux",
+      "arch": "x64",
+      "libc": "glibc",
+      "ffmpegVersion": "7.1.5",
+      "license": "GPL-3.0",
+      "features": [
+        "libx264", "libx265", "libvpx", "libaom", "libsvtav1",
+        "libvmaf", "vaapi", "qsv", "nvenc"
+      ],
+      "url": "https://.../ffmpeg-7.1.5-linux64-gpl.tar.xz",
+      "sha256": "…64 hex…",
+      "size": 123456789,
+      "archive": "tar.xz",
+      "notes": "静态构建；NVENC 需宿主驱动，探测通过才点亮"
+    }
+  ]
+}
+```
+
+约定：
+
+- **`features` 是构建声明，不是探测结果**。安装后必须用 `FfmpegProbe` / `HardwareProbe` 校验；声明有、探测没有的项在 UI 标“声明但不可用”。
+- **`sha256` 必须来自目录，不随下载源走**。镜像只改 `url`，不改哈希；自定义 URL 才允许“操作员显式填哈希”。
+- **禁止 `latest`**。目录条目是某个确定版本；升级目录 = 发版，不是运行时解析“最新”。
+- **许可证是字段**。GPL 构建与 LGPL 构建在 UI 上分开；默认推荐能覆盖预设的 GPL 构建，并显示许可证说明。
+- 第一阶段只收录**已经人工验证过**的条目；没有验证过的平台宁可不列，也不要“看起来能装”。
+  当前平台覆盖：Linux x64/glibc（BtbN、Jellyfin）、Linux arm64/glibc（仅 BtbN 7.1/8.1；
+  BtbN 的 arm64 构建不含 VAAPI/QSV，保留 NVENC）、Windows x64（BtbN、gyan、Jellyfin）。
+  Linux musl、Windows arm64、macOS arm64 暂无二进制条目；源码条目是 `any/any/any`，但能否
+  源码构建取决于该平台有没有可用工具链（Linux arm64 有 Zig 便携工具链；Windows 只有 x64
+  w64devkit；macOS 不承诺）。
+- 前端只列出**当前宿主 os/arch/libc 有制品**的 vendor。否则在 Linux 上选中 gyan.dev
+  （Windows 专属）会得到两个空下拉框，看起来像源坏了。
+
+### 6. 宿主能力 `FfmpegCapabilities`
+
+探测结果缓存（建议 5 分钟或直到安装/驱动变化），包含：
+
+```json
+{
+  "os": "linux",
+  "arch": "x64",
+  "libc": "glibc",
+  "gpus": [
+    {"vendor": "intel", "devices": ["/dev/dri/renderD128"], "apis": ["vaapi", "qsv"]},
+    {"vendor": "nvidia", "devices": ["GPU-…"], "apis": ["nvenc", "nvdec"]}
+  ],
+  "hardwareEncoders": ["h264_vaapi", "hevc_vaapi", "h264_nvenc"],
+  "checkedAt": "2026-11-24T…"
+}
+```
+
+采集方式：
+
+| 项 | Linux | Windows | macOS |
+|---|---|---|---|
+| OS/arch | `Platform.SYSTEM_PLATFORM` | 同左 | 同左 |
+| libc | `ldd --version` / `/lib/ld-musl-*` | 不适用 | 不适用 |
+| GPU/设备 | `/sys/class/drm/card*/device`、`/dev/dri/renderD*`、`nvidia-smi -L` | `Win32_VideoController`（PowerShell/WMI） | `system_profiler SPDisplaysDataType` |
+| 硬件 API | `vainfo`（可选）、`nvidia-smi`、ffmpeg `-hwaccels` | `-hwaccels` + 适配器厂商 | `-hwaccels`（videotoolbox） |
+| 单帧验证 | 现有 `HardwareProbe` 扩展多设备 | 扩展 AMF / NVENC | 扩展 VideoToolbox |
+
+`HardwareProbe` 的改造点：
+
+- `vaapi_device` 不再硬编码 `renderD128`，由 capabilities 传入第一个可用设备；
+- 增加 `h264_nvenc` / `hevc_nvenc` / `h264_videotoolbox` / `h264_amf` 的单帧测试；
+- 测试结果按 `(encoder, device)` 缓存；失败保留 ffmpeg 输出尾部，UI 展示原因；
+- 只做“能不能出 1 帧”，不做性能承诺；性能仍归队列遥测。
+
+### 7. 选择 `FfmpegSelector`
+
+输入：宿主能力、需求特性集（来自预设/工具，例如 `libx264`、`libvmaf`、`nvenc`）、许可证偏好、
+是否允许源码构建、网络是否可用。
+
+```text
+候选 = 目录中 os/arch/libc 匹配的条目
+评分 = 4 × 硬件命中 + 3 × 需求特性覆盖 + 1 × 许可证偏好 - 0.001 × 体积
+排序 = 评分降序，同分取 ffmpegVersion 新的
+对每个候选：
+  安装 → probe → 检查需求特性
+  通过 → 激活；失败 → 记录原因，试下一个
+无候选且允许源码构建 → FfmpegBuildKit
+无候选且允许包管理器 → package（仅容器/root）
+否则 → 明确报错：缺哪个平台/哪个特性/哪条原因
+```
+
+原则：
+
+- **不静默降级**：缺少预设必需的编码器/滤镜时，安装可以成功，但激活前要明确说“这个构建缺 X”，让用户选择换构建或接受功能受限。
+- **不猜硬件**：没有 `nvenc` 声明或驱动探测失败，就不推荐 NVENC 构建；CPU 构建永远是兜底。
+- **可解释**：`GET /runtime` 返回 `recommended` 与 `why`（命中了哪些硬件/特性、排除了哪些候选及原因）。
+
+### 8. 安装 `FfmpegRuntimeManager`
+
+安装流程固定为：
+
+```text
+预检（磁盘、权限、特性、并发）
+→ 下载（流式、进度、超时、代理、重定向校验）
+→ 校验 SHA-256（目录值，失败即删）
+→ 解包（Java：zip / tar.gz / tar.xz；拒绝路径穿越与越界软链）
+→ 暂存目录 <version>.installing
+→ 运行 ffmpeg -version / ffprobe -version、-encoders、-hwaccels
+→ 检查动态库（ldd / otool -L / DLL 依赖）或确认静态
+→ 写入 runtime.json
+→ 原子激活 current
+→ refresh probe
+```
+
+**目录布局**
+
+```text
+<data>/transcode/tools/ffmpeg/
+  catalog.json                 # 可选的本地覆盖/缓存（内置目录仍是权威）
+  <version>/                   # 不可变安装目录
+    bin/ffmpeg
+    bin/ffprobe
+    lib/…                      # 仅 shared 构建；静态构建可无
+    runtime.json
+  current -> <version>         # POSIX 符号链接；Windows 用 junction / 指针文件
+  .download-<jobId>            # 临时文件，失败清理
+  .extract-<jobId>             # 临时目录，失败清理
+```
+
+**`runtime.json`**
+
+```json
+{
+  "schema": 1,
+  "version": "7.1.5",
+  "catalogId": "linux-x64-glibc-gpl-btbn-7.1",
+  "source": "catalog",
+  "license": "GPL-3.0",
+  "sha256": "…",
+  "installedAt": "2026-11-24T…",
+  "archive": "tar.xz",
+  "featuresDeclared": ["libx264", "nvenc"],
+  "featuresProbed": ["libx264"],
+  "probe": {"version": "ffmpeg version 7.1.5", "encoders": [], "hwaccels": []},
+  "builtFrom": null,
+  "notes": ""
+}
+```
+
+**原子激活**
+
+- POSIX：`current` 是指向版本目录的符号链接；`Files.move(tmpLink, current, ATOMIC_MOVE)` 完成切换。
+- Windows：优先 junction（`mklink /J`）；失败则退回“指针文件 + 复制”并明确标注非原子；`FfmpegLocator` 两种都认。
+- 激活失败：保留旧 `current`，新版本目录标 `failed`，不回滚已下载文件（留给重试）。
+- 回滚：`POST /runtime/select {version}` 或 `POST /runtime/rollback` 切回上一个可用版本；不重新下载。
+
+**GC / 保留**
+
+- 默认保留 `current` + 最近 2 个可用版本；`DELETE /runtime/{version}` 手工删除。
+- 删除前检查没有队列任务/预设绑定；被引用的版本拒绝删除。
+- 旧布局（`current` 是真实目录）在首次对账时登记为 `legacy`，不移动文件；新安装才使用版本目录 + 指针。
+
+**并发**
+
+- 同一时间只允许一个 ffmpeg 安装/编译任务；第二个请求返回 `409 ffmpeg_busy` 并给出当前 taskId。
+- 安装期间不影响已激活版本；`current` 只在最后一步切换。
+
+### 9. 源码构建 `FfmpegBuildKit`
+
+第一阶段只支持 **Linux**，并且只在操作员显式选择 `source` 或 `auto` 没有可用制品时进入。
+
+**预检**
+
+- 工具链：`cc` / `c++` / `make` / `pkg-config` / `nasm`（或 `yasm`）；
+- 开发库（按发行版包名）：`libx264-dev`、`libx265-dev`、`libvpx-dev`、`libaom-dev`、`libsvtav1-dev`、
+  `libvmaf-dev`、`libva-dev`、`libvpl-dev`；NVENC 需要 `nv-codec-headers`；
+- 磁盘：源码 + 构建目录 + 安装目录 + 余量（建议至少 3 GB）；
+- 权限：构建进程以 agent uid 运行；系统包安装需要 root/容器，面板不自动 `sudo`。
+
+缺失时**在 configure 之前**失败，并列出精确包名；不要等 `configure` 报一行 `ERROR: libx264 not found`。
+
+**configure（建议基线）**
+
+```sh
+./configure \
+  --prefix=<version-dir> \
+  --disable-doc --disable-debug \
+  --enable-gpl --enable-libx264 --enable-libx265 \
+  --enable-libvpx --enable-libaom --enable-libsvtav1 \
+  --enable-libvmaf \
+  --enable-vaapi --enable-libvpl \
+  --enable-nvenc --enable-nvdec \
+  --disable-shared --enable-static
+```
+
+- `--disable-shared --enable-static` 是为了让 `bin/ffmpeg` 复制到 `current/bin` 后仍可运行；如果坚持 shared，
+  必须给二进制加 rpath（`-Wl,-rpath,$ORIGIN/../lib`）或让 `current` 指向保留 `lib/` 的整个目录，二者选一。
+- `--enable-nvenc` / `--enable-libvmaf` / `--enable-libvpl` 视预检结果裁剪；缺依赖就不要开，并在 `runtime.json` 的
+  `featuresDeclared` 里如实记录。
+- 构建产物必须通过 `ffmpeg -version`、`ffprobe -version`、`-encoders`、`-hwaccels` 和一次 lavfi 单帧编码；
+  不通过就判失败，不激活。
+
+**执行**
+
+- `make -jN`，`N = min(核数, 4)` 起步，可配；`nice`/`ionice` 降低对面板的影响；
+- 分阶段进度：下载 → 解包 → configure → make → install → probe；日志落 `transcode/logs/build-<id>.log`；
+- 取消：杀整棵构建进程树，保留日志；半成品目录清理；
+- 超时：下载 10 分钟、构建 90 分钟（可配）；超时判失败，不激活。
+
+**Windows / macOS**
+
+- Windows 官方 Node/ffmpeg 源码构建需要 MSVC；第一阶段不支持，`source` 直接返回
+  `409 ffmpeg_source_unsupported` 并说明改用静态制品。
+- macOS 需要 Xcode CLT；第一阶段也不做，先用静态制品。
+
+### 10. 包管理器路径
+
+保留 `package` 作为便捷路径，但明确边界：
+
+- 仅 Linux、仅 root/容器；`apt-get update` 后再 `install -y --no-install-recommends ffmpeg`；
+  `DEBIAN_FRONTEND=noninteractive`；`dnf` / `zypper` 同理。
+- 安装后必须 `refresh` 并验证 `ffmpeg`/`ffprobe` 成对；失败给出包管理器输出尾部。
+- 记录 `source: "package"`，`runtime.json` 标注“系统路径、容器重建后需重装”。
+- 不假装可回滚：包管理器装的是系统路径，管理器只能切回之前的面板托管版本；UI 要写明。
+- 没有包管理器或非 root：直接 `409 ffmpeg_package_unsupported`，给静态/源码路径。
+
+### 11. API
+
+| 方法 | 路径 | 作用 | 门槛 |
+|---|---|---|---|
+| GET | `/api/transcode/runtime` | 当前版本、已安装列表、目录候选、宿主能力、推荐与原因、缺失特性 | 功能门 + 会话 |
+| GET | `/api/transcode/runtime/catalog` | 目录条目（可按 os/arch 过滤） | 同上 |
+| POST | `/api/transcode/runtime/install` | `{mode, id?, features?, license?, url?, sha256?, version?}` → `{taskId}` | 开发者提权 |
+| GET | `/api/transcode/runtime/jobs/{id}` | 安装/构建任务状态、进度、日志 | 会话 |
+| POST | `/api/transcode/runtime/jobs/{id}/cancel` | 取消 | 开发者提权 |
+| POST | `/api/transcode/runtime/select` | `{version}` 切换已安装版本 | 开发者提权 |
+| POST | `/api/transcode/runtime/rollback` | 切回上一个可用版本 | 开发者提权 |
+| DELETE | `/api/transcode/runtime/{version}` | 删除未使用版本 | 开发者提权 |
+| POST | `/api/transcode/capabilities/probe` | 现有单帧探测，扩展 `{encoder, device?}` | 会话 |
+
+`mode`：
+
+- `auto`：选择器；不需要 URL；
+- `artifact`：`id` 指定目录条目；
+- `source`：源码构建；
+- `package`：包管理器；
+- `custom`：高级；必须 `url` + `sha256`，https，私网/环回/链路本地/多播地址拒绝，重定向逐跳校验；不提供“自动读取 sidecar 哈希”作为唯一信任。
+
+错误码（新增）：
+
+| code | 含义 |
+|---|---|
+| `ffmpeg_not_found` | 当前没有任何可用 ffmpeg |
+| `ffmpeg_no_candidate` | 目录里没有匹配宿主/特性的条目 |
+| `ffmpeg_feature_missing` | 选中构建缺少必需特性 |
+| `ffmpeg_checksum_mismatch` | 下载内容与目录哈希不符 |
+| `ffmpeg_unsupported_platform` | 该平台没有可用制品/不支持源码构建 |
+| `ffmpeg_build_toolchain_missing` | 源码构建缺工具链/开发包 |
+| `ffmpeg_disk_full` | 空间不足 |
+| `ffmpeg_busy` | 已有安装/构建任务 |
+| `ffmpeg_license_mismatch` | 许可证不满足操作员选择 |
+
+Agent：`transcode` scope 只读 runtime 状态与能力；安装/切换/删除/源码构建一律要求开发者提权，
+不向 agent 票开放（编译和下载都是代码执行面）。`transcode-raw` 也不放行安装。
+
+### 12. UI
+
+设置 → 转码 → **运行时**（新增一块，放在现有「ffmpeg」卡片里或紧接着）：
+
+1. **当前运行时**：版本、来源（catalog/package/legacy/custom）、许可证、路径、健康状态、
+   `featuresDeclared` vs `featuresProbed` 的差异（声明但不可用要高亮）。
+2. **推荐安装**：选择器给出的 `recommended` 与 `why`；按钮「安装推荐版本」；旁边「选择其他版本」打开目录列表。
+3. **宿主能力**：OS/arch/libc、GPU 列表、VAAPI/QSV/NVENC/VideoToolbox/AMF 徽章；每项可点「单帧测试」。
+4. **缺失特性**：预设/工具需要但当前构建没有的编码器/滤镜，逐条列出并给「换构建 / 源码构建」入口。
+5. **安装/构建**：模式选择（自动 / 指定目录 / 源码 / 包管理器 / 自定义）、进度、阶段、日志抽屉、取消。
+6. **版本管理**：已安装列表、激活、回滚、删除（被引用时禁用并说明）。
+7. **许可证与来源**：GPL/LGPL、SHA-256、下载地址、安装时间；自定义 URL 收起在「高级」里。
+
+概览页：ffmpeg 不可用时给出「去安装」；可用但缺预设特性时给黄色警告，不要等任务失败。
+
+预设页：编码器/滤镜按 `featuresProbed` 置灰；置灰原因写“当前构建缺 X”，并提供跳到运行时的链接。
+
+### 13. 安全与供应链
+
+- **目录哈希是权威**：内置目录里的 `sha256` 随面板发版，镜像只改 `url`；下载后不匹配立即删除并失败。
+- **自定义 URL**：仅 https；解析 DNS 后拒绝私网/环回/链路本地/多播/IPv6 本地地址；逐跳校验重定向；
+  必须显式 SHA-256；要求开发者提权；审计 `transcode.runtime.install`（含 URL、哈希、操作者、来源地址）。
+- **代理**：走面板的出站代理设置；没有配置就直连；不要在安装器里另造一套代理逻辑。
+- **源码构建**：argv 数组，不经 shell；以 agent uid 运行；`nice`；超时；日志；不接受任意 configure 参数
+  （只接受面板生成的基线 + 有限的开关）。
+- **许可证**：GPL/LGPL 在 UI 与 `runtime.json` 都记录；不把 ffmpeg 二进制打进 jar/镜像；运行时下载；
+  `NOTICE` 保持现有说明。
+- **审计**：install / select / rollback / delete / probe / build 全部进 `audit-*.jsonl`，agent 调用记 `agent:<label>`。
+
+### 14. 迁移与兼容
+
+- `transcode.ffmpeg_path` / `HDSL_FFMPEG_PATH` 仍然最高优先级；设置后 UI 显示 `source: external`，
+  管理器不覆盖它，只提示“当前使用外部路径，安装不会生效直到清空”。
+- 旧的 `<data>/transcode/tools/ffmpeg/current` 若是真实目录：首次对账登记为 `legacy`，写 `runtime.json`
+  （`source: "legacy"`, `verified: false`），不移动文件；新安装使用版本目录 + `current` 指针。
+- `FfmpegInstaller` 的 `start(kind,url,sha256,version)` 保留，内部映射：
+  `static` → `artifact/custom`，`compile` → `source`，`package` → `package`；旧 API 不破坏现有 UI/测试。
+- `FfmpegLocator` 保持现有顺序；新增“读取 `current` 指针”的逻辑，旧目录继续可用。
+- 数据库/预设不需要迁移；`runtime.json` 缺失时按 `legacy` 处理。
+
+### 15. 验证
+
+**单元/集成**
+
+- 目录解析/校验：缺字段、重复 id、非法 os/arch、非法 sha256、`latest` 拒绝；
+- 选择器：硬件命中、特性覆盖、许可证、无候选、回退顺序、`why` 文案；
+- 安装：zip / tar.gz / tar.xz 解包；路径穿越、越界软链、空归档、缺 ffprobe、坏 SHA、截断下载；
+- 激活：POSIX symlink 原子切换；Windows 指针回退；失败保留旧 current；回滚；GC 不删在用版本；
+- 探测：fake ffmpeg/ffprobe 脚本输出固定文本；缺库模拟（脚本退出非 0 + stderr）；
+- API：install/job/cancel/select/rollback/delete 的状态码、提权、agent 拒绝、`ffmpeg_busy`；
+- 安全：私网 URL、重定向到私网、IPv6 环回、缺哈希、同源 sidecar 不作为唯一信任。
+
+**真实冒烟**
+
+- `scripts/transcode-smoke.py` 扩展：在临时数据目录起面板，`auto` 安装一个目录条目（Linux x64），
+  跑 10 秒 lavfi 转码，断言 `capabilities.available=true` 且输出可 ffprobe。
+- 有 `/dev/dri` 的宿主：VAAPI 单帧通过则点亮；失败断言“不可用 + 原因”，不误报可用。
+- 有 NVIDIA 的宿主：NVENC 单帧通过才点亮；没有驱动时选择器不推荐 NVENC 构建。
+- 源码构建：在有工具链/开发包的临时环境编译并通过；缺依赖时在 configure 前失败并列出包名。
+- 旧 `current` 目录：启动后仍可用，`runtime.json` 为 legacy；安装新版本后可回滚到 legacy。
+
+### 16. 里程碑
+
+| 阶段 | 内容 | 验收 |
+|---|---|---|
+| M0 | `FfmpegCatalog` + `FfmpegRuntimeManager` + 原子安装 + Java 解包 + `runtime.json` + 回滚/GC | 干净 Linux 上 `auto` 装一个目录条目并跑通冒烟；不再依赖系统 `tar` |
+| M1 | `FfmpegCapabilities` + `FfmpegSelector` + 预设特性预检 + UI 运行时卡片 | 缺特性的构建被明确拦下；VAAPI/QSV/NVENC 徽章来自真实探测 |
+| M2 | `FfmpegBuildKit`（Linux，最小静态） + 预检 + 进度/取消 | 有工具链/开发包时源码构建成功且复制后可运行；缺依赖时 configure 前失败 |
+| M3 | 多 GPU/设备、Windows AMF、macOS VideoToolbox、包管理器路径硬化 | 各平台探测矩阵有测试；包管理器失败给可行动原因 |
+| M4 | 目录更新流程、镜像、文档、Release 说明 | 目录条目有来源/哈希/验证记录；发版可审计 |
+
+### 17. 开放问题
+
+1. **第一批目录条目收哪些**：BtbN（Linux x64 + arm64 的 glibc GPL）、gyan.dev（Windows x64）、
+   Jellyfin（Linux x64/Windows x64）、evermeet.cx（macOS x64/arm64？）、johnvansickle（Linux 全静态，
+   但硬件加速可能没有）。每个条目必须人工验证 arch/libc/features/SHA-256 后再收录，不凭名字推断。
+2. **默认许可证**：预设需要 x264/x265，默认只能是 GPL 构建；LGPL 作为“不要 GPL 编码器”的可选项。
+3. **源码构建是否产品化**：建议产品化但仅 Linux；Windows/macOS 只做静态制品，不承诺源码构建。
+4. **是否自动安装构建依赖**：第一阶段不做（只给精确包名）；第二阶段接未来的 `ToolchainManager`/BootstrapKit。
+5. **shared vs static**：默认 `--disable-shared --enable-static`；如果要支持外部 libav 插件，再评估 rpath 方案。
+6. **Windows 的 `current` 切换**：junction 需要权限/文件系统支持；退回指针文件 + 复制时要明确“非原子”并保留旧版本。
+7. **目录刷新**：随面板发版最安全；是否允许操作员从本地 JSON 追加条目（建议允许，远程 URL 不允许）。
+
+### 18. 完成定义
+
+- 在一台**只有 JDK + 面板、没有系统 ffmpeg** 的干净 Debian 上，`POST /runtime/install {mode:"auto"}`
+  能下载目录条目、校验、解包、安装、探测，`capabilities.available=true`，一次 10 秒测试转码成功；
+  全程不调用系统 `tar`。
+- 有 `/dev/dri` 时，VAAPI 单帧探测通过才点亮；没有设备或构建不带 VAAPI 时，UI 明确说缺什么。
+- 有 NVIDIA 时，只有构建声明 `nvenc` 且单帧探测通过才推荐 NVENC；否则推荐 CPU 构建并说明原因。
+- 源码构建在有工具链/开发包的机器上成功，复制到 `current/bin` 后可直接运行；缺依赖时在 configure 前
+  给出精确包名。
+- 安装失败/取消不会留下半套 `current`；旧版本可回滚；未被引用的旧版本可删除；所有操作有审计。
+- 自定义 URL 仍可用，但必须显式哈希 + 提权；同源 sidecar 不再作为唯一信任。
+
+## 附：全编码源码构建（2026-11-25 实现）
+
+> 状态：Linux 已实现（`FfmpegFullBuildKit`，recipe `full-static-v1`）；本文保留设计与取舍。
+> Windows/macOS 仍只走二进制；硬件编码库（VAAPI/QSV）暂未纳入托管依赖。默认仍推荐二进制目录，
+> 全编码构建是“没有合适的二进制、或要特定补丁/许可组合”时的源码路径。
+>
+> 目标：在一台**没有系统 ffmpeg、也没有 libx264-dev 等开发包**的干净宿主机上，由面板自己下载
+> 并编译一套固定版本的依赖库与 FFmpeg，产出一个可托管、可探测、可回滚、可删除的运行时。
+>
+> 非目标：不自动 `sudo`；不追求“所有编码器”（见 §4 的声明矩阵）；不执行目录里的任意构建脚本；
+> 不把 non-free 组件放进默认产物。
+
+### 1. 现状：现在的源码构建是“宿主有什么编什么”
+
+2026-11-25 在 Debian 13 容器里实测 `ffmpeg-source-9.1-gpl-static-v1`：
+
+- 构建成功，但 `External libraries:` 只有 `iconv`；
+- `featuresProbed` 为空，167 个编码器全是 FFmpeg 原生软件编码器；
+- `-hwaccels` 为空；
+- 产物 `runtime.json` 的 `license` 是 `LGPL-2.1-or-later`。
+
+原因不是源码来自官方，而是 `FfmpegBuildKit` 的 `gpl-static-v1` 只启用宿主机上 `pkg-config`
+能发现的 `-dev` 包。没有 `libx264-dev` / `libx265-dev` / `libvpx-dev` / `libaom-dev` /
+`libsvtav1-dev` / `libva-dev` / `libvpl-dev` / `nv-codec-headers` 时，`configure` 自然什么也不带。
+
+因此“全编码源码构建”不是一个下载地址问题，而是**依赖供应链问题**：FFmpeg 官方 tarball 只含
+FFmpeg 自己，H.264/HEVC 软件编码来自 x264/x265，VP9/AV1 来自 libvpx/libaom/libsvtav1，硬件编码
+来自 libva/libvpl/nv-codec-headers。把这些都交给宿主机 `apt`，构建就仍然依赖宿主机；要真正
+自举，就得由面板把依赖也编出来。
+
+### 2. 方案比较
+
+| 方案 | 做法 | 优点 | 缺点 |
+|---|---|---|---|
+| A. 宿主开发包（现状） | 检测 `pkg-config`，有就启用 | 实现简单、构建快、产物小 | 干净宿主只能得到最小构建；用户要自己 `sudo apt` |
+| B. **托管依赖栈（推荐）** | 面板按固定清单下载并编译依赖到临时 prefix，再编 FFmpeg | 真正自举、版本可复现、可声明特性矩阵、可做 GPL/LGPL 两种 profile | 工程量大、构建慢、磁盘与失败面大、要维护依赖版本与哈希 |
+| C. Debian 源码包 | `apt-get source ffmpeg` / `debian/rules` | 带发行版补丁，`debian/rules` 已写全 `--enable-lib*` | 仍然依赖 `Build-Depends`；补丁绑定 Debian 版本；版本通常落后；不是自举 |
+| D. 只发二进制 | 维持 BtbN / gyan / Jellyfin 目录 | 立刻可用、跨机器、无需编译器 | 不能按宿主选补丁/特性；版本受发布方节奏限制；许可证固定 |
+
+结论：C 不解决“干净宿主缺库”，只是把“上游源码”换成“Debian 补丁源码”；D 是当前默认，继续保留。
+B 才是“全编码源码构建”的完整形态，已在 Linux 落地（`full-static-v1`）。
+
+### 3. 两种 profile，而不是一个“全编码”开关
+
+| profile | 内容 | 产物许可 | 用途 |
+|---|---|---|---|
+| `lgpl` | 仅宽松许可依赖：libvpx、libaom、libsvtav1、libdav1d、libopus、libmp3lame、libvorbis、libwebp、libtheora、libjxl 等 | LGPL-2.1-or-later | 不想承担 GPL 义务；有 VP9/AV1/Opus 等 |
+| `gpl` | `lgpl` + libx264、libx265 | GPL-2.0-or-later（按实际链接记录） | 需要 H.264/HEVC 软件编码 |
+| `nonfree` | 额外 libfdk_aac / libnpp 等 | 不可再分发 | **默认不提供**，只在文档中说明存在 |
+
+`gpl` 不是“另一种源码”，而是 `--enable-gpl` 加 GPL 库；`lgpl` 里也可以有硬件编码器
+（VAAPI / QSV / NVENC / AMF / Vulkan），它们不是 GPL-only。硬件能否使用仍由运行期探测决定，
+构建成功不等于机器上有驱动。
+
+### 4. “全编码”的声明矩阵
+
+“全编码”必须是一个可验收的列表，不是“所有 codec”。第一版建议固定为：
+
+- 视频编码：`libx264`、`libx265`、`libvpx-vp9`、`libaom-av1`、`libsvtav1`、`librav1e`；
+- 音频编码：原生 `aac`、`libopus`、`libmp3lame`、`libvorbis`；
+- 容器/滤镜：`libwebp`、`libtheora`、`libass`、`libfreetype`（drawtext）、`libvmaf`；
+- 硬件包装（有头文件时）：`vaapi`、`qsv`、`nvenc`、`amf`、`vulkan`；
+- 明确排除：`libfdk_aac`（non-free）、`libnpp`（non-free）、闭源 SDK、平台专属且无法在
+  当前宿主验证的组件。排除项在 UI 与 `runtime.json` 里写明。
+
+`runtime.json` 继续分 `featuresDeclared` / `featuresProbed`：声明是构建计划，探测是安装后
+`-encoders` / `-hwaccels` 的真实结果，两者不一致要在设置页高亮。
+
+### 5. 数据与配方
+
+新增只读资源 `src/main/resources/transcode/ffmpeg-full-builds.json`（随 jar 发布，不支持远程 URL）：
+
+```json
+{
+  "profiles": [
+    {
+      "id": "full-gpl-9.1",
+      "profile": "gpl",
+      "ffmpeg": "9.1",
+      "recipe": "full-static-v1",
+      "ffmpegSource": {"url": "https://ffmpeg.org/releases/ffmpeg-9.1.tar.xz", "sha256": "…"},
+      "dependencies": [
+        {"id": "x264", "version": "…", "url": "https://…", "sha256": "…", "archive": "tar.xz"},
+        {"id": "x265", "version": "…", "url": "https://…", "sha256": "…", "archive": "tar.xz"}
+      ],
+      "features": ["libx264", "libx265", "libvpx-vp9", "libaom-av1", "libsvtav1", "libopus", "libmp3lame", "vaapi", "qsv", "nvenc"],
+      "estimated": {"downloadBytes": 0, "buildMinutes": 0, "diskBytes": 0}
+    }
+  ]
+}
+```
+
+约束：
+
+- JSON 只做**选版与校验**，不携带可执行的 `configure` 参数或 shell 片段；每个依赖的构建方式由
+  Java 里的固定 recipe（`X264Recipe`、`X265Recipe`、`AutotoolsRecipe`…）实现，目录只能引用
+  recipe id。这样目录被替换也不能变成任意代码执行。
+- 每个 URL 必须 https + SHA-256 + 允许镜像列表；镜像只换主机，不换哈希，沿用
+  `DownloadSourcePicker` 与 `FfmpegDownload` 的校验/换源逻辑。
+- 版本与 FFmpeg 大版本绑定；同一 profile 的依赖集合不可在运行时由用户增删。
+
+### 6. 构建流水线
+
+```
+预检（工具链/磁盘/网络）
+  → 下载全部源码到 <tools>/.cache/full-build/<sha256>/
+  → 逐个解包、configure --prefix=<stage>/prefix、make -j、make install
+  → 以 <stage>/prefix 为 PKG_CONFIG_PATH 配置 FFmpeg
+  → make -j、make install 到同一 prefix
+  → 探测 -version / -encoders / -hwaccels + 单帧 lavfi 编码
+  → 写入 runtime.json，原子激活
+```
+
+关键点：
+
+- **不调用系统 tar**：继续用 `FfmpegArchive` 的 Java 解包与路径/软链检查。
+- **构建身份**：所有 `configure` / `make` 通过 `BootstrapEnvironment.agentProcess` 以 agent uid
+  运行，prefix 在 `<data>/transcode/tools` 下；面板不以 root 编译或安装。
+- **环境隔离**：显式设置 `PKG_CONFIG_PATH`、`PKG_CONFIG_LIBDIR`、`CFLAGS`、`LDFLAGS`、
+  `MAKEFLAGS`；清掉继承的 `LD_PRELOAD` / `CC` / `CFLAGS` 之类变量，避免宿主环境污染。
+- **并行**：`make -j` 取 `min(CPU 核数, 内存/2GiB, 4)`；面板同一时间只允许一个全量构建。
+- **磁盘**：预检要求 ≥ 6 GiB 可用；下载缓存与构建目录都算；低于阈值在 configure 前失败。
+- **超时**：单依赖 20 分钟、FFmpeg 30 分钟、总 90 分钟；超时 kill 整个进程组并清理 stage。
+- **取消**：与现有安装任务一致，取消后不产生 `current`，临时目录按 GC 规则清理。
+- **日志**：一个 `build-<job>.log`，按 `== dependency x264 ==`、`== configure ffmpeg ==` 分段；
+  进度阶段为“下载 i/n → 编译依赖 i/n → 配置 FFmpeg → 编译 FFmpeg → 探测”。
+- **缓存**：第一版只缓存下载的源码包（按 SHA-256），不缓存编译产物；跨版本复用的依赖缓存
+  留到 M3，避免“旧对象文件混进新构建”。
+
+### 7. UI
+
+设置页的源码卡片增加“构建方案”下拉：
+
+- `官方源码（宿主依赖）`：现状，最小/宿主有什么编什么；
+- `全编码 LGPL`：列出声明的编码器、依赖下载大小、预计时间、产物许可；
+- `全编码 GPL`：同上，并明确“产物为 GPL-3.0，分发需履行 GPL 义务”。
+
+选中后展示：
+
+- 依赖矩阵：每个依赖的版本、是否将从源码构建、预计下载大小；
+- 预检结果：工具链、nasm、磁盘、网络；不可构建时按钮禁用并说明原因；
+- 许可提示：`lgpl` / `gpl` 的实际含义，不能只写“全编码”；
+- 构建中：阶段、总进度、当前依赖、日志尾部、取消；
+- 完成后：`featuresProbed` 与声明差异、`toolchain`、`runtime.json` 路径、设为默认。
+
+不把“全编码”做成默认项：默认仍是二进制下载；源码构建是高级路径。
+
+### 8. API
+
+- `GET /api/transcode/runtime/full-builds`：返回 profile、依赖清单、预计大小/时间、预检结果；
+  只读，agent 可读与否按现有 `transcode` scope 决定（安装仍需提权）。
+- `POST /api/transcode/runtime/install` 增加
+  `{mode:"full-source", profile:"lgpl"|"gpl", id:"full-gpl-9.1"}`；继续走
+  `requireHumanElevation` + 审计 `transcode.runtime.install`。
+- `TranscodeInstallJob` 增加 `stage`（`download` / `dependency` / `configure` / `make` / `probe`）
+  与 `stageIndex` / `stageTotal`，前端只读展示；旧字段保留。
+- 失败统一返回可行动的原因：`ffmpeg_build_dependency_failed: x265`、`ffmpeg_build_disk_full`、
+  `ffmpeg_build_timeout`、`ffmpeg_build_hash_mismatch`，日志里给最后 40 行。
+
+### 9. 安全与供应链
+
+- 依赖与 FFmpeg 的源码全部 https + SHA-256 固定；镜像只允许同哈希；重定向逐跳校验，拒绝私网/
+  环回/链路本地地址（复用 `FfmpegInstaller.validateUrl` / `FfmpegDownload`）。
+- 构建逻辑是 Java 里的固定 recipe，不接受目录或用户传入的 `configure` 参数；不拼接 shell。
+- 解包必须防路径穿越、绝对路径、越界软链；沿用 `FfmpegArchive` 的检查并补依赖归档的测试。
+- 构建产物由 agent uid 写出，探测与单帧编码也以 agent 身份执行；面板不以 root 运行新二进制。
+- `lgpl` profile 禁止 `--enable-gpl`，也禁止链接 x264/x265；当前靠构建参数与
+  `-encoders` 探测双重确认，链接表静态审计仍待补。
+- `nonfree` 不提供 UI；若未来提供，必须单独确认、不可再分发，并在 `runtime.json` 记录。
+- GPL profile 的分发义务：面板应保留对应源码包与构建配方（下载缓存/日志可清理，但配方与版本
+  固定），并在设置页说明；这是产品选择，不只是技术问题。
+- 构建期间限制并发与 `nice`，避免把面板/转码队列拖死；磁盘不足时先失败，不写半套。
+
+### 10. 验收
+
+- 干净 Debian 13（无 ffmpeg、无 `-dev`）：
+  - `lgpl` profile 构建成功，`-encoders` 含 `libvpx-vp9`、`libaom-av1`、`libsvtav1`、`libopus`、
+    `libmp3lame`，不含 `libx264` / `libx265`；`runtime.json.license=LGPL-2.1-or-later`；
+  - `gpl` profile 构建成功，含 `libx264` / `libx265`，`license=GPL-2.0-or-later`；
+  - 两种 profile 都通过 H.264/HEVC/VP9/AV1 的单帧编码（有对应编码器时）。
+- 依赖归档坏哈希/截断/路径穿越：失败且不产生 `current`。
+- 磁盘不足、超时、取消、断网换源：日志可读，临时目录可回收，旧 `current` 不受影响。
+- 重复构建同一 profile：命中源码缓存仍重新编译；M3 后才评估对象缓存。
+- 探测结果与声明不一致：设置页高亮，不静默当作可用。
+- `lgpl` 产物中静态检查不到 GPL 库；`gpl` 产物许可字段正确。
+- Windows：第一版不做；若后续做，只承诺 MinGW-w64 工具链，不引入 MSVC 全家桶。
+
+### 11. 里程碑（M0–M2 已落地，M3–M4 未做）
+
+| 阶段 | 内容 | 状态 |
+|---|---|---|
+| M0 | 配方 JSON、依赖 recipe 骨架、预检、UI 展示 | 已完成：`FfmpegFullBuildCatalog` + `/runtime/full-builds` |
+| M1 | Linux `lgpl` profile：libvpx/aom/svt-av1/opus/mp3lame 编译链 | 已完成（依赖栈 + 静态链接） |
+| M2 | Linux `gpl` profile：x264/x265 | 已完成（`featuresDeclared` + 单帧探测） |
+| M3 | 对象缓存、镜像/断点/重试、依赖版本升级流程 | 未做；当前只缓存 cmake/nasm，源码包每次重新下载 |
+| M4 | Windows MinGW、硬件头文件矩阵、多 GPU 探测 | 未做；只承诺 Linux |
+
+### 12. 开放问题
+
+1. 第一版依赖集合是否包含 `libdav1d`、`libvmaf`、`libass`/`libfreetype`；它们会显著增加构建面。
+2. 是否静态链接所有依赖（`--enable-static` + `.a`）还是保留共享库；静态更可移植，但 glibc 仍动态。
+3. 依赖版本固定策略：跟 FFmpeg 大版本走，还是各自 latest stable；后者会让同一面板版本产出不同字节。
+4. 源码缓存与 GPL 源码提供义务的生命周期；清理日志/缓存时如何保留合规材料。
+5. 构建产物的可复现性：是否记录 `configure` 全参数、编译器版本、依赖哈希；是否要求 bit-reproducible。
+6. Windows 的 MinGW 与 Linux 的 Zig/系统工具链差异；是否接受“同一 profile 在不同工具链下特性不同”。
+7. 是否把 Debian 源码包作为“补丁来源”而不是“全编码来源”；如果做，需要单独的 patch 应用与冲突处理。
+
+## 附录 A：设计评审待补清单
 
 > 2026-11-10 评审记录。实现前按优先级补齐，或在实现中明确取舍；不阻塞本文档定稿。
 

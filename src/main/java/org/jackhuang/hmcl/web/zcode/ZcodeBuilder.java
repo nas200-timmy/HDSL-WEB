@@ -19,10 +19,13 @@ package org.jackhuang.hmcl.web.zcode;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import org.jackhuang.hmcl.dsh.BuildToolchainManager;
 import org.jackhuang.hmcl.dsh.DshException;
 import org.jackhuang.hmcl.dsh.DshNodeRuntime;
 import org.jackhuang.hmcl.dsh.NodeRuntimeManager;
 import org.jackhuang.hmcl.dsh.NodeSource;
+import org.jackhuang.hmcl.dsh.PythonResolver;
+import org.jackhuang.hmcl.dsh.PythonRuntimeManager;
 import org.jackhuang.hmcl.util.io.Links;
 import org.jackhuang.hmcl.util.platform.Executables;
 import org.jetbrains.annotations.NotNullByDefault;
@@ -45,6 +48,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.jackhuang.hmcl.util.logging.Logger.LOG;
@@ -96,7 +100,27 @@ public final class ZcodeBuilder {
     /// @param sourceUrl   a URL or path template for the source tarball; `%s`
     ///                    is the version (or branch) name
     /// @param keepSources whether to keep the scratch tree after the build
-    public record Settings(Path root, String buildBin, String pnpm, String sourceUrl, boolean keepSources) {
+    /// @param pythonRoot  `<data>/toolchains/python`, where the shared CPython
+    ///                    lives; `null` means the panel's default root
+    /// @param buildToolchains the build toolchain manager, or `null` for the
+    ///                        panel's default (<data>/toolchains/build)
+    public record Settings(Path root, String buildBin, String pnpm, String sourceUrl, boolean keepSources,
+                           @Nullable Path pythonRoot, @Nullable BuildToolchainManager buildToolchains) {
+
+        public Settings {
+            pythonRoot = pythonRoot == null ? PythonRuntimeManager.defaultRoot() : pythonRoot;
+        }
+
+        /// The five-field form: the panel's shared Python root and build toolchain.
+        public Settings(Path root, String buildBin, String pnpm, String sourceUrl, boolean keepSources) {
+            this(root, buildBin, pnpm, sourceUrl, keepSources, null, null);
+        }
+
+        /// The six-field form: the shared Python root named, the default build toolchain.
+        public Settings(Path root, String buildBin, String pnpm, String sourceUrl, boolean keepSources,
+                        @Nullable Path pythonRoot) {
+            this(root, buildBin, pnpm, sourceUrl, keepSources, pythonRoot, null);
+        }
     }
 
     private static final int LOG_TAIL_LINES = 400;
@@ -251,7 +275,11 @@ public final class ZcodeBuilder {
             // download: a bare deployment with no Node 24 and no pnpm would otherwise
             // fail an hour in, at the step that runs pnpm.
             Settings effective = withToolchain(settings, step);
-            reportCompiler(step);
+            // The compiler first: a machine that cannot provide one should fail
+            // before a CPython download, not after it.
+            BuildToolchainManager.Toolchain buildToolchain = ensureBuildToolchain(effective, step);
+            ensurePython(effective, step);
+            reportCompiler(step, buildToolchain);
             step.set(0.03, "清理旧目录");
             deleteRecursively(settings.root().resolve("current"));
 
@@ -294,7 +322,7 @@ public final class ZcodeBuilder {
                 install.add("--config.node-linker=hoisted");
             }
             step.set(0.28, "安装依赖：pnpm install（最慢的一步，registry=" + registry + "）");
-            run(step, effective, sources, install, Duration.ofMinutes(90));
+            run(step, effective, sources, install, Duration.ofMinutes(90), buildToolchain);
 
             // Upstream's own build does not produce this, and its error message says to run
             // `pnpm build`, which does not either: `packages/shared` declares no build script, so
@@ -304,7 +332,7 @@ public final class ZcodeBuilder {
             // that has the file and a clean checkout does not.
             step.set(0.62, "补 packages/shared 的 dist（上游缺的一步）");
             run(step, effective, sources, List.of(effective.pnpm(), "exec", "tsc", "-b", "packages/shared"),
-                    Duration.ofMinutes(30));
+                    Duration.ofMinutes(30), buildToolchain);
             if (!Files.isRegularFile(sources.resolve("packages/shared/dist/index.js"))) {
                 throw new ZcodeException("packages/shared/dist/index.js was not produced,"
                         + " and the rest of the build cannot run without it");
@@ -313,13 +341,14 @@ public final class ZcodeBuilder {
             step.set(0.68, "构建发行包：pnpm build:zcode");
             run(step, effective, sources, List.of(effective.pnpm(), "build:zcode",
                     "--out-dir", outDir.toString(),
-                    "--base-url", "https://example.invalid/zcode/"), Duration.ofMinutes(90));
+                    "--base-url", "https://example.invalid/zcode/"), Duration.ofMinutes(90), buildToolchain);
 
             // Windows 起 agent 需要上游的 runtime host 帮手程序，而上游的 CLI 构建不
             // 含它（它属于桌面/远程资产的打包步骤）。趁源码还在，用 mingw 补上——
             // 缺工具链或编译失败都不阻断构建，见 ZcodeWindowsRuntimeHost。
             step.set(0.90, "制备 Windows runtime host 资产");
-            ZcodeWindowsRuntimeHost.provision(sources, settings.root(), step::log);
+            ZcodeWindowsRuntimeHost.provision(sources, settings.root(), step::log,
+                    buildToolchain.binDir());
 
             step.set(0.93, "安装发行包");
             installed = install(outDir, settings.root().resolve("releases"), ref);
@@ -605,6 +634,58 @@ public final class ZcodeBuilder {
     /// 24.14+, and the SEA staging and Vite 8 toolchain both need the modern line).
     private static final int MINIMUM_BUILD_NODE_MAJOR = 24;
 
+    /// Makes sure a shared CPython exists before the long download.
+    ///
+    /// node-gyp is the only consumer — `node-pty` ships a Windows prebuild and
+    /// `cpu-features` is optional, so a build can finish without touching it —
+    /// but a native module that does compile fails without an interpreter, and
+    /// that failure would arrive after an hour of pnpm work. One 3.12 line is
+    /// shared with the brands and with every later build.
+    ///
+    /// @param settings the build settings, naming the shared root
+    /// @param step the build step, for the log
+    /// @throws ZcodeException with `python_runtime_missing` when it cannot be installed
+    /// Names the interpreter for a build child.
+    ///
+    /// The panel's own root means "whatever the policy chose" — a host
+    /// interpreter when one matches, the shared line otherwise. A caller-named
+    /// root is an explicit choice and wins over the policy.
+    ///
+    /// @param environment the child's environment
+    /// @param settings    the build settings
+    private static void applyPython(Map<String, String> environment, Settings settings) {
+        if (settings.pythonRoot().equals(PythonRuntimeManager.defaultRoot())) {
+            PythonResolver.applyTo(environment);
+        } else {
+            PythonRuntimeManager.applyTo(environment, settings.pythonRoot());
+        }
+    }
+
+    private static void ensurePython(Settings settings, Step step) throws ZcodeException {
+        PythonResolver.Interpreter host = PythonResolver.resolve();
+        if (host.usable() && host.origin() != PythonResolver.Origin.MANAGED) {
+            step.log("=== 使用系统 Python " + host.version() + "：" + host.executable()
+                    + "（node-gyp 用；不下载共享运行时）");
+            return;
+        }
+        if (!PythonResolver.managedAllowed()) {
+            throw new ZcodeException("python_runtime_unavailable: 构建需要 Python 给 node-gyp，"
+                    + "但没有可用的系统解释器，且 HDSL_PYTHON_POLICY=system-only；"
+                    + "请安装 python3 或设置 HDSL_PYTHON");
+        }
+        try {
+            PythonRuntimeManager.Installed python =
+                    new PythonRuntimeManager(settings.pythonRoot()).ensureDefault();
+            step.log("=== 共享 CPython " + PythonRuntimeManager.defaultVersion() + "：" + python.interpreter()
+                    + "（node-gyp 用；缓存于 " + python.directory() + "）");
+        } catch (IOException e) {
+            throw new ZcodeException("python_runtime_missing: 构建需要 CPython "
+                    + PythonRuntimeManager.defaultVersion() + " 给 node-gyp，但共享运行时安装失败（"
+                    + e.getMessage() + "）。检查网络后重试；也可先把 CPython 放进 "
+                    + settings.pythonRoot(), e);
+        }
+    }
+
     /// Makes sure the build has the toolchain it needs, installing what is
     /// missing into the data directory.
     ///
@@ -636,7 +717,8 @@ public final class ZcodeBuilder {
             step.log("=== 构建工具链：镜像自带的 Node 24（" + image + "），pnpm "
                     + (settings.pnpm().isBlank() ? "pnpm（PATH）" : settings.pnpm()));
             return new Settings(settings.root(), image.toString(), settings.pnpm(),
-                    settings.sourceUrl(), settings.keepSources());
+                    settings.sourceUrl(), settings.keepSources(), settings.pythonRoot(),
+                    settings.buildToolchains());
         }
         DshNodeRuntime runtime = DshNodeRuntime.detectManaged()
                 .filter(candidate -> majorOf(candidate.nodeVersion()) >= MINIMUM_BUILD_NODE_MAJOR)
@@ -662,35 +744,38 @@ public final class ZcodeBuilder {
         }
         String pnpm = settings.pnpm();
         if (pnpm.isBlank() || "pnpm".equals(pnpm)) {
-            pnpm = ensurePnpm(runtime, step);
+            pnpm = ensurePnpm(runtime, settings, step);
         }
         step.log("=== 构建工具链：" + runtime.node() + "（" + runtime.nodeVersion() + "），pnpm " + pnpm);
         return new Settings(settings.root(), runtime.binDirectory().toString(), pnpm,
-                settings.sourceUrl(), settings.keepSources());
+                settings.sourceUrl(), settings.keepSources(), settings.pythonRoot(),
+                settings.buildToolchains());
     }
 
-    /// Tells the operator what the build does and does not have in the way of a
-    /// C++ compiler.
+    /// Tells the operator which C++ compiler the build will use.
     ///
-    /// A ZCode build does not need one: `node-pty` ships `prebuilds/win32-x64`, and
-    /// `cpu-features` — the only dependency whose install runs `node-gyp` — is an
-    /// **optional** dependency of `ssh2`, so pnpm carries on when it cannot compile
-    /// (measured on Windows 10 without MSVC: the build completes, `cpufeatures.node`
-    /// is simply absent and ssh2 falls back). Saying that before the install turns
-    /// the expected `Unable to detect compiler type` in the log from a scare into a
-    /// known skip.
+    /// The build resolves the panel's general toolchain first (w64devkit on
+    /// Windows, the host's compiler or the portable Zig/make combination on
+    /// Linux). That compiler is what makes the Windows runtime-host helper and
+    /// any optional native dependency (`cpu-features` under `ssh2`) buildable;
+    /// `node-pty` still ships a `win32-x64` prebuild, so a missing compiler is
+    /// no longer the expected "skip" it once was.
     ///
     /// The panel deliberately **does not download** MSVC: Microsoft ships `cl.exe`
     /// only through the Visual Studio installer, where the minimal supported set
-    /// (VC++ tools + Windows SDK) is several GB and needs an administrator. The one
-    /// thing that does need a C++ toolchain — the Windows runtime-host helper —
-    /// instead compiles with a self-downloaded **MinGW** zip (a plain extraction,
-    /// no admin), see [ZcodeWindowsRuntimeHost].
+    /// (VC++ tools + Windows SDK) is several GB and needs an administrator. The
+    /// MinGW route is a plain extraction and needs no administrator.
     ///
     /// @param step the build step, for the log
-    private static void reportCompiler(Step step) {
+    /// @param toolchain the toolchain [ensureBuildToolchain] provided
+    private static void reportCompiler(Step step, BuildToolchainManager.Toolchain toolchain) {
         if (org.jackhuang.hmcl.util.platform.OperatingSystem.CURRENT_OS
                 != org.jackhuang.hmcl.util.platform.OperatingSystem.WINDOWS) {
+            return;
+        }
+        if (toolchain.has("g++")) {
+            step.log("=== C++ 编译链：" + toolchain.pathOf("g++") + "（"
+                    + (toolchain.portable() ? "面板安装的 MinGW" : "系统 MinGW") + "）");
             return;
         }
         Path compiler = msvcCompiler();
@@ -698,10 +783,40 @@ public final class ZcodeBuilder {
             step.log("=== C++ 编译链：" + compiler + "（可选原生依赖可现场编译）");
             return;
         }
-        step.log("=== 未检测到 MSVC C++ 编译器：cpu-features（ssh2 的可选依赖）会被跳过，不影响本次构建");
-        step.log("    需要它时安装 VS Build Tools 的 VC++ 组件（约 2.5–3 GB，需管理员）：");
-        step.log("    vs_buildtools.exe --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64"
-                + " --add Microsoft.VisualStudio.Component.Windows11SDK.22621");
+        step.log("=== 未检测到 C++ 编译器：cpu-features（ssh2 的可选依赖）会被跳过，不影响本次构建");
+    }
+
+    /// Makes sure a source build has a C/C++ toolchain before the long download.
+    ///
+    /// The panel's build toolchain is the same one ffmpeg and the brand installs
+    /// use: w64devkit on Windows, the host's compiler or a portable Zig/make
+    /// combination on Linux. A failure here is reported as
+    /// `build_toolchain_missing`, before an hour of pnpm work has run.
+    ///
+    /// @param settings the build settings, naming the manager to use
+    /// @param step the build step, for the log
+    /// @return the resolved toolchain
+    /// @throws ZcodeException when no usable toolchain can be provided
+    private static BuildToolchainManager.Toolchain ensureBuildToolchain(Settings settings, Step step)
+            throws ZcodeException {
+        BuildToolchainManager manager = settings.buildToolchains() != null
+                ? settings.buildToolchains() : BuildToolchainManager.defaultManager();
+        try {
+            BuildToolchainManager.Toolchain toolchain = manager.ensureForBuild(
+                    (message, fraction) -> step.log("[toolchain] " + message), () -> false);
+            step.log("=== 构建工具链：" + toolchain.describe());
+            return toolchain;
+        } catch (IOException e) {
+            String detail = e.getMessage() == null ? "" : e.getMessage().trim();
+            String prefix = "build_toolchain_missing:";
+            if (detail.startsWith(prefix)) {
+                detail = detail.substring(prefix.length()).trim();
+            }
+            throw new ZcodeException("build_toolchain_missing: ZCode 源码构建需要 C/C++ 编译器与 make，"
+                    + "但面板无法提供（" + detail + "）。这台机器联网后重试即可："
+                    + "Windows 会安装 w64devkit，Linux x64 会安装 Zig + GNU make 组合；"
+                    + "也可以先自行安装 gcc/g++/make 再重试。", e);
+        }
     }
 
     /// Finds `cl.exe` through the Visual Studio installer's own locator.
@@ -821,7 +936,7 @@ public final class ZcodeBuilder {
     /// @param step the build step, for progress in the log
     /// @return the pnpm executable's path
     /// @throws ZcodeException when pnpm cannot be installed
-    private static String ensurePnpm(DshNodeRuntime runtime, Step step) throws ZcodeException {
+    private static String ensurePnpm(DshNodeRuntime runtime, Settings settings, Step step) throws ZcodeException {
         Path existing = runtime.pnpm();
         if (existing != null) {
             return existing.toString();
@@ -839,10 +954,15 @@ public final class ZcodeBuilder {
         step.log("=== 该运行时没有 pnpm，正在装进 " + prefix + "（只需一次）");
         String registry = org.jackhuang.hmcl.dsh.NpmRegistry.effective().registry();
         try {
-            Process process = new ProcessBuilder(Executables.startable(List.of(npm.toString(),
-                    "install", "--global", "pnpm@11", "--prefix", prefix.toString(), "--registry=" + registry)))
-                    .redirectErrorStream(true)
-                    .start();
+            ProcessBuilder pnpmBuilder = new ProcessBuilder(Executables.startable(List.of(npm.toString(),
+                    "install", "--global", "pnpm@11", "--prefix", prefix.toString(), "--registry=" + registry)));
+            pnpmBuilder.redirectErrorStream(true);
+            // The build's own Python root goes first: the resolver and the build
+            // toolchain only fill a blank name, so applying it first is what makes
+            // node-gyp receive this build's interpreter rather than the host's.
+            applyPython(pnpmBuilder.environment(), settings);
+            org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(pnpmBuilder);
+            Process process = pnpmBuilder.start();
             try (var reader = new java.io.BufferedReader(
                     new java.io.InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
@@ -911,27 +1031,46 @@ public final class ZcodeBuilder {
 
     /// Runs a child process, copying its merged output into the build log.
     private static void run(Step step, Settings settings, Path workingDirectory, List<String> command,
-                            Duration timeout) throws ZcodeException {
-        // The shims come first so a bare `tar` (the build script's own call) resolves
-        // to the system one, then the build toolchain, then the panel's own PATH. The
-        // order matters for the *program name* too: the toolchain's pnpm has to be the
-        // one found, which is why the command is resolved against this PATH rather
-        // than this process's own.
-        String path = System.getenv("PATH");
+                            Duration timeout, BuildToolchainManager.Toolchain toolchain)
+            throws ZcodeException {
+        ProcessBuilder builder = new ProcessBuilder();
+        builder.directory(workingDirectory.toFile());
+        builder.redirectErrorStream(true);
+        // The build's own Python root, which is the same as the panel's unless a
+        // caller named another. node-gyp reads both names; pnpm's install scripts
+        // (`cpu-features`, when it has to compile) are the only consumer here.
+        // It is applied before the resolver and the toolchain because both only
+        // fill a blank name — this build's choice has to win over the host's.
+        applyPython(builder.environment(), settings);
+        org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(builder);
+        // The toolchain the build resolved before the download. `applyTo` prefixes
+        // this build's `bin` and leaves an operator's CC/CXX alone; the portable
+        // Linux pkgconf also needs its `lib/` on LD_LIBRARY_PATH, which is part of
+        // the same map.
+        toolchain.applyTo(builder.environment());
+        // The shims come first so a bare `tar` (the build script's own call)
+        // resolves to the system one, then the toolchain, then the panel's own
+        // PATH. Composing the list *after* `applyTo` is what makes that true;
+        // before, the toolchain's `bin` was prepended ahead of the shims and the
+        // `tar.bat` this build writes could never win. The command name is
+        // resolved against the same list.
+        String pathKey = org.jackhuang.hmcl.dsh.BootstrapEnvironment
+                .pathKey(builder.environment());
+        String basePath = org.jackhuang.hmcl.dsh.BootstrapEnvironment
+                .pathValue(builder.environment());
         // The separator is a property of the system, not of the variable's name:
         // hardcoding `:` on Windows makes the whole inherited PATH into one entry
         // that names nothing.
         StringBuilder searchPath = new StringBuilder(shimDirectory(settings).toString());
-        if (!settings.buildBin().isBlank()) {
+        if (!settings.buildBin().isBlank()
+                && (basePath == null || !basePath.contains(settings.buildBin()))) {
             searchPath.append(java.io.File.pathSeparator).append(settings.buildBin());
         }
-        if (path != null && !path.isEmpty()) {
-            searchPath.append(java.io.File.pathSeparator).append(path);
+        if (basePath != null && !basePath.isBlank()) {
+            searchPath.append(java.io.File.pathSeparator).append(basePath);
         }
-        ProcessBuilder builder = new ProcessBuilder(Executables.startable(command, searchPath.toString()));
-        builder.directory(workingDirectory.toFile());
-        builder.redirectErrorStream(true);
-        builder.environment().put("PATH", searchPath.toString());
+        builder.environment().put(pathKey, searchPath.toString());
+        builder.command(Executables.startable(command, searchPath.toString()));
         // Everything a child of the launcher is given: the proxy the settings describe, the npm
         // registry, and the knobs that keep a native build from fetching from the slow half of the
         // internet. The build runs pnpm, node-gyp and git, and all three read these — the proxy

@@ -41,4 +41,15 @@ public interface AcmeDnsProvider {
     /// Removes the TXT record created by [present]. Best-effort: a missing
     /// record is not an error.
     void cleanup(String fqdn, String value) throws AcmeDnsException;
+
+    /// Read-only check that the credential is well-formed and permitted.
+    ///
+    /// Used by the settings page's "test credential" button, before a
+    /// certificate is issued. Providers call the cheapest list/verify endpoint
+    /// they have; a least-privilege key that may edit records but not list
+    /// domains can still fail here, so the message should say which permission
+    /// the check needed.
+    default void test() throws AcmeDnsException {
+        throw new AcmeDnsException("this DNS provider does not support credential testing");
+    }
 }

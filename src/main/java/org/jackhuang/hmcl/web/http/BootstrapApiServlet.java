@@ -1,0 +1,364 @@
+/*
+ * HDSL
+ * Copyright (C) 2026  HDSL contributors
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+package org.jackhuang.hmcl.web.http;
+
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import jakarta.servlet.http.HttpServlet;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.jackhuang.hmcl.dsh.BootstrapCatalog;
+import org.jackhuang.hmcl.dsh.BootstrapRuntimeManager;
+import org.jackhuang.hmcl.dsh.BuildToolchainManager;
+import org.jackhuang.hmcl.dsh.PythonResolver;
+import org.jackhuang.hmcl.dsh.PythonRuntimeManager;
+import org.jackhuang.hmcl.dsh.UvRuntime;
+import org.jackhuang.hmcl.util.platform.Architecture;
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
+import org.jackhuang.hmcl.web.audit.AuditLog;
+import org.jackhuang.hmcl.web.auth.AuthFilter;
+import org.jackhuang.hmcl.web.task.TaskService;
+import org.jetbrains.annotations.NotNullByDefault;
+import org.jetbrains.annotations.Nullable;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Instant;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+/// The runtime-environment page: what the panel can provide, what is already
+/// here, and what it would fetch.
+///
+/// - `GET  /api/bootstrap`          — `{catalog, bundles: [...], generatedAt}`
+/// - `POST /api/bootstrap/install`  — `{bundle}` → `{taskId}`
+///
+/// Every bundle names four things, because "missing libatomic" alone does not
+/// tell anyone what to do: what is missing, why it will be needed, where the
+/// bytes come from (URL and digest), and where they land. Installing is always
+/// an explicit request; nothing here runs on a timer or on page load.
+@NotNullByDefault
+public final class BootstrapApiServlet extends HttpServlet {
+
+    /// Bundles this page can provision.
+    private static final List<String> BUNDLES = List.of("closure", "ca", "python",
+            "toolchain", "toolchain-portable", "uv");
+
+    private final TaskService tasks;
+
+    public BootstrapApiServlet(TaskService tasks) {
+        this.tasks = tasks;
+    }
+
+    @Override
+    protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        Json.write(response, report());
+    }
+
+    @Override
+    protected void doPost(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        String bundle = bundleOf(request);
+        if (bundle == null || !BUNDLES.contains(bundle)) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, "unknown_bundle: " + bundle);
+            return;
+        }
+        if ("python".equals(bundle) && !PythonResolver.managedAllowed()) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "python_runtime_disabled: HDSL_PYTHON_POLICY=" + PythonResolver.policy().name()
+                            .toLowerCase(java.util.Locale.ROOT)
+                            + " forbids downloading a shared CPython; install python3 or set"
+                            + " HDSL_PYTHON");
+            return;
+        }
+        TaskService.Task task = submit(bundle);
+        AuditLog.log(AuditLog.Channel.WEB, "bootstrap.install", bundle, "submitted",
+                actorOf(request), request.getRemoteAddr());
+        Json.write(response, Map.of("taskId", task.id()));
+    }
+
+    private TaskService.Task submit(String bundle) {
+        return switch (bundle) {
+            case "closure" -> tasks.submit("bootstrap-closure", null, live -> {
+                live.update("下载并校验运行时闭包", -1);
+                BootstrapRuntimeManager.ensureRuntimeClosure();
+                return "运行时闭包已就绪";
+            });
+            case "ca" -> tasks.submit("bootstrap-ca", null, live -> {
+                live.update("下载并校验 CA 证书", -1);
+                BootstrapRuntimeManager.ensureCaBundle();
+                return "CA 证书已就绪";
+            });
+            case "python" -> tasks.submit("bootstrap-python", null, live -> {
+                live.update("下载并校验 CPython", -1);
+                PythonRuntimeManager.Installed installed = PythonRuntimeManager.ensureShared();
+                return "CPython " + installed.version() + " 已就绪";
+            });
+            case "toolchain" -> tasks.submit("bootstrap-toolchain", null, live -> {
+                live.update("准备构建工具链", -1);
+                BuildToolchainManager.Toolchain toolchain = BuildToolchainManager.defaultManager()
+                        .ensureForBuild((message, fraction) -> live.update(message, fraction),
+                                live::isCancelled);
+                return toolchain.portable() ? "便携构建工具链已就绪" : "宿主构建工具链可用";
+            });
+            case "toolchain-portable" -> tasks.submit("bootstrap-toolchain-portable", null, live -> {
+                live.update("下载便携工具链", -1);
+                BuildToolchainManager.Toolchain toolchain = BuildToolchainManager.defaultManager()
+                        .installPortable((message, fraction) -> live.update(message, fraction),
+                                live::isCancelled);
+                return toolchain.portable() ? "便携工具链已就绪" : "便携工具链已是宿主工具链";
+            });
+            case "uv" -> tasks.submit("bootstrap-uv", null, live -> {
+                live.update("下载并校验 uv", -1);
+                org.jackhuang.hmcl.web.brand.BrandInstaller.ensureSharedUv(
+                        message -> live.update(message, -1));
+                return "uv " + UvRuntime.version() + " 已就绪";
+            });
+            default -> throw new IllegalArgumentException("unknown bundle: " + bundle);
+        };
+    }
+
+    /// The whole page in one response.
+    ///
+    /// @return the JSON body
+    public static JsonObject report() {
+        JsonObject body = new JsonObject();
+        body.addProperty("catalog", BootstrapCatalog.origin().describe());
+        body.addProperty("pythonPolicy",
+                PythonResolver.policy().name().toLowerCase(java.util.Locale.ROOT));
+        JsonArray bundles = new JsonArray();
+        bundles.add(closure());
+        bundles.add(ca());
+        bundles.add(python());
+        bundles.add(toolchain());
+        bundles.add(portableToolchain());
+        bundles.add(uv());
+        body.add("bundles", bundles);
+        body.addProperty("generatedAt", Instant.now().toString());
+        return body;
+    }
+
+    static JsonObject closure() {
+        String why = "安装或运行 Node.js 时需要：Node 的二进制链接这些库。";
+        if (OperatingSystem.CURRENT_OS != OperatingSystem.LINUX) {
+            return bundle("closure", "运行时闭包", "not-applicable",
+                    "此系统的 Node.js 不链接 glibc 闭包", why, null, null, null, false);
+        }
+        BootstrapRuntimeManager.Installed installed = BootstrapRuntimeManager.currentRuntimeClosure();
+        List<String> missing = BootstrapRuntimeManager.missingNodeLibraries();
+        if (missing.isEmpty()) {
+            return bundle("closure", "运行时闭包", "ready",
+                    installed == null
+                            ? "宿主提供 libstdc++ / libgcc / libatomic，无需下载"
+                            : "面板闭包 " + installed.version(),
+                    why, null, null, installed == null ? null : installed.directory(), false);
+        }
+        BootstrapCatalog.Runtime pinned = BootstrapCatalog.current().runtime("linux", archTag());
+        BootstrapCatalog.Artifact first = pinned == null || pinned.artifacts().isEmpty()
+                ? null : pinned.artifacts().get(0);
+        return bundle("closure", "运行时闭包", "missing",
+                "缺 " + String.join(", ", missing), why,
+                first == null ? null : first.url(),
+                first == null ? null : first.sha256(),
+                installed == null ? null : installed.directory(), first != null);
+    }
+
+    static JsonObject ca() {
+        String why = "子进程走 HTTPS 时需要：npm、git、uv 和各个 agent 都读它。";
+        BootstrapRuntimeManager.CaInstalled installed = BootstrapRuntimeManager.currentCaBundle();
+        if (installed != null) {
+            return bundle("ca", "CA 证书", "ready",
+                    "cacert " + installed.version() + " · " + installed.file(),
+                    why, null, null, installed.file(), false);
+        }
+        BootstrapCatalog.Ca pinned = BootstrapCatalog.current().ca();
+        return bundle("ca", "CA 证书", "missing",
+                "未安装（子进程目前依赖 JVM 自带的信任库）", why,
+                pinned == null ? null : pinned.url(),
+                pinned == null ? null : pinned.sha256(), null, pinned != null);
+    }
+
+    static JsonObject python() {
+        String why = "品牌源码安装、node-gyp 编译原生模块时需要解释器。";
+        String policy = PythonResolver.policy().name().toLowerCase(java.util.Locale.ROOT);
+        PythonResolver.Interpreter python = PythonResolver.resolve();
+        if (python.usable()) {
+            String detail = python.version() + " · " + originLabel(python.origin())
+                    + (python.origin() == PythonResolver.Origin.SYSTEM ? "（不下载共享 CPython）" : "")
+                    + " · 策略 " + policy;
+            return bundle("python", "Python", "ready", detail,
+                    why, null, null, python.executable(), false);
+        }
+        PythonRuntimeManager.Artifact pinned = PythonRuntimeManager.defaultArtifact();
+        boolean canInstall = pinned != null && PythonResolver.managedAllowed();
+        String detail = canInstall
+                ? "没有可用的解释器（面板可提供 CPython "
+                + PythonRuntimeManager.defaultVersion() + "，策略 " + policy + "）"
+                : "没有可用的解释器；策略为 " + policy
+                + "，请安装 python3 或设置 HDSL_PYTHON";
+        return bundle("python", "Python", "missing", detail, why,
+                canInstall ? pinned.url() : null,
+                canInstall ? pinned.sha256() : null,
+                PythonRuntimeManager.defaultRoot().resolve(PythonRuntimeManager.defaultVersion()),
+                canInstall);
+    }
+
+    static JsonObject toolchain() {
+        boolean windows = OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS;
+        String label = windows ? "构建工具链（w64devkit，可选）" : "构建工具链（Zig，可选）";
+        String why = "只在源码构建需要时安装：ffmpeg 源码/全编码构建、品牌源码安装。"
+                + "系统已有完整的 cc / c++ / make（Windows 还需要 POSIX sh）时不需要它；"
+                + "选择「系统工具链」也不会下载。";
+        BuildToolchainManager.Toolchain toolchain = BuildToolchainManager.defaultManager().detect();
+        if (toolchain.usable()) {
+            String detail = toolchain.portable() && toolchain.directory() != null
+                    ? (windows ? "w64devkit " : "Zig ")
+                    + toolchain.os() + "-" + toolchain.arch() + " · " + toolchain.directory()
+                    : "宿主提供（cc=" + String.valueOf(toolchain.pathOf("cc")) + "）";
+            return bundle("toolchain", label, "ready", detail, why, null, null,
+                    toolchain.directory(), false);
+        }
+        return bundle("toolchain", label, "missing",
+                toolchain.missing().isEmpty() ? "没有可用的编译器"
+                        : "缺 " + String.join(", ", toolchain.missing())
+                        + "；点击后从官方源与内置镜像测速下载",
+                why, null, null, null, canInstallToolchain());
+    }
+
+    /// The portable compiler as an **optional** bundle: installing it even when the
+/// host already provides gcc is a supported choice (reproducible builds, or a
+/// host whose compiler is incomplete). `auto` still prefers the system toolchain,
+/// so this never changes a build behind the operator's back.
+static JsonObject portableToolchain() {
+        boolean windows = OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS;
+        String kind = windows
+                ? "w64devkit " + BuildToolchainManager.windowsPortableVersion()
+                : "Zig " + BuildToolchainManager.zigVersion();
+        String label = windows ? "便携工具链（w64devkit，可选）" : "便携工具链（Zig，可选）";
+        String why = "系统工具链可用时不需要；安装后可在转码源码构建里选「"
+                + (windows ? "w64devkit" : "Zig") + "（便携）」。"
+                + "「自动」仍优先系统工具链，不会因为装了就切换。";
+        BuildToolchainManager.Toolchain installed =
+                BuildToolchainManager.defaultManager().installed();
+        if (installed != null && installed.usable()) {
+            return bundle("toolchain-portable", label, "ready",
+                    kind + " · " + installed.directory(), why, null, null,
+                    installed.directory(), false);
+        }
+        if (!canInstallToolchain()) {
+            return bundle("toolchain-portable", label, "not-applicable",
+                    "此平台没有固定版本的便携工具链", why, null, null, null, false);
+        }
+        return bundle("toolchain-portable", label, "missing",
+                "未安装；点击下载 " + kind + "（官方源 + 内置镜像，安装前测速）",
+                why, null, null, null, true);
+    }
+
+    static JsonObject uv() {
+        String why = "品牌源码安装用它装 Python 依赖；面板会先校验它的 SHA-256。";
+        Path binary = UvRuntime.sharedBinary();
+        if (Files.isRegularFile(binary) && UvRuntime.verifiedCached(binary)) {
+            return bundle("uv", "uv", "ready",
+                    "uv " + UvRuntime.version() + " · SHA-256 校验通过",
+                    why, null, null, binary, false);
+        }
+        String sha = UvRuntime.binarySha256();
+        if (sha == null) {
+            return bundle("uv", "uv", "not-applicable",
+                    "此平台没有固定摘要，面板拒绝安装未校验的 uv",
+                    why, null, null, binary, false);
+        }
+        return bundle("uv", "uv", "missing",
+                "未安装（uv " + UvRuntime.version() + "，" + UvRuntime.platformTag() + "）",
+                why,
+                "https://github.com/astral-sh/uv/releases/tag/" + UvRuntime.version(),
+                sha, binary, true);
+    }
+
+    private static JsonObject bundle(String id, String label, String state, String detail,
+                                     String why, @Nullable String source, @Nullable String sha256,
+                                     @Nullable Path destination, boolean canInstall) {
+        JsonObject object = new JsonObject();
+        object.addProperty("id", id);
+        object.addProperty("label", label);
+        object.addProperty("state", state);
+        object.addProperty("detail", detail);
+        object.addProperty("why", why);
+        if (source != null) {
+            object.addProperty("source", source);
+        }
+        if (sha256 != null) {
+            object.addProperty("sha256", sha256);
+        }
+        if (destination != null) {
+            object.addProperty("destination", destination.toString());
+        }
+        object.addProperty("canInstall", canInstall);
+        return object;
+    }
+
+    private static String originLabel(PythonResolver.Origin origin) {
+        return switch (origin) {
+            case OPERATOR -> "操作者指定";
+            case SYSTEM -> "宿主提供";
+            case MANAGED -> "面板托管";
+            case NONE -> "无";
+        };
+    }
+
+    static boolean canInstallToolchain() {
+        return switch (OperatingSystem.CURRENT_OS) {
+            case LINUX -> Architecture.CURRENT_ARCH == Architecture.X86_64
+                    || Architecture.CURRENT_ARCH == Architecture.ARM64;
+            case WINDOWS -> Architecture.CURRENT_ARCH == Architecture.X86_64;
+            default -> false;
+        };
+    }
+
+    /// `x64`, `arm64`, or the enum name — the keys the catalogue uses.
+    static String archTag() {
+        return switch (Architecture.CURRENT_ARCH) {
+            case X86_64 -> "x64";
+            case ARM64 -> "arm64";
+            default -> Architecture.CURRENT_ARCH.name().toLowerCase(Locale.ROOT);
+        };
+    }
+
+    private static @Nullable String bundleOf(HttpServletRequest request) throws IOException {
+        String body = request.getReader().lines().collect(Collectors.joining("\n"));
+        if (body.isBlank()) {
+            return null;
+        }
+        try {
+            JsonObject object = JsonParser.parseString(body).getAsJsonObject();
+            return object.has("bundle") && object.get("bundle").isJsonPrimitive()
+                    ? object.get("bundle").getAsString() : null;
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private static @Nullable String actorOf(HttpServletRequest request) {
+        Object session = request.getAttribute(AuthFilter.SESSION_ATTRIBUTE);
+        return session instanceof org.jackhuang.hmcl.web.auth.AuthService.Session s
+                ? s.username() : null;
+    }
+}

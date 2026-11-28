@@ -130,6 +130,11 @@ public final class Main {
 
             Logger.LOG.start(config.dataDir.resolve("logs"));
 
+            // A minimal image's setpriv lives in the panel's bootstrap closure.
+            // Registering it here means the first agent launch can use it; a
+            // system setpriv still wins inside `Privileges`.
+            org.jackhuang.hmcl.dsh.BootstrapRuntimeManager.registerBootstrapTools();
+
             // 日志保留：启动清理一次，之后每天一次。审计按文件名里的日期算年龄，
             // 面板日志按 mtime；保底 180 天、上限四年，面板接口可往上调（见 LogRetention）。
             LogRetention.install(new LogRetention(

@@ -87,7 +87,7 @@ class AuthSetupTest {
             assertTrue(body.get("ok").getAsBoolean());
             assertEquals("alice", body.get("username").getAsString());
             String setCookie = setup.headers().firstValue("set-cookie").orElseThrow();
-            assertTrue(setCookie.startsWith(AuthFilter.SESSION_COOKIE + "="), setCookie);
+            assertTrue(setCookie.startsWith(org.jackhuang.hmcl.web.auth.SessionCookies.name() + "="), setCookie);
             String cookie = setCookie.split(";", 2)[0];
 
             // The setup session works right away — no second login needed.

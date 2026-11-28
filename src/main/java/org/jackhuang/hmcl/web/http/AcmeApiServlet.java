@@ -26,6 +26,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.jackhuang.hmcl.web.acme.AcmeCa;
 import org.jackhuang.hmcl.web.acme.AcmeCredentialStore;
+import org.jackhuang.hmcl.web.acme.AcmeDnsException;
 import org.jackhuang.hmcl.web.acme.AcmeDnsProviderRegistry;
 import org.jackhuang.hmcl.web.acme.AcmeService;
 import org.jackhuang.hmcl.web.audit.AuditLog;
@@ -48,6 +49,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
@@ -109,6 +111,13 @@ public final class AcmeApiServlet extends HttpServlet {
             return;
         }
         switch (path) {
+            case "/credentials/test" -> {
+                if ("POST".equals(method)) {
+                    testCredentials(request, response);
+                } else {
+                    Json.error(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "use POST");
+                }
+            }
             case "/credentials" -> {
                 if ("PUT".equals(method)) {
                     updateCredentials(request, response);
@@ -174,6 +183,7 @@ public final class AcmeApiServlet extends HttpServlet {
             row.addProperty("label", provider.label());
             row.addProperty("group", provider.group());
             row.addProperty("implemented", provider.implemented());
+            row.addProperty("credentialHint", provider.credentialHint());
             JsonArray fields = new JsonArray();
             for (AcmeDnsProviderRegistry.Field field : provider.fields()) {
                 JsonObject f = new JsonObject();
@@ -357,6 +367,74 @@ public final class AcmeApiServlet extends HttpServlet {
     }
 
     // ------------------------------------------------------------- credentials --
+
+    /// Checks a provider credential without saving it, and without issuing a
+    /// certificate. Blank fields fall back to the stored profile (edit mode),
+    /// exactly like saving does, so a user can test an unchanged profile too.
+    private void testCredentials(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!requireTls(request, response) || !requireElevation(request, response)) {
+            return;
+        }
+        JsonObject body = readBody(request, response);
+        if (body == null) {
+            return;
+        }
+        AcmeCredentialStore stored = credentials();
+        if (stored == null) {
+            Json.error(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+                    "ACME credential store is not available; check the data directory permissions");
+            return;
+        }
+        String id = string(body, "id", "");
+        AcmeCredentialStore.Credential existing = stored.find(id);
+        if (!id.isBlank() && existing == null) {
+            Json.error(response, HttpServletResponse.SC_NOT_FOUND, "credential profile not found");
+            return;
+        }
+        String provider = string(body, "provider", existing == null ? "" : existing.provider());
+        AcmeDnsProviderRegistry.Info info = AcmeDnsProviderRegistry.find(provider);
+        if (info == null || !info.implemented()) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "unknown or unimplemented DNS provider: " + provider);
+            return;
+        }
+        Map<String, String> dns = new LinkedHashMap<>();
+        if (body.has("dns") && body.get("dns").isJsonObject()) {
+            for (Map.Entry<String, JsonElement> entry : body.getAsJsonObject("dns").entrySet()) {
+                if (entry.getValue().isJsonPrimitive()) {
+                    dns.put(entry.getKey(), entry.getValue().getAsString());
+                }
+            }
+        }
+        Map<String, String> existingDns = existing != null && provider.equals(existing.provider())
+                ? existing.dns() : Map.of();
+        for (AcmeDnsProviderRegistry.Field field : info.fields()) {
+            String value = dns.get(field.key());
+            if (value == null || value.isBlank()) {
+                String previous = existingDns.get(field.key());
+                if (previous != null && !previous.isBlank()) {
+                    dns.put(field.key(), previous);
+                    value = previous;
+                }
+            }
+            if (field.required() && (value == null || value.isBlank())) {
+                Json.error(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "missing credential field: " + field.key());
+                return;
+            }
+        }
+        try {
+            AcmeDnsProviderRegistry.create(provider, dns).test();
+        } catch (AcmeDnsException e) {
+            Json.error(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+            return;
+        }
+        JsonObject answer = new JsonObject();
+        answer.addProperty("ok", true);
+        answer.addProperty("provider", provider);
+        answer.addProperty("message", info.label() + " 凭证可用");
+        Json.write(response, answer);
+    }
 
     private void updateCredentials(HttpServletRequest request, HttpServletResponse response) throws IOException {
         if (!requireTls(request, response) || !requireElevation(request, response)) {
@@ -624,7 +702,7 @@ public final class AcmeApiServlet extends HttpServlet {
         for (AcmeDnsProviderRegistry.Field field : info.fields()) {
             String value = dns.get(field.key());
             if (value != null && !value.isBlank()) {
-                masked.addProperty(field.key(), field.secret() ? mask(value) : value);
+                masked.addProperty(field.key(), maskValue(field.key(), value, field.secret()));
             }
         }
         return masked;
@@ -639,6 +717,15 @@ public final class AcmeApiServlet extends HttpServlet {
             if (hmac != null) masked.addProperty("hmacKey", mask(hmac));
         }
         return masked;
+    }
+
+    /// Identifiers that are not passwords but still name the account. The
+    /// read-only preview masks them like secrets; the edit form leaves the
+    /// stored value alone when the field is left blank.
+    private static final Set<String> MASKED_IDENTIFIERS = Set.of("accessKeyId", "secretId");
+
+    static String maskValue(String key, String value, boolean secret) {
+        return secret || MASKED_IDENTIFIERS.contains(key) ? mask(value) : value;
     }
 
     private static String mask(String value) {

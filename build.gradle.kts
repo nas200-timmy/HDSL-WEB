@@ -83,6 +83,14 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+    // The panel honours PYTHON / npm_config_python / UV_PYTHON from its own
+    // environment as the operator's choice, so a test JVM that inherits them
+    // makes "the build's own interpreter wins" pass or fail depending on the
+    // shell that started Gradle. Tests state their environment explicitly.
+    environment.remove("PYTHON")
+    environment.remove("npm_config_python")
+    environment.remove("UV_PYTHON")
+    environment.remove("HDSL_PYTHON")
     // 全套用例跑在一个 fork 的 JVM 里，而 Gradle 的默认上限是 512m——本机峰值在
     // 256–384m 之间（256m 会 OOM），正好卡在默认值边上，于是 CI 上（核数不同、GC 行为
     // 不同）翻过去成了 `java.lang.OutOfMemoryError: Java heap space`。给一个有富余的界：

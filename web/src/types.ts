@@ -6,6 +6,8 @@ export interface Health {
   /** 面板自身运行的 JDK，只给大版本号（`/api/health` 免认证，不该送完整指纹）。 */
   java?: string;
   uptimeSec: number;
+  /** 面板实例 id（`<data>/instance-id`），用于区分同机同域名的多个面板。 */
+  instance?: string;
 }
 
 export interface VersionInfo {
@@ -302,6 +304,8 @@ export interface AcmeProviderInfo {
   label: string;
   group: string;
   implemented: boolean;
+  /** 凭据类型、去哪申请、最小权限；旧后端不返回时为空。 */
+  credentialHint?: string;
   fields: AcmeProviderField[];
 }
 
@@ -528,6 +532,30 @@ export interface DoctorCheck {
   name: string;
   status: "ok" | "warn" | "fail" | string;
   detail?: string;
+}
+
+/// GET /api/bootstrap 的一个组件：缺什么、为什么需要、从哪来、放哪儿
+export interface BootstrapBundle {
+  id: "closure" | "ca" | "python" | "toolchain" | "toolchain-portable" | "uv";
+  label: string;
+  /// ready：已就绪；missing：缺失，面板可以装；not-applicable：本平台不适用
+  state: "ready" | "missing" | "not-applicable";
+  detail: string;
+  /// 什么时候会需要它，而不是它是什么
+  why: string;
+  source?: string;
+  sha256?: string;
+  destination?: string;
+  canInstall: boolean;
+}
+
+export interface BootstrapReport {
+  /// embedded 或 operator <path>：现在生效的是哪份目录
+  catalog: string;
+  /// auto / system-only / managed：Python 的解析策略
+  pythonPolicy: string;
+  bundles: BootstrapBundle[];
+  generatedAt: string;
 }
 
 export interface DoctorReport {

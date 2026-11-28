@@ -24,7 +24,8 @@
     <link rel="manifest" href="/manifest.json" />
     <title>Hello DeepSeek! Launcher</title>
     <!-- 能力闸门：现代聊天页要 fetch + WebSocket + flex。缺任何一项就直接去纯文本版，
-         不再先加载 2.8 MB 的 bundle 再白屏。脚本刻意写成 ES3 语法，IE6/IE11 也能执行。 -->
+         不再先加载 2.8 MB 的 bundle 再白屏。IE11 走 /plain 的 ES5 轮询聊天，不再落在提示页。
+         脚本刻意写成 ES3 语法，IE6/IE11 也能执行。 -->
     <script>
       (function () {
         var ok = window.fetch && window.WebSocket && window.Promise
@@ -35,7 +36,7 @@
         var href = base ? base.getAttribute("href") : "/";
         if (!href) href = "/";
         if (href.charAt(href.length - 1) !== "/") href += "/";
-        location.replace(href + "plain/old");
+        location.replace(href + "plain");
       })();
     </script>
     <noscript><meta http-equiv="refresh" content="0;url=plain"></noscript>

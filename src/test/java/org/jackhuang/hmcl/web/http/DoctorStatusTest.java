@@ -47,4 +47,21 @@ class DoctorStatusTest {
         assertEquals("ok", DoctorApiServlet.statusOf("  inotify watches: 3000 free of 65536  [ok]"));
         assertEquals("ok", DoctorApiServlet.statusOf("  node:  22.0.0  (/opt/node/bin/node)"));
     }
+
+    /// The bootstrap section shouts in upper case, and a shout that mapped to
+    /// `ok` left the panel claiming a healthy environment it could not run in.
+    /// These are the exact rows `DshDoctor.formatClosure`/`formatToolchain` emit.
+    @Test
+    void theBootstrapShortageIsAFailureNotAnAllClear() {
+        assertEquals("fail", DoctorApiServlet.statusOf(
+                "  node libraries:  MISSING libstdc++.so.6, libatomic.so.1"
+                        + "  [a Node.js binary would not start]"));
+        assertEquals("fail", DoctorApiServlet.statusOf(
+                "  host linux-x64  cc=/usr/bin/cc  [MISSING: c++, make]"));
+        assertEquals("ok", DoctorApiServlet.statusOf(
+                "  node libraries:  not installed"
+                        + "  [the host's loader finds the libraries; nothing downloaded]"));
+        assertEquals("warn", DoctorApiServlet.statusOf(
+                "  portable linux-x64  /data/toolchains/build/1.0  [INCOMPLETE: make]"));
+    }
 }

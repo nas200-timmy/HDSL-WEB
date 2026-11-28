@@ -2134,3 +2134,108 @@
     max-width: 45%;
   }
 }
+
+/* ---------------- ffmpeg 运行环境账本（系统 + 托管） ---------------- */
+
+.ff-ledger {
+  margin: 0 8px 8px;
+  border: 1px solid var(--monet-outline-variant);
+  border-radius: 6px;
+  overflow-x: auto;
+  background: var(--monet-surface-container-lowest);
+}
+
+.ff-ledger-grid {
+  --ff-ledger-cols: 84px 190px 190px 180px 110px 120px 120px minmax(170px, 1fr) auto;
+  min-width: 1140px;
+}
+
+.ff-ledger-head,
+.ff-ledger-row {
+  display: grid;
+  grid-template-columns: var(--ff-ledger-cols);
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+}
+
+.ff-ledger-head {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--monet-on-surface-variant);
+  border-bottom: 1px solid var(--monet-outline-variant);
+}
+
+.ff-ledger-row {
+  font-size: 12px;
+}
+
+.ff-ledger-row + .ff-ledger-row {
+  border-top: 1px solid var(--monet-outline-variant);
+}
+
+.ff-ledger-row.is-current {
+  background: color-mix(in srgb, var(--monet-primary) 8%, transparent);
+}
+
+.ff-ledger-cell {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ff-ledger-codecs {
+  font-variant-numeric: tabular-nums;
+}
+
+.ff-ledger-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+}
+
+.ff-ledger-actions .btn {
+  font-size: 11px;
+  height: 26px;
+  padding: 0 6px;
+}
+
+@media (max-width: 760px) {
+  .ff-ledger {
+    margin: 0 4px 8px;
+  }
+
+  .ff-ledger-grid {
+    min-width: 0;
+  }
+
+  .ff-ledger-head {
+    display: none;
+  }
+
+  .ff-ledger-row {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+    padding: 8px;
+  }
+
+  .ff-ledger-cell {
+    white-space: normal;
+    overflow: visible;
+  }
+
+  .ff-ledger-cell[data-label]::before {
+    content: attr(data-label) " ";
+    font-weight: 600;
+    color: var(--monet-on-surface-variant);
+  }
+
+  .ff-ledger-actions {
+    justify-content: flex-end;
+    margin-top: 4px;
+  }
+}

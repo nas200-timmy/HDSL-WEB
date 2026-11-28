@@ -307,8 +307,39 @@ public final class ServerConfig {
         public volatile String mediaRoot = "";
 
         /// ffmpeg executable (`transcode.ffmpeg_path`, `HDSL_FFMPEG_PATH`); empty
-        /// means resolve from `PATH` and then from `<data>/transcode/tools/ffmpeg`.
+        /// means resolve through [#defaultRuntime]. A non-empty value is a hard
+        /// override: it wins over every managed runtime.
         public volatile String ffmpegPath = "";
+
+        /// Which runtime the transcode queue uses (`transcode.default_runtime`,
+        /// `HDSL_TRANSCODE_DEFAULT_RUNTIME`): `auto`, `system`, or one installed
+        /// runtime id. `auto` prefers the panel-managed current runtime and falls
+        /// back to `PATH`; `system` always uses `PATH`; an id uses that runtime
+        /// and **does not** fall back when it is missing.
+        public volatile String defaultRuntime = "auto";
+
+        /// A mirror prefix for ffmpeg binary downloads
+        /// (`transcode.binary_mirror`, `HDSL_FFMPEG_BINARY_MIRROR`). Empty uses
+        /// the pinned URL only. The prefix is concatenated with the absolute
+        /// official URL (`https://gh-proxy.com/` + `https://github.com/…`);
+        /// the SHA-256 pin never changes with the source.
+        public volatile String binaryMirror = "";
+
+        /// The same for ffmpeg source archives (`transcode.source_mirror`,
+        /// `HDSL_FFMPEG_SOURCE_MIRROR`).
+        public volatile String sourceMirror = "";
+
+        /// A mirror prefix for build toolchain artifacts — Zig on Linux,
+        /// w64devkit on Windows (`transcode.toolchain_mirror`,
+        /// `HDSL_TOOLCHAIN_MIRROR`). Empty keeps the catalogue's official URL
+        /// and its built-in mirrors. Hash pins never change with the source.
+        public volatile String toolchainMirror = "";
+
+        /// Optional local ffmpeg catalogue (`transcode.ffmpeg_catalog`,
+        /// `HDSL_FFMPEG_CATALOG`). Empty means the built-in jar resource; a
+        /// path is read as-is and may add or override entries. Remote URLs are
+        /// deliberately not accepted.
+        public volatile String ffmpegCatalog = "";
 
         /// How many jobs may run at once (`transcode.max_concurrent`, default 1).
         public volatile int maxConcurrent = 1;

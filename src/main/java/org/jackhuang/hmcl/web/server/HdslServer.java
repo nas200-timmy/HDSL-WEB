@@ -50,6 +50,7 @@ import org.jackhuang.hmcl.web.event.EventBus;
 import org.jackhuang.hmcl.web.http.AccountsApiServlet;
 import org.jackhuang.hmcl.web.http.ApiGuardFilter;
 import org.jackhuang.hmcl.web.http.ApiServlet;
+import org.jackhuang.hmcl.web.http.BootstrapApiServlet;
 import org.jackhuang.hmcl.web.http.DoctorApiServlet;
 import org.jackhuang.hmcl.web.http.DshApiServlet;
 import org.jackhuang.hmcl.web.http.ExportsApiServlet;
@@ -267,12 +268,17 @@ public final class HdslServer {
                 new org.jackhuang.hmcl.web.terminal.TerminalManager();
         org.jackhuang.hmcl.web.auth.PeerIdentity peerIdentity =
                 new org.jackhuang.hmcl.web.auth.PeerIdentity(terminals);
+        String instanceId = org.jackhuang.hmcl.web.config.PanelIdentity.loadOrCreate(config.dataDir);
+        String sessionCookieName = org.jackhuang.hmcl.web.auth.SessionCookies.forInstance(
+                instanceId, config.port);
+        org.jackhuang.hmcl.web.auth.SessionCookies.bind(sessionCookieName);
+        logger.info("Panel instance " + instanceId + " (session cookie " + sessionCookieName + ")");
         AuthFilter authFilter = new AuthFilter(authService, config.auth.disabled,
                 request -> request.isSecure()
                         || org.jackhuang.hmcl.web.http.RequestSecurity.forwardedHttps(request, config),
                 ttlSeconds, config.basePath, developerElevation, peerIdentity,
                 config.agent.remoteNeedsSession, config.agent.loopbackOnly,
-                () -> config.network.trustedProxies);
+                () -> config.network.trustedProxies, sessionCookieName);
         PasswordCrypto passwordCrypto = new PasswordCrypto();
         ChatCryptoService chatCrypto = new ChatCryptoService();
 
@@ -420,6 +426,7 @@ public final class HdslServer {
         context.addServlet(packsHolder, "/api/packs/*");
         context.addServlet(new ServletHolder(new ExportsApiServlet(config)), "/api/exports/*");
         context.addServlet(new ServletHolder(new DoctorApiServlet()), "/api/doctor");
+        context.addServlet(new ServletHolder(new BootstrapApiServlet(taskService)), "/api/bootstrap/*");
         context.addServlet(new ServletHolder(new AccountsApiServlet(eventBus)), "/api/accounts/*");
         // Panel chat: REST commands/history/upload; token deltas ride /ws.
         // No chat module, no servlet: `/api/chat/*` then falls through to the
@@ -432,14 +439,19 @@ public final class HdslServer {
             context.addServlet(chatHolder, "/api/chat/*");
         }
         // The no-JavaScript surface (docs/plain-surface.md). Registered even when
-        // chat is unavailable: /plain/old is the landing page for browsers that
-        // cannot run the SPA, and it must answer on a degraded install too.
+        // chat is unavailable: /plain/old explains a browser that cannot run the
+        // SPA, and it must answer on a degraded install too.
         MarkdownSsr plainSsr = new MarkdownSsr(config.dataDir,
                 config.dataDir.resolve("plain-md"), config.plain.ssrWorkers);
-        context.addServlet(new ServletHolder(new PlainChatServlet(
+        ServletHolder plainHolder = new ServletHolder(new PlainChatServlet(
                 chat == null ? null : chat.service(), authService, authFilter,
                 config.auth.disabled, config.basePath, developerAuth, developerElevation,
-                tlsActive, config, plainSsr)), "/plain/*");
+                tlsActive, config, plainSsr));
+        // Attachments on the no-JS surface arrive as a multipart form; the
+        // per-file limits are enforced by ChatAttachments, this is only the
+        // container-side request cap.
+        plainHolder.getRegistration().setMultipartConfig(packMultipart);
+        context.addServlet(plainHolder, "/plain/*");
         // Render the transcript while the turn is still fresh instead of making
         // the first reader wait for one Node process per message.
         if (chat != null) {
@@ -792,8 +804,8 @@ public final class HdslServer {
         }
         for (String pair : cookie.split(";")) {
             String trimmed = pair.trim();
-            if (trimmed.startsWith(AuthFilter.SESSION_COOKIE + "=")) {
-                String token = trimmed.substring(AuthFilter.SESSION_COOKIE.length() + 1);
+            if (trimmed.startsWith(org.jackhuang.hmcl.web.auth.SessionCookies.name() + "=")) {
+                String token = trimmed.substring(org.jackhuang.hmcl.web.auth.SessionCookies.name().length() + 1);
                 return authService.verify(token).isPresent();
             }
         }
@@ -810,8 +822,8 @@ public final class HdslServer {
         if (cookie != null) {
             for (String pair : cookie.split(";")) {
                 String trimmed = pair.trim();
-                if (trimmed.startsWith(AuthFilter.SESSION_COOKIE + "=")) {
-                    String token = trimmed.substring(AuthFilter.SESSION_COOKIE.length() + 1);
+                if (trimmed.startsWith(org.jackhuang.hmcl.web.auth.SessionCookies.name() + "=")) {
+                    String token = trimmed.substring(org.jackhuang.hmcl.web.auth.SessionCookies.name().length() + 1);
                     if (!authService.verify(token).isPresent()) {
                         return false;
                     }

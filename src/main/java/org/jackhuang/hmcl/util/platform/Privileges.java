@@ -21,11 +21,14 @@ import org.jetbrains.annotations.NotNullByDefault;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
 
@@ -175,6 +178,31 @@ public final class Privileges {
         return DROP_CHILDREN;
     }
 
+    /// The `setpriv` the panel's bootstrap closure provided, if any.
+    ///
+    /// Set by the bootstrap manager when it finds or installs a closure. It is a
+    /// registration rather than a lookup because `util` must not depend on
+    /// `dsh`, and because the answer only changes when that manager changes it.
+    private static volatile @Nullable Path bootstrapSetpriv;
+
+    /// Registers (or clears) the closure's `setpriv`.
+    ///
+    /// @param path the executable, or `null`
+    public static void registerBootstrapSetpriv(@Nullable Path path) {
+        bootstrapSetpriv = path;
+    }
+
+    /// Whether this process is root.
+    ///
+    /// Public because the bootstrap runtime manager needs the same question
+    /// before it writes the passwd/group entries a minimal image may lack: the
+    /// panel is the only process that can, and it must not try otherwise.
+    ///
+    /// @return whether the effective uid is 0
+    public static boolean isRoot() {
+        return euid() == 0;
+    }
+
     /// Hands a file or directory to the agent, so that the uid its children run
     /// as can read — and where it needs to, rewrite — what the panel put there.
     ///
@@ -296,6 +324,213 @@ public final class Privileges {
         return handed[0];
     }
 
+    /// Keeps a tree the panel starts programs from out of an agent's reach.
+    ///
+    /// `<data>` is group-writable on purpose: the image's `002` umask and the
+    /// setgid volume are what let an agent maintain its own instance
+    /// directories. The same default also applies to the runtime bundles the
+    /// panel installs and later runs **as root** — the bootstrap closure's
+    /// `setpriv`, the shared CPython, the portable build toolchain, the CA
+    /// bundle root-run downloads trust. That is the one place the shared-group
+    /// rule must not hold.
+    ///
+    /// The walk does not follow links. Every entry goes back to root and loses
+    /// its group/other write bits; read and execute bits are kept, so an agent
+    /// can still run the tools while being unable to rewrite them. A tree that
+    /// already satisfies the rule is left exactly as it is.
+    ///
+    /// A no-op outside a container, where nobody was dropped and there is no
+    /// boundary to keep: see [#handToAgent].
+    ///
+    /// @param root the tree the panel owns and executes from
+    public static void keepRootExecutable(Path root) {
+        if (!DROP_CHILDREN || root == null || !Files.isDirectory(root)) {
+            return;
+        }
+        try (java.util.stream.Stream<Path> entries = Files.walk(root)) {
+            for (Path path : entries.toList()) {
+                if (Files.isSymbolicLink(path)) {
+                    continue;
+                }
+                try {
+                    Files.setAttribute(path, "unix:uid", 0, LinkOption.NOFOLLOW_LINKS);
+                    Files.setAttribute(path, "unix:gid", 0, LinkOption.NOFOLLOW_LINKS);
+                    Set<PosixFilePermission> current =
+                            Files.getPosixFilePermissions(path, LinkOption.NOFOLLOW_LINKS);
+                    Files.setPosixFilePermissions(path, sealed(current, Files.isDirectory(path)));
+                } catch (UnsupportedOperationException | IOException | IllegalArgumentException e) {
+                    org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
+                            "Could not keep " + path + " root-owned: " + e);
+                }
+            }
+        } catch (IOException e) {
+            org.jackhuang.hmcl.util.logging.Logger.LOG.warning("Could not walk " + root, e);
+        }
+    }
+
+    /// Creates `directory` when needed and keeps it root-owned and `0755`.
+    ///
+    /// This is the non-recursive half of [#keepRootExecutable] for the
+    /// directory *holding* a version tree: sealing the version alone would
+    /// still let the agent replace it, because replacing an entry only needs
+    /// write permission on its parent.
+    ///
+    /// @param directory the directory to create and keep
+    public static void keepRootOwnedDirectory(Path directory) {
+        if (!DROP_CHILDREN || directory == null) {
+            return;
+        }
+        try {
+            Files.createDirectories(directory);
+            Files.setAttribute(directory, "unix:uid", 0, LinkOption.NOFOLLOW_LINKS);
+            Files.setAttribute(directory, "unix:gid", 0, LinkOption.NOFOLLOW_LINKS);
+            Files.setPosixFilePermissions(directory, PosixFilePermissions.fromString("rwxr-xr-x"));
+        } catch (UnsupportedOperationException | IOException | IllegalArgumentException e) {
+            org.jackhuang.hmcl.util.logging.Logger.LOG.warning(
+                    "Could not keep " + directory + " root-owned: " + e);
+        }
+    }
+
+    /// Whether `directory` may still be used for programs the panel runs as root.
+    ///
+    /// The check is deliberately cheap: the directory and its parent must still
+    /// belong to root and not be group/other-writable. Replacing a sealed
+    /// version directory needs write permission on that parent, and a
+    /// replacement would carry the writer's uid — so two `stat` calls catch the
+    /// case that matters on every spawn.
+    ///
+    /// A tree installed before this rule existed (root-owned files at `0664`)
+    /// is repaired once, then answered `true`. `probe` names a file the caller
+    /// is about to run; its write bits are what tell the two apart.
+    ///
+    /// @param directory the version directory
+    /// @param probe     a file the caller will execute or trust, or `null`
+    /// @return whether the tree may be used as root
+    public static boolean useAsRoot(Path directory, @Nullable Path probe) {
+        if (!DROP_CHILDREN) {
+            return true;
+        }
+        if (directory == null || directory.getParent() == null) {
+            return false;
+        }
+        Path parent = directory.getParent();
+        // Root-owned but group-writable is what every tree installed before
+        // this rule looks like (the image's 002 umask); repair it once instead
+        // of refusing the deployment's own working runtime. A tree owned by
+        // somebody else is a replacement and is refused.
+        if (!rootOwned(directory) || !rootOwned(parent)) {
+            return false;
+        }
+        if (!sealedEntry(directory) || !sealedEntry(parent)) {
+            keepRootExecutable(directory);
+            keepRootOwnedDirectory(parent);
+        }
+        if (!sealedEntry(directory) || !sealedEntry(parent)) {
+            return false;
+        }
+        if (probe == null) {
+            return true;
+        }
+        // `bin/python3` and `cacert.pem`-style entries may be links. A symlink
+        // always reports 0777 on Linux, so check its target — and only accept
+        // a target that stays inside the sealed tree.
+        Path checked = probe;
+        if (Files.isSymbolicLink(probe)) {
+            try {
+                checked = probe.toRealPath();
+                if (!checked.startsWith(directory.toRealPath())) {
+                    return false;
+                }
+            } catch (IOException e) {
+                return false;
+            }
+        }
+        if (sealedEntry(checked)) {
+            return true;
+        }
+        keepRootExecutable(directory);
+        return sealedEntry(checked);
+    }
+
+    /// Creates a file only the panel can write, before its bytes arrive.
+    ///
+    /// A download that lands at `0664` is one the agent can rewrite between the
+    /// digest check and the archive step; `0600` closes that window. On a
+    /// platform without POSIX modes the file is created normally.
+    ///
+    /// @param file the target
+    /// @throws IOException when the file cannot be created
+    public static void createPrivateFile(Path file) throws IOException {
+        try {
+            Files.createFile(file, PosixFilePermissions.asFileAttribute(AGENT_PRIVATE_FILE));
+        } catch (FileAlreadyExistsException ignored) {
+            // The caller truncates it when it opens the stream.
+        } catch (UnsupportedOperationException e) {
+            if (!Files.exists(file)) {
+                Files.createFile(file);
+            }
+        }
+    }
+
+    /// The modes a sealed entry keeps: everything but group/other write.
+    ///
+    /// Directories are widened to `0755` (owner write/execute plus group/other
+    /// read/execute) so they stay traversable; files keep their execute bit and
+    /// whatever read bits they had.
+    ///
+    /// @param current   the entry's current permissions
+    /// @param directory whether the entry is a directory
+    /// @return the permissions to set
+    static Set<PosixFilePermission> sealed(Set<PosixFilePermission> current, boolean directory) {
+        EnumSet<PosixFilePermission> result = current.isEmpty()
+                ? EnumSet.of(PosixFilePermission.OWNER_READ)
+                : EnumSet.copyOf(current);
+        result.remove(PosixFilePermission.GROUP_WRITE);
+        result.remove(PosixFilePermission.OTHERS_WRITE);
+        if (directory) {
+            result.add(PosixFilePermission.OWNER_READ);
+            result.add(PosixFilePermission.OWNER_WRITE);
+            result.add(PosixFilePermission.OWNER_EXECUTE);
+            result.add(PosixFilePermission.GROUP_READ);
+            result.add(PosixFilePermission.GROUP_EXECUTE);
+            result.add(PosixFilePermission.OTHERS_READ);
+            result.add(PosixFilePermission.OTHERS_EXECUTE);
+        }
+        return result;
+    }
+
+    /// Whether one entry belongs to root, without judging its mode.
+    static boolean rootOwned(@Nullable Path path) {
+        if (path == null || Files.isSymbolicLink(path)) {
+            return false;
+        }
+        try {
+            Object uid = Files.getAttribute(path, "unix:uid", LinkOption.NOFOLLOW_LINKS);
+            return uid instanceof Integer && (Integer) uid == 0;
+        } catch (UnsupportedOperationException | IOException | IllegalArgumentException e) {
+            return false;
+        }
+    }
+
+    /// Whether one entry is root-owned and not group/other-writable.
+    static boolean sealedEntry(@Nullable Path path) {
+        if (path == null) {
+            return false;
+        }
+        try {
+            Object uid = Files.getAttribute(path, "unix:uid", LinkOption.NOFOLLOW_LINKS);
+            if (!(uid instanceof Integer) || (Integer) uid != 0) {
+                return false;
+            }
+            Set<PosixFilePermission> permissions =
+                    Files.getPosixFilePermissions(path, LinkOption.NOFOLLOW_LINKS);
+            return !permissions.contains(PosixFilePermission.GROUP_WRITE)
+                    && !permissions.contains(PosixFilePermission.OTHERS_WRITE);
+        } catch (UnsupportedOperationException | IOException | IllegalArgumentException e) {
+            return false;
+        }
+    }
+
     /// Hands a file the panel has just written — and the directory holding it — to the agent.
     ///
     /// The pattern this exists for has shipped three times. A panel that writes into a tree its
@@ -392,10 +627,19 @@ public final class Privileges {
     /// The argv to run `command` with, as an agent.
     ///
     /// Inside a container running as root this is
-    /// `setpriv --reuid=1000 --regid=1000 --init-groups -- <command>`; anywhere
-    /// else it is the command itself. `setpriv` execs in place, so the child
-    /// still owns its process group and the PTY's session semantics are
+    /// `setpriv --reuid=1000 --regid=1000 {--groups=…|--clear-groups} -- <command>`;
+    /// anywhere else it is the command itself. `setpriv` execs in place, so the
+    /// child still owns its process group and the PTY's session semantics are
     /// unchanged.
+    ///
+    /// An explicit numeric list replaced `--init-groups` because the latter
+    /// reads `/etc/passwd` and `/etc/group`. A minimal image may ship neither,
+    /// and then every agent launch failed with `setpriv: could not initialize
+    /// groups`. The list keeps the image's supplementary groups — `render`,
+    /// `video`, whatever the entrypoint granted — while never inheriting root's
+    /// group 0: `--groups` replaces the whole supplementary set by itself, and
+    /// setpriv(1) rejects it next to `--clear-groups`, so that flag only
+    /// appears when there is nothing to grant.
     ///
     /// @param command the program and its arguments, program first
     /// @return the argv to hand to the process builder
@@ -410,25 +654,212 @@ public final class Privileges {
     /// @param drop    whether to prefix `setpriv`
     /// @return the argv to hand to the process builder
     static List<String> wrap(List<String> command, boolean drop) {
+        return wrap(command, drop, drop ? agentGroups() : List.of());
+    }
+
+    /// The wrapping with the supplementary groups named, so the argv shape can
+    /// be tested without reading this machine's `/etc/group`.
+    ///
+    /// @param command the program and its arguments
+    /// @param drop    whether to prefix `setpriv`
+    /// @param groups  the supplementary gids to grant
+    /// @return the argv to hand to the process builder
+    static List<String> wrap(List<String> command, boolean drop, List<Integer> groups) {
         if (!drop || command.isEmpty()) {
             return command;
         }
-        List<String> wrapped = new ArrayList<>(command.size() + 5);
+        List<String> wrapped = new ArrayList<>(command.size() + 6);
         wrapped.add(setpriv());
         wrapped.add("--reuid=" + AGENT_UID);
         wrapped.add("--regid=" + AGENT_UID);
-        wrapped.add("--init-groups");
+        // setpriv(1) 的四个组选项互斥: --groups 自己就会整体替换附加组集合,
+        // 与 --clear-groups 同传直接报 mutually exclusive arguments。
+        if (groups.isEmpty()) {
+            wrapped.add("--clear-groups");
+        } else {
+            StringBuilder list = new StringBuilder("--groups=");
+            for (int i = 0; i < groups.size(); i++) {
+                if (i > 0) {
+                    list.append(',');
+                }
+                list.append(groups.get(i));
+            }
+            wrapped.add(list.toString());
+        }
         wrapped.add("--");
         wrapped.addAll(command);
         return wrapped;
     }
 
-    /// The `setpriv` to exec, resolved when the panel can see it. A bare name is
-    /// left alone: the child inherits the panel's `PATH`, and failing here would
-    /// turn a missing tool into a crash instead of the exec error the spawner
-    /// already reports.
+    /// The supplementary groups an agent process should keep.
+    ///
+    /// Two sources, both read-only: the groups `/etc/group` says `hdsl` belongs
+    /// to, and the container's own supplementary groups when they name a group
+    /// the image knows. Group 0 and the primary gid are never on the list; a
+    /// missing or unreadable file is an empty list, not a failure.
+    ///
+    /// @return the gids, ascending
+    static List<Integer> agentGroups() {
+        if (OperatingSystem.CURRENT_OS != OperatingSystem.LINUX) {
+            return List.of();
+        }
+        String groupFile = readQuietly(Path.of("/etc/group"));
+        String passwdFile = readQuietly(Path.of("/etc/passwd"));
+        String procStatus = readQuietly(Path.of("/proc/self/status"));
+        String user = userNameForUid(passwdFile, AGENT_UID);
+        if (user == null) {
+            // The image's convention; a group may still name it even when the
+            // passwd entry is the thing that is missing.
+            user = "hdsl";
+        }
+        return supplementaryGids(groupFile, user, AGENT_UID, procStatus);
+    }
+
+    /// The pure group-selection rule.
+    ///
+    /// @param groupFile  `/etc/group` contents, or `null`
+    /// @param userName   the account whose memberships to keep, or `null`
+    /// @param primaryGid the gid already used for `--regid`
+    /// @param procStatus `/proc/self/status` contents, or `null`
+    /// @return the supplementary gids, ascending
+    static List<Integer> supplementaryGids(@Nullable String groupFile, @Nullable String userName,
+                                           int primaryGid, @Nullable String procStatus) {
+        java.util.TreeSet<Integer> gids = new java.util.TreeSet<>();
+        java.util.Set<Integer> known = new java.util.HashSet<>();
+        if (groupFile != null) {
+            for (String line : groupFile.split("\\R")) {
+                if (line.isBlank() || line.startsWith("#")) {
+                    continue;
+                }
+                String[] fields = line.split(":", -1);
+                if (fields.length < 4) {
+                    continue;
+                }
+                int gid;
+                try {
+                    gid = Integer.parseInt(fields[2].trim());
+                } catch (NumberFormatException e) {
+                    continue;
+                }
+                if (gid <= 0) {
+                    continue;
+                }
+                known.add(gid);
+                if (userName != null) {
+                    for (String member : fields[3].split(",")) {
+                        if (member.trim().equals(userName)) {
+                            gids.add(gid);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        // With no group file there is no name to check a gid against; the
+        // container's own supplementary groups are then the only evidence of
+        // what the image meant to grant the agent (render, video, ...). When a
+        // group file exists it decides, so an unrelated group root happens to
+        // carry does not travel to the agent.
+        boolean groupFileMissing = groupFile == null || groupFile.isBlank();
+        if (procStatus != null) {
+            for (String line : procStatus.split("\\R")) {
+                if (!line.startsWith("Groups:")) {
+                    continue;
+                }
+                for (String value : line.substring("Groups:".length()).trim().split("\\s+")) {
+                    try {
+                        int gid = Integer.parseInt(value);
+                        // Only a group the image names, and never root's group.
+                        if (gid > 0 && gid != primaryGid
+                                && (groupFileMissing || known.contains(gid))) {
+                            gids.add(gid);
+                        }
+                    } catch (NumberFormatException ignored) {
+                    }
+                }
+            }
+        }
+        gids.remove(primaryGid);
+        gids.remove(0);
+        return List.copyOf(gids);
+    }
+
+    /// The account name with `uid`, or `null` when the passwd file does not name it.
+    static @Nullable String userNameForUid(@Nullable String passwdFile, int uid) {
+        if (passwdFile == null) {
+            return null;
+        }
+        for (String line : passwdFile.split("\\R")) {
+            if (line.isBlank() || line.startsWith("#")) {
+                continue;
+            }
+            String[] fields = line.split(":", -1);
+            if (fields.length >= 3 && fields[2].trim().equals(Integer.toString(uid))
+                    && !fields[0].isBlank()) {
+                return fields[0];
+            }
+        }
+        return null;
+    }
+
+    private static String readQuietly(Path file) {
+        try {
+            return Files.readString(file);
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    /// The `setpriv` to exec, resolved when the panel can see it.
+    ///
+    /// The system one is preferred: it is the version the image ships and was
+    /// tested with. A minimal image has none, which is exactly what the bootstrap
+    /// closure's `setpriv` is for — the child's `PATH` is not consulted by
+    /// `ProcessBuilder` when it resolves a bare program name, so the absolute
+    /// path has to be named here.
+    ///
+    /// A `PATH` hit that is really busybox is not a system `setpriv`: busybox
+    /// ships a crippled applet that understands only `-d`/`--nnp`/`--inh-caps`/
+    /// `--ambient-caps`, so `--reuid=…` reaches it as an unknown option and
+    /// every agent launch dies before it starts. An image that links every
+    /// busybox applet onto `PATH` (the "complete busybox" layout) does exactly
+    /// that, so the shadow is skipped and the closure's util-linux build — the
+    /// one the panel verified and registered — takes over.
+    ///
+    /// @return the program to exec
     private static String setpriv() {
-        return Executables.resolve("setpriv").map(Path::toString).orElse("setpriv");
+        return Executables.resolve("setpriv")
+                .filter(Privileges::isRealSetpriv)
+                .map(Path::toString)
+                .orElseGet(() -> {
+                    Path bundled = bootstrapSetpriv;
+                    return bundled != null && Files.isExecutable(bundled)
+                            ? bundled.toString() : "setpriv";
+                });
+    }
+
+    /// Whether a `setpriv` found by name is not a multicall-binary applet.
+    ///
+    /// Follows the symlink chain to the file actually executed; a busybox
+    /// multicall (any file whose name starts with `busybox`) is the shadow
+    /// this rejects. An unreadable path is kept: the caller asked for a
+    /// startable program and the exec will say what is wrong better than a
+    /// silent skip would.
+    ///
+    /// @param executable the `PATH` hit
+    /// @return whether it may be run as util-linux's `setpriv`
+    static boolean isRealSetpriv(Path executable) {
+        Path target = executable;
+        for (int depth = 0; depth < 8 && Files.isSymbolicLink(target); depth++) {
+            try {
+                Path next = Files.readSymbolicLink(target);
+                target = next.isAbsolute() ? next : target.resolveSibling(next);
+            } catch (IOException e) {
+                return true;
+            }
+        }
+        Path name = target.getFileName();
+        return name == null || !name.toString().startsWith("busybox");
     }
 
     /// One line for the startup banner, or `null` when there is nothing to say.

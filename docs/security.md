@@ -207,7 +207,8 @@ SMB/NFS export、某些 Windows 共享卷同样如此）会把**共享属主**�
 - `/data/certs/registry.json`、`certs/<id>/privkey.pem`、`uploaded.*`、`self-signed*`
   都是 TLS 身份；`certs/` 归 root `0700`，注册表与私钥 `0600`。备份 `/data` 时按敏感数据对待。
 - `/data/auth/acme.json`（0600 root）存 DNS provider token（Cloudflare API Token、阿里云
-  AccessKey、DNSPod/腾讯云、GoDaddy、DigitalOcean、Vultr）和 CA 的 EAB 凭据；不进
+  AccessKey、DNSPod Token、腾讯云 SecretId/SecretKey、GoDaddy、DigitalOcean、Vultr）
+  和 CA 的 EAB 凭据；不进
   `server.yaml`，API 只回脱敏字段。**它等于域名控制权**：拿到 token 可以改 TXT、签发或
   吊销证书。按最小权限创建（只给 Zone.DNS 编辑一类权限）、单独专用、可轮换。
 - ACME 只做出站：面板访问 CA 与 DNS provider API，**不开放 80/443 入站**。DNS-01 失败

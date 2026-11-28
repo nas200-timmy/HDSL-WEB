@@ -174,6 +174,11 @@ public final class SocketOwnerLookup {
             builder.environment().clear();
             builder.environment().put("PATH", "/usr/local/bin:/usr/bin:/bin");
             builder.environment().put("LANG", "C.UTF-8");
+            // The `setpriv` in the argv may be the closure's copy; it links
+            // against the closure's libcap-ng and dies before the child starts
+            // without this. Only library paths are added — the map stays clear
+            // of anything the panel holds and uid 1000 should not read.
+            org.jackhuang.hmcl.dsh.BootstrapEnvironment.apply(builder, false);
             builder.redirectError(ProcessBuilder.Redirect.DISCARD);
             Process process = builder.start();
             if (!process.waitFor(PROBE_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {

@@ -45,7 +45,7 @@ import type {
   InstancePlugins,
   ZcodeCatalogEntry,
 } from "../types";
-import { errMsg, formatDateTime, confirmCleartextOpen } from "../utils";
+import { errMsg, formatDateTime, confirmCleartextOpen, retryWithBackoff } from "../utils";
 
 /// 状态徽章：与 ZcodeSection 的 STATE_TEXT/STATE_TAG 同款（文案进 I18N 字典）
 const STATE_TEXT: Record<string, string> = {
@@ -438,7 +438,27 @@ function BrandPane({ brand }: { brand: BrandId }) {
   }, [autoCreate]);
 
   useEffect(() => {
-    void reload();
+    let cancelled = false;
+    // The catalog can be temporarily unavailable while the panel is still
+    // provisioning its CA/network or the registry is flaky; retry instead of
+    // leaving the card on a permanent error until someone clicks refresh.
+    const stop = retryWithBackoff(async () => {
+      try {
+        const next = await api.brandVersions(brand);
+        if (!cancelled) {
+          setVersionsError(null);
+          setVersions(next);
+        }
+        return true;
+      } catch (e) {
+        if (!cancelled) setVersionsError(errMsg(e));
+        return false;
+      }
+    });
+    return () => {
+      cancelled = true;
+      stop();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brand]);
 

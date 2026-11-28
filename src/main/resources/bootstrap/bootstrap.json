@@ -1,0 +1,376 @@
+{
+  "schema": 2,
+  "updatedAt": "2026-11-24",
+  "ca": {
+    "version": "2026-11-05",
+    "url": "https://curl.se/ca/cacert-2026-11-05.pem",
+    "sha256": "427c064216761a1e72a8b30f0d954d08cb6e4435a82091fb865afd20c8497285",
+    "size": 200116,
+    "fileName": "cacert.pem"
+  },
+  "runtimes": [
+    {
+      "version": "debian11-gcc10-x64",
+      "os": "linux",
+      "arch": "x64",
+      "glibc": "2.18",
+      "available": true,
+      "notes": "Debian 11 (bullseye) binaries fetched by content hash from snapshot.debian.org. libstdc++6/libgcc-s1/libatomic1 come from gcc-10 10.2.1-6, libcap-ng0 is 0.7.9-2.2 and setpriv is util-linux 2.36.1-8+deb11u2. The closure's own GLIBC symbols top out at 2.18; Node.js itself requires 2.28.",
+      "artifacts": [
+        {
+          "name": "libstdc++6",
+          "archive": "deb",
+          "url": "https://snapshot.debian.org/file/42e21c88d004a132a073a2c56934370eaab32de2",
+          "sha256": "5c155c58935870bf3b4bfe769116841c0d286a74f59eccfd5645693ac23f06b1",
+          "size": 492540,
+          "includes": [
+            {
+              "prefix": "usr/lib/x86_64-linux-gnu/libstdc++.so.6",
+              "destination": "lib"
+            }
+          ]
+        },
+        {
+          "name": "libgcc-s1",
+          "archive": "deb",
+          "url": "https://snapshot.debian.org/file/d6a30a2c427e823fcac253c242e4272401cc61a6",
+          "sha256": "e478f2709d8474165bb664de42e16950c391f30eaa55bc9b3573281d83a29daf",
+          "size": 41400,
+          "includes": [
+            {
+              "prefix": "lib/x86_64-linux-gnu/libgcc_s.so.1",
+              "destination": "lib"
+            }
+          ]
+        },
+        {
+          "name": "libatomic1",
+          "archive": "deb",
+          "url": "https://snapshot.debian.org/file/77edad85f7cdcdcb761cb35f0592eeac090067e8",
+          "sha256": "e8f1d04653698ab185c1144f35f905a1de87571c12ea630b65be669a2823d8c7",
+          "size": 9008,
+          "includes": [
+            {
+              "prefix": "usr/lib/x86_64-linux-gnu/libatomic.so.1",
+              "destination": "lib"
+            }
+          ]
+        },
+        {
+          "name": "libcap-ng0",
+          "archive": "deb",
+          "url": "https://snapshot.debian.org/file/10d8ae6f4ef6d06485d3393459ca143cb795f976",
+          "sha256": "36cc4dfe51eff9db5d103a9545163b8b93185dec88f10a5b4317e4e2563eba36",
+          "size": 14508,
+          "includes": [
+            {
+              "prefix": "lib/x86_64-linux-gnu/libcap-ng.so.0",
+              "destination": "lib"
+            }
+          ]
+        },
+        {
+          "name": "util-linux",
+          "archive": "deb",
+          "url": "https://snapshot.debian.org/file/f5543b0dae3c00ca5bee50468f0b5899b312c3e0",
+          "sha256": "bacfee8e7266143b633eb281a726a861686e6bdf6b76104803d6dfbbf21107f8",
+          "size": 1142348,
+          "includes": [
+            {
+              "prefix": "usr/bin/setpriv",
+              "destination": "bin"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "version": "debian11-gcc10-arm64",
+      "os": "linux",
+      "arch": "arm64",
+      "glibc": "2.18",
+      "available": true,
+      "notes": "Debian 11 (bullseye) arm64 packages fetched by content hash from snapshot.debian.org. libstdc++6/libgcc-s1/libatomic1 are gcc-10 10.2.1-6, libcap-ng0 is 0.7.9-2.2+b1 and setpriv is util-linux 2.36.1-8+deb11u2. The closure's own GLIBC symbols top out at 2.18; Node.js itself requires 2.28.",
+      "artifacts": [
+        {
+          "name": "libstdc++6",
+          "archive": "deb",
+          "url": "https://snapshot.debian.org/file/168a541ad955082958315989ac246402a96c8be0",
+          "sha256": "7869aa540cc46e9f3d4267d5bde2af0e5b429a820c1d6f1a4cfccfe788c31890",
+          "size": 450672,
+          "includes": [
+            {
+              "prefix": "usr/lib/aarch64-linux-gnu/libstdc++.so.6",
+              "destination": "lib"
+            }
+          ]
+        },
+        {
+          "name": "libgcc-s1",
+          "archive": "deb",
+          "url": "https://snapshot.debian.org/file/33ff25e141d9f0679355f340ca88ff6ea0c7b0ae",
+          "sha256": "e2fcdb378d3c1ad1bcb64d4fb6b37aab44011152beca12a4944f435a2582df1f",
+          "size": 34572,
+          "includes": [
+            {
+              "prefix": "lib/aarch64-linux-gnu/libgcc_s.so.1",
+              "destination": "lib"
+            }
+          ]
+        },
+        {
+          "name": "libatomic1",
+          "archive": "deb",
+          "url": "https://snapshot.debian.org/file/b4f1ec8afc37712dc4db90ba0405a6259aa59a2c",
+          "sha256": "d0b8a02896479a6eac49019d71142da9561482759f40eb7aeb15cfdc7d3e39ec",
+          "size": 9468,
+          "includes": [
+            {
+              "prefix": "usr/lib/aarch64-linux-gnu/libatomic.so.1",
+              "destination": "lib"
+            }
+          ]
+        },
+        {
+          "name": "libcap-ng0",
+          "archive": "deb",
+          "url": "https://snapshot.debian.org/file/c956a1dccf48b1169463b77d114074e905e4de8a",
+          "sha256": "b7b14e0b7747872f04691efe6c126de5ed0bf1dc200f51b93039cc2f4a65a96a",
+          "size": 14296,
+          "includes": [
+            {
+              "prefix": "lib/aarch64-linux-gnu/libcap-ng.so.0",
+              "destination": "lib"
+            }
+          ]
+        },
+        {
+          "name": "util-linux",
+          "archive": "deb",
+          "url": "https://snapshot.debian.org/file/72e7ad0bb3ffa19579b2dee243250957b039d3f9",
+          "sha256": "b8bd3b7f606c7c94f2d847e86e74c6f9702d6b8d5e64f54f41882fb2ec55e429",
+          "size": 1097284,
+          "includes": [
+            {
+              "prefix": "usr/bin/setpriv",
+              "destination": "bin"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "uv": {
+    "version": "0.7.13",
+    "binaries": [
+      {
+        "platform": "linux-x64",
+        "sha256": "04e7399b45054f5ae4239ed60cd579311daafdd8d43e0e6ac01003436f19eaac"
+      },
+      {
+        "platform": "linux-arm64",
+        "sha256": "da9b140ed024e03d1750b6ec4f9902ee1542bd5e44beb14b7ae336d24610bbf5"
+      },
+      {
+        "platform": "macos-x64",
+        "sha256": "a07b8eadd2c241b408b935c12ff603765c21da06255e64ff8485bf8720e106de"
+      },
+      {
+        "platform": "macos-arm64",
+        "sha256": "ab10743159870e1a6e8eb87197eb9a42f086f21bf3cd840b9cfbd73ab23e08b6"
+      },
+      {
+        "platform": "windows-x64",
+        "sha256": "e004f18282750aebe5c8a1a6dedba544ede1d7adc724e34b97834414222f4ef0"
+      },
+      {
+        "platform": "windows-arm64",
+        "sha256": "162206ef9b8ceabe17af83e601bff5f1d78e0a58085d173e2365eda3b532ed05"
+      }
+    ]
+  },
+  "python": {
+    "version": "3.12.16",
+    "build": "20261123",
+    "releaseBase": "https://github.com/astral-sh/python-build-standalone/releases/download",
+    "artifacts": [
+      {
+        "platform": "linux-x64",
+        "asset": "cpython-3.12.16+20261123-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+        "sha256": "c85811d35971d06612585a057db3b71806378df6ea8476275fb16aa5c9fe56a0",
+        "size": 34741061,
+        "archive": "tar.gz"
+      },
+      {
+        "platform": "windows-x64",
+        "asset": "cpython-3.12.16+20261123-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+        "sha256": "75988f49393727d7e53b673d50088e7f809a629dd37cb59da3756479bc6ea5c1",
+        "size": 22388474,
+        "archive": "tar.gz"
+      },
+      {
+        "platform": "linux-arm64",
+        "asset": "cpython-3.12.16+20261123-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
+        "sha256": "97bca1d0960240b721b6e58ec2dc080519fcd11f979bf64356434ae9d0f96947",
+        "size": 29460203,
+        "archive": "tar.gz"
+      }
+    ]
+  },
+  "toolchain": {
+    "windows": {
+      "version": "2.11.0",
+      "url": "https://github.com/skeeto/w64devkit/releases/download/v2.11.0/w64devkit-x64-2.11.0.7z.exe",
+      "sha256": "54c2bb9962e8a30c8270e34c5efc3d5fee579f53087fa7d435b95fbba2af7b2b",
+      "mirrors": [
+        "https://gh-proxy.com/https://github.com/skeeto/w64devkit/releases/download/v2.11.0/w64devkit-x64-2.11.0.7z.exe",
+        "https://ghfast.top/https://github.com/skeeto/w64devkit/releases/download/v2.11.0/w64devkit-x64-2.11.0.7z.exe"
+      ]
+    },
+    "linux": {
+      "version": "0.14.1",
+      "artifacts": {
+        "x64": [
+          {
+            "name": "zig",
+            "archive": "tar.xz",
+            "url": "https://ziglang.org/download/0.14.1/zig-x86_64-linux-0.14.1.tar.xz",
+            "sha256": "24aeeec8af16c381934a6cd7d95c807a8cb2cf7df9fa40d359aa884195c4716c",
+            "size": 49086504,
+            "includes": [],
+            "mirrors": [
+              "https://zig.linus.dev/zig/0.14.1/zig-x86_64-linux-0.14.1.tar.xz",
+              "https://zig.chainsafe.dev/zig-x86_64-linux-0.14.1.tar.xz",
+              "https://zig.squirl.dev/download/0.14.1/zig-x86_64-linux-0.14.1.tar.xz",
+              "https://zig.savalione.com/zig-x86_64-linux-0.14.1.tar.xz",
+              "https://pkg.alexrp.com/zig/0.14.1/zig-x86_64-linux-0.14.1.tar.xz",
+              "https://zig.mirror.mschae23.de/zig/0.14.1/zig-x86_64-linux-0.14.1.tar.xz"
+            ]
+          },
+          {
+            "name": "make",
+            "archive": "deb",
+            "url": "https://snapshot.debian.org/file/8ac97afe952bebb6aef2960a68ded4b26435e310",
+            "sha256": "54d832703f916d887d9f1693f1e7849995b7cfb86ccd3939e667c98b2dd52cee",
+            "size": 395960,
+            "includes": [
+              {
+                "prefix": "usr/bin/make",
+                "destination": "bin"
+              }
+            ]
+          },
+          {
+            "name": "pkgconf",
+            "archive": "deb",
+            "url": "https://snapshot.debian.org/file/7053b5ffd4d5a717807c26834eab70bf3714769c",
+            "sha256": "aaa47aa5db42c7b7b52246b3dc9456cc865faa8f726cbb58b94f81a1d3691075",
+            "size": 41888,
+            "includes": [
+              {
+                "prefix": "usr/bin/pkgconf",
+                "destination": "bin"
+              }
+            ]
+          },
+          {
+            "name": "libpkgconf3",
+            "archive": "deb",
+            "url": "https://snapshot.debian.org/file/e2672ff5d6218a94ae90aa27148f9e0d9cc8e265",
+            "sha256": "ec3eaa7729399618482c11064f0c15d5d6d41186d0d4fa43fa04ace12e9be015",
+            "size": 35220,
+            "includes": [
+              {
+                "prefix": "usr/lib/x86_64-linux-gnu/libpkgconf.so.3",
+                "destination": "lib"
+              }
+            ]
+          },
+          {
+            "name": "nasm",
+            "archive": "deb",
+            "url": "https://snapshot.debian.org/file/bf9bdfc6ad4db6ba30be61a6f94ebb56b18117c0",
+            "sha256": "c860caec653b865d5b83359452d97b11f1b3ba5b18b07cac554cf72550b3bfc9",
+            "size": 420828,
+            "includes": [
+              {
+                "prefix": "usr/bin/nasm",
+                "destination": "bin"
+              }
+            ]
+          }
+        ],
+        "arm64": [
+          {
+            "name": "zig",
+            "archive": "tar.xz",
+            "url": "https://ziglang.org/download/0.14.1/zig-aarch64-linux-0.14.1.tar.xz",
+            "sha256": "f7a654acc967864f7a050ddacfaa778c7504a0eca8d2b678839c21eea47c992b",
+            "size": 44954692,
+            "includes": [],
+            "mirrors": [
+              "https://zig.linus.dev/zig/0.14.1/zig-aarch64-linux-0.14.1.tar.xz",
+              "https://zig.chainsafe.dev/zig-aarch64-linux-0.14.1.tar.xz",
+              "https://zig.squirl.dev/download/0.14.1/zig-aarch64-linux-0.14.1.tar.xz",
+              "https://zig.savalione.com/zig-aarch64-linux-0.14.1.tar.xz",
+              "https://pkg.alexrp.com/zig/0.14.1/zig-aarch64-linux-0.14.1.tar.xz",
+              "https://zig.mirror.mschae23.de/zig/0.14.1/zig-aarch64-linux-0.14.1.tar.xz"
+            ]
+          },
+          {
+            "name": "make",
+            "archive": "deb",
+            "url": "https://snapshot.debian.org/file/ffa169c255622f0b5d363bc91021eadb4c3f0201",
+            "sha256": "7ef5f5c0e3f909c811f941598107119af0a0554641b5cc590f584cea6a55d204",
+            "size": 391184,
+            "includes": [
+              {
+                "prefix": "usr/bin/make",
+                "destination": "bin"
+              }
+            ]
+          },
+          {
+            "name": "pkgconf",
+            "archive": "deb",
+            "url": "https://snapshot.debian.org/file/feb8dcaea4556f6d6ed3e7e653abbc458ecf6ac2",
+            "sha256": "ed19b788ba17b4a5f8acd9269cb15df67003464a0a633733fcbbf11cf71c735c",
+            "size": 41320,
+            "includes": [
+              {
+                "prefix": "usr/bin/pkgconf",
+                "destination": "bin"
+              }
+            ]
+          },
+          {
+            "name": "libpkgconf3",
+            "archive": "deb",
+            "url": "https://snapshot.debian.org/file/ca056ea22cb88a983d63d71564629856d6f68f09",
+            "sha256": "41a1b354dab84a3caf8297ecf68b5cb32f7bf80725b8b7e2f42f5f0c707671a1",
+            "size": 34408,
+            "includes": [
+              {
+                "prefix": "usr/lib/aarch64-linux-gnu/libpkgconf.so.3",
+                "destination": "lib"
+              }
+            ]
+          },
+          {
+            "name": "nasm",
+            "archive": "deb",
+            "url": "https://snapshot.debian.org/file/0b8d87d0b924413792495643ed4aaafb77eb55e2",
+            "sha256": "3e1d7296d46191fd0ffc475b5476ee63a0400cf59a2bc8b3f3d9b9a7c7d327e6",
+            "size": 407636,
+            "includes": [
+              {
+                "prefix": "usr/bin/nasm",
+                "destination": "bin"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

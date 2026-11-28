@@ -37,6 +37,7 @@ import java.time.Duration;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /// The no-JavaScript surface: forms only, one page per action, the same turn
@@ -62,10 +63,11 @@ class PlainChatTest {
             assertTrue(old.body().contains("继续用纯文本版"), old.body());
 
             // The SPA entry carries the gate, so a browser without fetch/WebSocket/flex
-            // never loads the bundle.
+            // never loads the bundle; it lands on the chat-capable plain surface.
             HttpResponse<String> index = get(running, "/chat");
             assertEquals(200, index.statusCode());
-            assertTrue(index.body().contains("plain/old"), index.body());
+            assertTrue(index.body().contains("\"plain\""), index.body());
+            assertFalse(index.body().contains("plain/old"), index.body());
         }
     }
 
@@ -87,12 +89,12 @@ class PlainChatTest {
             HttpResponse<String> ie = getWithUa(running, "/",
                     "Mozilla/5.0 (Windows NT 6.1; Trident/7.0; rv:11.0) like Gecko");
             assertEquals(302, ie.statusCode());
-            assertEquals("/plain/old", ie.headers().firstValue("Location").orElseThrow());
+            assertEquals("/plain", ie.headers().firstValue("Location").orElseThrow());
 
             HttpResponse<String> chrome = getWithUa(running, "/",
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0 Safari/537.36");
             assertEquals(200, chrome.statusCode(), chrome.body());
-            assertTrue(chrome.body().contains("plain/old"), "the inline gate still ships to modern browsers");
+            assertTrue(chrome.body().contains("\"plain\""), "the inline gate still ships to modern browsers");
         }
     }
 
@@ -116,7 +118,7 @@ class PlainChatTest {
             assertEquals(303, ok.statusCode(), ok.body());
             assertEquals("/plain", ok.headers().firstValue("Location").orElseThrow());
             String cookie = ok.headers().firstValue("set-cookie").orElseThrow();
-            assertTrue(cookie.contains("hdsl_session="), cookie);
+            assertTrue(cookie.contains(org.jackhuang.hmcl.web.auth.SessionCookies.name() + "="), cookie);
             assertTrue(cookie.contains("SameSite=Strict"), cookie);
 
             HttpResponse<String> home = getWithCookie(running, "/plain", cookie.split(";")[0]);
@@ -203,6 +205,57 @@ class PlainChatTest {
             Thread.sleep(200);
         }
         throw new AssertionError("the answer never appeared; last page: " + last);
+    }
+
+    @Test
+    void theLegacyChatPageCarriesTheNewControls(@TempDir Path dataDir) throws Exception {
+        try (TestSupport.RunningServer running = TestSupport.start(dataDir, Map.of(),
+                config -> {
+                    config.auth.disabled = true;
+                    config.bindHost = "127.0.0.1";
+                })) {
+            HttpResponse<String> created = postForm(running, "/plain/new", "assistantId=default");
+            assertEquals(303, created.statusCode(), created.body());
+            String location = created.headers().firstValue("Location").orElseThrow();
+            String sessionId = location.substring("/plain/s/".length()).replace("#bottom", "");
+
+            HttpResponse<String> page = get(running, "/plain/s/" + sessionId);
+            assertEquals(200, page.statusCode(), page.body());
+            assertTrue(page.body().contains("enctype=\"multipart/form-data\""), page.body());
+            assertTrue(page.body().contains("name=\"file\""), page.body());
+            assertTrue(page.body().contains("name=\"reasoningLevel\""), page.body());
+            assertTrue(page.body().contains("/rename"), page.body());
+            assertTrue(page.body().contains("/delete"), page.body());
+
+            HttpResponse<String> regen = postForm(running,
+                    "/plain/s/" + sessionId + "/regenerate", "");
+            assertEquals(303, regen.statusCode(), regen.body());
+            assertTrue(regen.headers().firstValue("Location").orElseThrow().contains("error=no_reply"),
+                    regen.headers().toString());
+
+            HttpResponse<String> renamed = postForm(running,
+                    "/plain/s/" + sessionId + "/rename",
+                    "title=" + URLEncoder.encode("纯文本会话", StandardCharsets.UTF_8));
+            assertEquals(303, renamed.statusCode(), renamed.body());
+            assertTrue(get(running, "/plain/s/" + sessionId).body().contains("纯文本会话"));
+
+            assertEquals(303, postForm(running,
+                    "/plain/s/" + sessionId + "/reasoning", "reasoningLevel=medium").statusCode());
+            assertTrue(get(running, "/plain/s/" + sessionId).body().contains("value=\"medium\" selected"));
+
+            assertEquals(303, postForm(running, "/plain/s/" + sessionId + "/stop", "").statusCode());
+
+            HttpResponse<String> unconfirmed = postForm(running,
+                    "/plain/s/" + sessionId + "/delete", "");
+            assertEquals(303, unconfirmed.statusCode(), unconfirmed.body());
+            assertTrue(unconfirmed.headers().firstValue("Location").orElseThrow().contains("error=confirm"));
+
+            HttpResponse<String> deleted = postForm(running,
+                    "/plain/s/" + sessionId + "/delete", "confirm=yes");
+            assertEquals(303, deleted.statusCode(), deleted.body());
+            assertEquals("/plain", deleted.headers().firstValue("Location").orElseThrow());
+            assertFalse(get(running, "/plain").body().contains("纯文本会话"));
+        }
     }
 
     private static HttpResponse<String> get(TestSupport.RunningServer running, String path)
