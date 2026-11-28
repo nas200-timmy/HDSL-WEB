@@ -9,7 +9,7 @@
 > 构建工具链、uv），体检页改为「运行环境」并把每一步摆上台面；品牌在裸
 > 环境的三个失败被逐一定位修复，Hermes 首次完整跑通；会话 cookie 按实例
 > 与端口隔离，两个面板不再互相踢下线。本分支自 v0.6.95 起积攒 97 个提交，
-> 发布前需补跑全量验证（见文末）。
+> 合入 `main` 后的本地验证见文末。
 
 ### 转码：受控 ffmpeg 运行时
 
@@ -169,14 +169,17 @@
 - 文档：自举设计稿、显式 setpriv 组清单、Windows 源码构建限制、glibc 作为硬性
   libc 底线、arm64 实际可得物。
 
-### 验证（发布前待办）
+### 验证
 
-以下命令在合入 `main`、产出发布 jar 前补跑并回填结果：
+合入 `main` 后的本地结果（2026-11-28）：
 
-- `./gradlew test --rerun-tasks`（含本分支新增的闭包、setpriv、归档、品牌回归）；
-- `cd web && npm run typecheck && npm run build && npm run compat`;
-- `cd client/hdsl-tui && go test -count=1 ./...`;
-- `./gradlew shadowJar -PreleaseVersion=0.6.96` 与 `scripts/api-smoke.py`;
+- `./gradlew test --rerun-tasks`：1923 例、0 失败、0 错误、28 跳过（333 个测试类）；
+- `cd web && npm run typecheck && npm run build && npm run compat`：通过；
+- `cd client/hdsl-tui && go test -count=1 ./...`：9 个包全部 ok。
+
+发布前仍需补跑：
+
+- `./gradlew shadowJar -PreleaseVersion=0.6.96` 与 `scripts/api-smoke.py`；
 - `scripts/security-smoke.sh`（明文）与 `HDSL_SMOKE_HTTPS=true`。
 
 开发期已实测：三容器（debian-slim / debian 标准 / 全配齐）冒烟；9 个品牌在三种
