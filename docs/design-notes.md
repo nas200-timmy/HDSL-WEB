@@ -260,7 +260,7 @@ Windows 上常见一种情况：杀毒软件、企业网关或 GitHub 加速器�
   就绪行；两种都不像「配额不足」，所以 FAQ 先让人查 `fs.inotify.max_user_watches`。
 - 配额按 uid 计、容器之间不隔离：宿主上同一个 uid 的其它程序（编辑器服务、同步客户端）会
   与容器抢同一份额度。
-- 面板「设置 → 环境体检」的 File watchers 一行会直接标出是否不足（`[SHORTAGE]`）；
+- 面板「设置 → 运行环境」的 File watchers 一行会直接标出是否不足（`[SHORTAGE]`）；
   调大办法见 `docs/deployment.md` 的 inotify 一节。
 
 ## 9. Windows 适配

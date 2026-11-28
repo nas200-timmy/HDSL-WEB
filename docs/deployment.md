@@ -863,7 +863,7 @@ dsh 启动时会用文件监视器（chokidar）盯着自己的 `profiles/<profi
 
 ### 怎么看
 
-面板「设置 → 环境体检」（也就是 `GET /api/doctor`）里的 **File watchers** 一行：
+面板「设置 → 运行环境」（也就是 `GET /api/doctor`）里的 **File watchers** 一行：
 它用一次真实的注册探测给出「还剩多少」，低于阈值会标 `[SHORTAGE]` 并打印下面这条命令。
 想看原始数字也可以直接问内核：
 
