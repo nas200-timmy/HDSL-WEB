@@ -102,6 +102,9 @@
   `<data>/instance-id` 中的稳定 id，cookie 命名为
   `hdsl_session_<id12>_<port>`；裸 Cookie 解析器（WS 网关、终端、升级检查、
   plain 聊天）统一走 `SessionCookies.name()`；`/api/health` 与关于页暴露实例 id。
+- `hdsl-tui` 同步适配：捕获改按 `hdsl_session` 前缀匹配，记住登录一并保存 cookie
+  名（旧配置没有名字时回落到旧名），0.6.96 面板上登录不再报「登录成功但没有收到
+  hdsl_session Cookie」。
 
 ### 聊天
 
